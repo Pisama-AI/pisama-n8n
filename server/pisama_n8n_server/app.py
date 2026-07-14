@@ -17,13 +17,17 @@ override for Postgres later). No mocks anywhere.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
+from pisama_n8n_server.events import broadcaster, fired_event
 from pisama_n8n_server.n8n_client import client_from_env
 from pisama_n8n_server.poller import poll_once
 from pisama_n8n_server.processing import process_execution
@@ -31,10 +35,30 @@ from pisama_n8n_server.storage import Storage
 
 logger = logging.getLogger("pisama_n8n_server")
 
+# The self-driving poll task (armed at startup when PISAMA_POLL_INTERVAL > 0 and n8n is
+# configured). Off by default — /api/v1/n8n/sync stays available for external cron.
+_poll_task: Optional[asyncio.Task] = None
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    global _poll_task
+    interval = float(os.environ.get("PISAMA_POLL_INTERVAL", "0") or "0")
+    if interval > 0 and client_from_env() is not None:
+        _poll_task = asyncio.create_task(_poll_loop(interval))
+        logger.info("background n8n poll loop started (every %ss)", interval)
+    try:
+        yield
+    finally:
+        if _poll_task is not None:
+            _poll_task.cancel()
+
+
 app = FastAPI(
     title="Pisama n8n Server",
     description="Self-host detection server for n8n workflow executions.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # The dashboard is a separate origin (its own port/host), so it needs CORS to read the
@@ -93,7 +117,10 @@ async def n8n_webhook(
     """Webhook / community-node / error-workflow push channel: receive one n8n
     execution payload, run both lanes, persist, return the report."""
     payload = await request.json()
-    return process_execution(payload, storage)
+    report = process_execution(payload, storage)
+    if report.get("detections"):
+        await broadcaster.publish(fired_event(report))
+    return report
 
 
 @app.post("/api/v1/n8n/sync", dependencies=[Depends(require_auth)])
@@ -109,7 +136,10 @@ async def n8n_sync(
             detail="Polling not configured — set PISAMA_N8N_URL and PISAMA_N8N_API_KEY.",
         )
     try:
-        return await poll_once(client, storage)
+        summary = await poll_once(client, storage)
+        if summary.get("new"):
+            await broadcaster.publish({"type": "poll", **summary})
+        return summary
     finally:
         await client.aclose()
 
@@ -119,3 +149,53 @@ async def list_detections(
     storage: Storage = Depends(get_storage),
 ) -> List[Dict[str, Any]]:
     return storage.list_detections()
+
+
+@app.get("/api/v1/stream")
+async def stream(request: Request) -> StreamingResponse:
+    """SSE stream of live detection events, so the dashboard updates as executions arrive.
+    Auth is via the `token` query param (EventSource can't set headers); falls back to
+    dev-mode-open when PISAMA_API_KEY is unset."""
+    expected = os.environ.get("PISAMA_API_KEY")
+    if expected and request.query_params.get("token") != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing token.")
+
+    async def gen() -> AsyncIterator[str]:
+        q = broadcaster.subscribe()
+        try:
+            yield ": connected\n\n"  # prelude so the client opens promptly
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"  # comment frame keeps the connection warm
+        finally:
+            broadcaster.unsubscribe(q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- background polling loop ----------------------------------------------
+
+async def _poll_loop(interval: float) -> None:
+    """Periodically poll the configured n8n and publish any new detections."""
+    while True:
+        await asyncio.sleep(interval)
+        client = client_from_env()
+        if client is None:
+            continue
+        try:
+            summary = await poll_once(client, get_storage())
+            if summary.get("new"):
+                await broadcaster.publish({"type": "poll", **summary})
+        except Exception as exc:  # never let the loop die on a transient error
+            logger.warning("background poll failed: %s", exc)
+        finally:
+            await client.aclose()
