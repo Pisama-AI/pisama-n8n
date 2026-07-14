@@ -179,6 +179,8 @@ async def n8n_fix(
         suggestion = await request_fix(ctx["detection"], ctx["workflow"])
     except PaidTierNotConfigured as exc:
         raise HTTPException(status_code=402, detail=str(exc))
+    # Carry the n8n workflow id so the dashboard can target /apply.
+    suggestion["workflow_id"] = ctx.get("workflow_id")
     return suggestion
 
 
