@@ -47,6 +47,9 @@ class Execution(Base):
     workflow_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     received_at: Mapped[str] = mapped_column(String, nullable=False)
     raw: Mapped[str] = mapped_column(Text, nullable=False)
+    # The upstream n8n execution id, when this row came from API polling — used to
+    # dedup so re-polling doesn't re-ingest the same execution. Null for webhook pushes.
+    source_execution_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
 
     detections: Mapped[List["DetectionRow"]] = relationship(
         back_populates="execution", cascade="all, delete-orphan"
@@ -99,7 +102,12 @@ class Storage:
         self.engine = make_engine(url)
         self._Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
 
-    def save_report(self, execution_data: Dict[str, Any], report: Any) -> int:
+    def save_report(
+        self,
+        execution_data: Dict[str, Any],
+        report: Any,
+        source_execution_id: Optional[str] = None,
+    ) -> int:
         """Persist the raw payload + every detection in the report. Returns exec id."""
         try:
             raw = json.dumps(execution_data, default=str)
@@ -114,6 +122,7 @@ class Storage:
                 workflow_id=workflow_id,
                 received_at=received_at,
                 raw=raw,
+                source_execution_id=source_execution_id,
             )
             for d in report.detections:
                 execution.detections.append(
@@ -128,6 +137,16 @@ class Storage:
             session.add(execution)
             session.commit()
             return execution.id
+
+    def seen_source_ids(self) -> set:
+        """The set of upstream n8n execution ids already ingested (for poll dedup)."""
+        with self._Session() as session:
+            rows = session.execute(
+                select(Execution.source_execution_id).where(
+                    Execution.source_execution_id.is_not(None)
+                )
+            ).all()
+            return {r[0] for r in rows}
 
     def list_detections(self) -> List[Dict[str, Any]]:
         with self._Session() as session:
