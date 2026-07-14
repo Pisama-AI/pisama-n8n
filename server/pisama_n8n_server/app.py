@@ -151,6 +151,76 @@ async def list_detections(
     return storage.list_detections()
 
 
+# --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
+
+@app.get("/api/v1/paid/status", dependencies=[Depends(require_auth)])
+async def paid_status() -> Dict[str, bool]:
+    """Whether the paid tier (fix suggestions + auto-fix) is configured on this server."""
+    from pisama_n8n_server.fixes import is_paid_configured
+    return {"enabled": is_paid_configured()}
+
+
+@app.post("/api/v1/n8n/fix", dependencies=[Depends(require_auth)])
+async def n8n_fix(
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """PAID: request a fix suggestion for a detection. Looks up the detection's workflow,
+    sends it to the Pisama cloud, returns the suggestion (read-only preview)."""
+    from pisama_n8n_server.fixes import PaidTierNotConfigured, request_fix
+
+    detection_id = body.get("detection_id")
+    ctx = storage.get_detection_context(int(detection_id)) if detection_id is not None else None
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Unknown detection_id.")
+    if not ctx.get("workflow"):
+        raise HTTPException(status_code=422, detail="No workflow stored for this detection.")
+    try:
+        suggestion = await request_fix(ctx["detection"], ctx["workflow"])
+    except PaidTierNotConfigured as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
+    return suggestion
+
+
+@app.post("/api/v1/n8n/apply", dependencies=[Depends(require_auth)])
+async def n8n_apply(body: Dict[str, Any]) -> Dict[str, Any]:
+    """PAID: apply a cloud-returned mutated workflow to the live n8n (snapshot for rollback).
+    Requires n8n API access (PISAMA_N8N_URL + PISAMA_N8N_API_KEY)."""
+    from pisama_n8n_server.fixes import apply_fix, is_paid_configured
+
+    if not is_paid_configured():
+        raise HTTPException(status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY.")
+    workflow_id = body.get("workflow_id")
+    mutated = body.get("mutated_workflow")
+    if not workflow_id or not isinstance(mutated, dict):
+        raise HTTPException(status_code=422, detail="workflow_id and mutated_workflow required.")
+    client = client_from_env()
+    if client is None:
+        raise HTTPException(status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY).")
+    try:
+        return await apply_fix(client, workflow_id, mutated)
+    finally:
+        await client.aclose()
+
+
+@app.post("/api/v1/n8n/rollback", dependencies=[Depends(require_auth)])
+async def n8n_rollback(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Restore a workflow snapshot returned by /apply."""
+    from pisama_n8n_server.fixes import rollback
+
+    workflow_id = body.get("workflow_id")
+    snapshot = body.get("snapshot")
+    if not workflow_id or not isinstance(snapshot, dict):
+        raise HTTPException(status_code=422, detail="workflow_id and snapshot required.")
+    client = client_from_env()
+    if client is None:
+        raise HTTPException(status_code=400, detail="n8n API not configured.")
+    try:
+        return {"restored": await rollback(client, workflow_id, snapshot)}
+    finally:
+        await client.aclose()
+
+
 @app.get("/api/v1/stream")
 async def stream(request: Request) -> StreamingResponse:
     """SSE stream of live detection events, so the dashboard updates as executions arrive.

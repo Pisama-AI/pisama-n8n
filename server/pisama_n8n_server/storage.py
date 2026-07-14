@@ -148,6 +148,29 @@ class Storage:
             ).all()
             return {r[0] for r in rows}
 
+    def get_detection_context(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        """A detection plus the workflow JSON of the execution it came from — the input
+        the cloud fix generator needs. None if the detection id is unknown."""
+        with self._Session() as session:
+            det = session.get(DetectionRow, detection_id)
+            if det is None:
+                return None
+            execution = session.get(Execution, det.execution_id)
+            workflow = None
+            if execution is not None:
+                try:
+                    raw = json.loads(execution.raw)
+                    workflow = raw.get("workflow") or raw.get("workflowData")
+                    if workflow is None and ("nodes" in raw or "connections" in raw):
+                        workflow = raw
+                except (TypeError, ValueError):
+                    workflow = None
+            return {
+                "detection": det.to_dict(),
+                "workflow": workflow,
+                "workflow_id": execution.workflow_id if execution else None,
+            }
+
     def list_detections(self) -> List[Dict[str, Any]]:
         with self._Session() as session:
             # Join executions so each detection carries the real ingest time,

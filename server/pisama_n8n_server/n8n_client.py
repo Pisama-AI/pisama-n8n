@@ -36,6 +36,20 @@ class N8nClient:
         r.raise_for_status()
         return r.json().get("data", [])
 
+    async def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        r = await self._client.get(f"/workflows/{workflow_id}")
+        r.raise_for_status()
+        body = r.json()
+        return body.get("data", body)
+
+    async def update_workflow(self, workflow_id: str, workflow: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace a workflow definition. n8n's PUT only accepts a whitelist of keys."""
+        payload = {k: workflow[k] for k in ("name", "nodes", "connections", "settings") if k in workflow}
+        r = await self._client.put(f"/workflows/{workflow_id}", json=payload)
+        r.raise_for_status()
+        body = r.json()
+        return body.get("data", body)
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
