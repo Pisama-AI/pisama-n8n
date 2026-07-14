@@ -1,0 +1,13 @@
+# Scaffold only — Dockerfile.dashboard and full build context are TODO.
+services:
+  engine-server:
+    build: ../server
+    ports:
+      - "8400:8400"
+    environment:
+      - PISAMA_API_KEY=${PISAMA_API_KEY}
+
+  dashboard:
+    build: ../dashboard
+    ports:
+      - "3000:3000"

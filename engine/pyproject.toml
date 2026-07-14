@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pisama-n8n-engine"
+version = "0.1.0"
+description = "Failure detection for n8n workflows — the standalone Pisama detection engine."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "SUL-1.0" }  # Sustainable Use License (fair-code) — see ../LICENSE
+authors = [{ name = "Pisama" }]
+keywords = ["n8n", "workflow", "failure-detection", "observability", "reliability"]
+
+# The 6 structural detectors are pure-Python and dependency-free. The optional
+# execution-lane semantic checks use embeddings; install the extra for those.
+dependencies = []
+
+[project.optional-dependencies]
+embeddings = ["sentence-transformers>=2.2", "numpy>=1.24"]
+
+[project.urls]
+Homepage = "https://github.com/Pisama-AI/pisama-n8n"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pisama_n8n_engine"]

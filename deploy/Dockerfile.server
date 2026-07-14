@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY ../engine /app/engine
+COPY ../server /app/server
+
+# TODO: pre-bake the MiniLM embeddings model (sentence-transformers extra)
+# into the image so cold start doesn't hit the network.
+RUN pip install --no-cache-dir /app/engine /app/server
+
+CMD ["uvicorn", "pisama_n8n_server.app:app", "--host", "0.0.0.0", "--port", "8400"]

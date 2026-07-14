@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pisama-n8n-server"
+version = "0.1.0"
+description = "Self-host detection server for n8n workflow executions."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "SUL-1.0" }  # Sustainable Use License (fair-code) — see ../LICENSE
+authors = [{ name = "Pisama" }]
+keywords = ["n8n", "workflow", "failure-detection", "self-host", "server"]
+
+dependencies = [
+    "pisama-n8n-engine",
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+]
+
+[project.urls]
+Homepage = "https://github.com/Pisama-AI/pisama-n8n"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pisama_n8n_server"]

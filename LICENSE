@@ -1,0 +1,22 @@
+Pisama Sustainable Use License (fair-code)
+
+Copyright (c) 2026 Pisama
+
+PLACEHOLDER — this is a scaffold. The final license text must be reviewed and set by
+the founder before any public publication. The intended model is a fair-code
+Sustainable Use License, matching n8n's own license: the source is available, free for
+internal business and non-commercial use, but may not be offered as a competing hosted
+or commercial service. This is NOT an OSI-approved open-source license; describe the
+project as "fair-code / source-available", never "open source".
+
+Scope of this license: the engine/, server/, dashboard/, and deploy/ directories.
+The node/ directory (the n8n community node) is licensed separately under MIT — see
+node/LICENSE — because n8n's verified-community-node program requires an MIT license.
+
+The paid features (fix suggestions and auto-fixing) are NOT in this repository; they are
+served from the Pisama cloud and are not covered by this license.
+
+Founder action required before publishing:
+  1. Replace this placeholder with the finalized Sustainable Use License text.
+  2. Confirm the relicensing of the n8n detector subset out of the monorepo's BSL-1.1
+     `packages/pisama-detectors` (sole-authorship verified — legally clean).
