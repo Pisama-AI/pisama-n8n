@@ -131,7 +131,14 @@ class Storage:
 
     def list_detections(self) -> List[Dict[str, Any]]:
         with self._Session() as session:
-            rows = session.scalars(
-                select(DetectionRow).order_by(DetectionRow.id)
+            # Join executions so each detection carries the real ingest time,
+            # giving the dashboard a genuine timestamp instead of a fabricated one.
+            rows = session.execute(
+                select(DetectionRow, Execution.received_at)
+                .join(Execution, DetectionRow.execution_id == Execution.id)
+                .order_by(DetectionRow.id)
             ).all()
-            return [r.to_dict() for r in rows]
+            return [
+                {**row.to_dict(), "received_at": received_at}
+                for row, received_at in rows
+            ]

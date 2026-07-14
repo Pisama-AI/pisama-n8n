@@ -55,7 +55,7 @@ export function DetectionListItem({
 
   return (
     <Link
-      href={showSimplifiedView ? `/healing?detection=${detection.id}` : `/traces/${detection.trace_id}`}
+      href={`/detections/${detection.id}`}
       className="flex items-center gap-4 p-4 hover:bg-paper-3/30 transition-colors"
     >
       <div className={cn('p-2 rounded-lg', severity.bg)}>
@@ -106,12 +106,12 @@ export function DetectionListItem({
         {showSimplifiedView ? (
           <div className="flex items-center gap-2">
             <Link
-              href={`/healing?detection=${detection.id}`}
+              href={`/detections/${detection.id}`}
               onClick={(e) => e.stopPropagation()}
               className="flex items-center gap-1 px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 text-ink rounded-lg transition-colors"
             >
               <Wrench size={14} />
-              Fix
+              View
             </Link>
           </div>
         ) : (

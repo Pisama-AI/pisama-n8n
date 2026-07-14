@@ -51,10 +51,10 @@ the build is green — you do not need a server running to pass this gate.)
 
 ## Tasks
 
-- [ ] **Baseline** — run the verification command (currently green on the smoke page).
+- [x] **Baseline** — run the verification command (currently green on the smoke page).
   Confirm, note under "## Baseline run".
 
-- [ ] **Data layer** — create:
+- [x] **Data layer** — create:
   - `src/lib/api/client.ts`: a plain `fetchApi(path)` doing `GET` against
     `NEXT_PUBLIC_API_BASE` (default `http://localhost:8400`), adding the Bearer header from
     `localStorage['pisama_n8n_key']` (guard for SSR: only read localStorage in the browser)
@@ -70,7 +70,7 @@ the build is green — you do not need a server running to pass this gate.)
     `details.severity→` derive from confidence (`>=0.8 'high'`, `>=0.5 'medium'`, else
     `'low'`). Plus `getDetections(): Promise<Detection[]>` = fetch + map + filter/keep all.
 
-- [ ] **Extend DetectionTypeConfig for n8n** — the copied `DetectionTypeConfig.ts` has no
+- [x] **Extend DetectionTypeConfig for n8n** — the copied `DetectionTypeConfig.ts` has no
   keys for the 6 n8n detectors. Add entries for `cycle, schema, resource, timeout, error,
   complexity` to `detectionTypeConfig` (and `plainEnglishLabels`) with sensible
   `{ label, color, icon (a lucide-react icon), category }` — e.g. cycle→"Workflow Cycle"
@@ -78,7 +78,7 @@ the build is green — you do not need a server running to pass this gate.)
   (Zap/Activity), timeout→"Timeout" (Clock), error→"Node Error" (AlertTriangle),
   complexity→"Excess Complexity" (GitBranch). Match the existing entries' shape exactly.
 
-- [ ] **Server: timestamp on detections** — in the pisama-n8n SERVER (allowed — it is not
+- [x] **Server: timestamp on detections** — in the pisama-n8n SERVER (allowed — it is not
   the engine), extend `GET /api/v1/detections` to include the execution's `received_at`
   on each row (join `detections.execution_id → executions.received_at`), so the adapter
   has a real timestamp. Files:
@@ -86,7 +86,7 @@ the build is green — you do not need a server running to pass this gate.)
   + keep the 8 server tests green:
   `PYTHONPATH="engine:server" /Users/tuomonikulainen/pisama/backend/.venv/bin/python -m pytest server/tests -q`.
 
-- [ ] **Shell** — copy + TRIM the monorepo `src/components/common/{Layout,Sidebar,Header}.tsx`
+- [x] **Shell** — copy + TRIM the monorepo `src/components/common/{Layout,Sidebar,Header}.tsx`
   from `/Users/tuomonikulainen/pisama-worktrees/n8n-eval-harness/frontend/src/components/common/`.
   Strip: Sidebar's `next-auth` (signOut/useSession), `useSafeAuth`, the super-admin gate,
   and the sign-out footer; Header's `ScopeFilter` + the search/notification/store bits.
@@ -94,7 +94,7 @@ the build is green — you do not need a server running to pass this gate.)
   Overview (`/`), Detections (`/detections`). Keep the broadsheet look (amber active
   border, serif title, hairline rules). `Layout` stays as the sidebar+main shell.
 
-- [ ] **Views** —
+- [x] **Views** —
   - `src/app/page.tsx` (Overview): a `StatsCard`/`StatCard` KPI row (executions analyzed,
     detections fired, detectors reporting) computed from `getDetections()`, inside `Layout`.
     Use a client component that calls a `useDetections` TanStack hook.
@@ -110,10 +110,10 @@ the build is green — you do not need a server running to pass this gate.)
   - Add a small `useDetections` hook (`src/hooks/useDetections.ts`) wrapping
     `useQuery({queryKey:['detections'], queryFn: getDetections})`.
 
-- [ ] **Verify the gate** — `npm run build` green with all 3 routes. Record the route table
+- [x] **Verify the gate** — `npm run build` green with all 3 routes. Record the route table
   in "## Final Status".
 
-- [ ] **Commit** — in `/Users/tuomonikulainen/pisama-n8n` (git identity
+- [x] **Commit** — in `/Users/tuomonikulainen/pisama-n8n` (git identity
   user.name=tn-pisama, user.email=tuomo@pisama.ai), message:
   `feat(dashboard): overview + detections views reusing Pisama FE, wired to the server`.
   Do NOT push.
@@ -127,12 +127,40 @@ auth/tenancy/analytics.
 
 ## Baseline run
 
-<agent fills this in>
+`npm run build` → exit 0. Next.js 16.2.10, compiled + typechecked clean. Routes at
+baseline: `/` (smoke page) + `/_not-found`. Green.
 
 ## Notes
 
-<agent writes findings here>
+- Data layer: `src/lib/api/{client,detections}.ts`. `fetchApi` is SSR-safe (localStorage
+  only read in the browser), no proxy / no tenant templating. `adaptDetection` maps the
+  server shape and derives severity from confidence. Added two additive fields to the
+  `Detection` type — `detected` and `failure_mode` — which `DetectionListItem` ignores but
+  the overview (to count fired) and detail view (to show raw fields) need. `getDetections`
+  keeps all rows; views filter on `detected`.
+- DetectionTypeConfig: added the 6 n8n detectors (cycle/schema/resource/timeout/error/
+  complexity) to both `detectionTypeConfig` and `plainEnglishLabels`, category "Workflow".
+- Server: `list_detections` now joins `executions.received_at` onto each row. All 8 server
+  tests pass (`server/tests`).
+- Shell: trimmed Sidebar (no next-auth/useSafeAuth/super-admin/sign-out; navItems =
+  Overview + Detections), Header (no ScopeFilter/search/notifications/demo store; static
+  "Self-host" badge), Layout unchanged shell. PisamaMark points at `@/components/common`.
+- Views: `page.tsx`→`OverviewClient` (KPI row via `useDetections`), `detections/page.tsx`→
+  `DetectionsClient` (fired detections as `DetectionListItem` rows in a `Card`, EmptyState
+  when none), `detections/[id]/page.tsx`→`DetectionDetailClient` (finds the detection from
+  the cached list, renders `Card`+`Badge`+`ConfidenceTierBadge`). `useDetections` hook added.
+  Retargeted `DetectionListItem` hrefs to `/detections/[id]`.
+- No auth/tenancy/analytics pulled in. Nothing BLOCKED.
 
 ## Final Status
 
-<agent fills this in>
+`npm run build` → exit 0, compiled + typechecked clean. Routes:
+
+| Route               | Type    |
+|---------------------|---------|
+| `/`                 | Static  |
+| `/_not-found`       | Static  |
+| `/detections`       | Static  |
+| `/detections/[id]`  | Dynamic |
+
+All 3 target routes (`/`, `/detections`, `/detections/[id]`) build. Server tests: 8 passed.

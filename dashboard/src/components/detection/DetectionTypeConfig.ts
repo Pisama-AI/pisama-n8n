@@ -1,4 +1,4 @@
-import { AlertTriangle, AlertCircle, CheckCircle, RefreshCw, TrendingUp, TrendingDown, Activity, Shield, Zap, Eye } from 'lucide-react'
+import { AlertTriangle, AlertCircle, CheckCircle, RefreshCw, TrendingUp, TrendingDown, Activity, Shield, Zap, Eye, FileWarning, Clock, GitBranch } from 'lucide-react'
 
 export type DetectionType = 'all' | 'loop' | 'state_corruption' | 'persona_drift' | 'coordination' | 'task_derailment' | 'context' | 'communication' | 'specification' | 'decomposition' | 'workflow' | 'hallucination' | 'injection' | 'context_overflow' | 'information_withholding' | 'completion_misjudgment' | 'tool_provision' | 'grounding_failure' | 'retrieval_quality' | 'cost' | 'convergence'
 
@@ -38,6 +38,13 @@ export const detectionTypeConfig: Record<string, { label: string; color: string;
   poor_decomposition: { label: 'Poor Decomposition', color: 'text-indigo-400', icon: Activity, category: 'System' },
   flawed_workflow: { label: 'Flawed Workflow', color: 'text-violet-400', icon: Zap, category: 'System' },
   convergence_failure: { label: 'Convergence Issue', color: 'text-orange-400', icon: TrendingDown, category: 'System' },
+  // pisama-n8n workflow detectors
+  cycle: { label: 'Workflow Cycle', color: 'text-red-400', icon: RefreshCw, category: 'Workflow' },
+  schema: { label: 'Schema Mismatch', color: 'text-orange-400', icon: FileWarning, category: 'Workflow' },
+  resource: { label: 'Resource Explosion', color: 'text-evidence', icon: Zap, category: 'Workflow' },
+  timeout: { label: 'Timeout', color: 'text-yellow-400', icon: Clock, category: 'Workflow' },
+  error: { label: 'Node Error', color: 'text-red-500', icon: AlertTriangle, category: 'Workflow' },
+  complexity: { label: 'Excess Complexity', color: 'text-violet-400', icon: GitBranch, category: 'Workflow' },
 }
 
 export { severityConfig } from '@/lib/severity-config'
@@ -76,4 +83,11 @@ export const plainEnglishLabels: Record<string, string> = {
   poor_decomposition: 'Bad task split',
   flawed_workflow: 'Workflow problem',
   convergence_failure: 'Metrics not improving',
+  // pisama-n8n workflow detectors
+  cycle: 'Workflow loops on itself',
+  schema: 'Data shape mismatch',
+  resource: 'Runaway resource use',
+  timeout: 'Node took too long',
+  error: 'A node errored out',
+  complexity: 'Workflow too complex',
 }
