@@ -17,7 +17,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tn-pisama/n8n-nodes-pisama.git"
+    "url": "git+https://github.com/Pisama-AI/pisama-n8n.git",
+    "directory": "node"
   },
   "main": "index.js",
   "scripts": {

@@ -1,0 +1,24 @@
+Pisama for n8n
+Copyright (c) 2026 Pisama
+
+This product's engine/, server/, dashboard/, and deploy/ directories are licensed
+under the Pisama Sustainable Use License (fair-code, source-available) — see LICENSE.
+
+The node/ directory (the n8n community node, package "n8n-nodes-pisama") is licensed
+separately under the MIT License — see node/LICENSE. n8n's verified-community-node
+program requires an MIT license, which is why the node uses a different license from
+the rest of the repository.
+
+Detector provenance and relicensing
+-----------------------------------
+The detection engine's n8n detectors are vendored from the Pisama monorepo (the single
+source of truth) via scripts/extract_from_monorepo.py. In the monorepo those detectors
+are also published in the "pisama-detectors" package under the Business Source License
+1.1 (BSL-1.1). The copies vendored here are additionally made available by the licensor
+(sole author) under the Pisama Sustainable Use License for use in this project. This
+dual availability is intentional and authorized by the copyright holder.
+
+Paid features
+-------------
+Fix suggestions and auto-fixing are paid features served from the Pisama cloud. Their
+source is NOT included in this repository and is not covered by this license.

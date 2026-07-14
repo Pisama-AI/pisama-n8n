@@ -3,9 +3,15 @@
 Failure detection for n8n workflows. Fair-code and self-hostable; the paid tier (fix
 suggestions and auto-fixing) runs in the Pisama cloud.
 
-> **Status: local scaffold.** This repo is not published. It is an extraction of the
-> detection engine from the Pisama monorepo, laid out to show the shape of the standalone
-> product. The engine is real and parity-verified; the server and dashboard are skeletons.
+> **Status: early release (fair-code).** The engine (structural detection), the
+> self-host server (webhook + API-polling ingestion, SQLite, live SSE), the dashboard,
+> and the n8n community node all work and are verified end-to-end against a real n8n. The
+> paid cloud tier (fix suggestions + auto-apply) is gated behind a cloud key.
+>
+> **Honest about quality:** detector *precision* is measured on real n8n templates and is
+> solid; *recall* is not yet validated against real-world failures (current positive
+> fixtures are synthetic) and the cycle detector is unsolved. We do not publish recall/F1
+> claims yet. See the engine README.
 
 ## What's here
 
@@ -52,13 +58,14 @@ harness are). This repo VENDORS them via `scripts/extract_from_monorepo.py`, and
 land in the monorepo and are re-extracted — never edited here (files carry a VENDORED
 banner). This prevents the two-copy drift that has already bitten the project once.
 
-## Before this can go public (founder actions)
+## Roadmap
 
-1. Finalize the Sustainable Use License text (replace the LICENSE placeholder).
-2. Confirm relicensing the n8n detector subset out of the monorepo's BSL-1.1 package
-   (sole-authorship verified — legally clean).
-3. Choose the repo name/org and create the GitHub repo.
-4. Submit the node to n8n's verified-community-node program.
+- **Verified n8n community node** — `n8n-nodes-pisama` is MIT and dependency-free;
+  submission to n8n's verified-community-node program is in progress.
+- **Detection recall** — validating against mined real-world n8n failures (the current
+  precision numbers are trustworthy; recall is the open work).
+- **AI-agent detectors** — loop/hallucination/derailment on n8n AI Agent nodes, as a paid
+  cloud capability (they need embeddings and don't belong in the dependency-free engine).
 
 ## Honest state of detection quality
 
