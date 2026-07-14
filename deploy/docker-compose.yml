@@ -1,13 +1,37 @@
-# Scaffold only — Dockerfile.dashboard and full build context are TODO.
+# Self-host Pisama for n8n.
+#   cd deploy && PISAMA_API_KEY=your-key docker compose up --build
+#
+# The build context is the repo root (..) so the image can see engine/ + server/.
+# The dashboard is not yet built; it lives behind the "ui" profile so the default
+# `docker compose up` runs just the detection server. Enable it later with
+# `docker compose --profile ui up` once dashboard/Dockerfile exists.
 services:
-  engine-server:
-    build: ../server
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    image: pisama-n8n-server
     ports:
       - "8400:8400"
     environment:
-      - PISAMA_API_KEY=${PISAMA_API_KEY}
+      - PISAMA_API_KEY=${PISAMA_API_KEY:-}
+      # SQLite by default; point at Postgres for a durable multi-process deploy.
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////data/pisama.db}
+    volumes:
+      - pisama_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8400/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # Not built yet — see dashboard/README.md. Behind a profile so it doesn't block `up`.
   dashboard:
-    build: ../dashboard
+    profiles: ["ui"]
+    build:
+      context: ../dashboard
     ports:
       - "3000:3000"
+
+volumes:
+  pisama_data:
