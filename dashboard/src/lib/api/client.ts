@@ -25,3 +25,25 @@ export async function fetchApi<T>(path: string): Promise<T> {
   }
   return res.json() as Promise<T>
 }
+
+export async function postApi<T>(path: string, body: unknown): Promise<T> {
+  const key = resolveKey()
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  }
+  if (key) headers.Authorization = `Bearer ${key}`
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    // 402 = paid feature not configured; surface it distinctly.
+    const err = new Error(`POST ${path} failed: ${res.status}`)
+    ;(err as Error & { status?: number }).status = res.status
+    throw err
+  }
+  return res.json() as Promise<T>
+}

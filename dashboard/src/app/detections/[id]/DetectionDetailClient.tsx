@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, Badge, ConfidenceTierBadge, EmptyState } f
 import { Skeleton } from '@/components/ui/Skeleton'
 import { formatConfidencePct } from '@/lib/utils'
 import { detectionTypeConfig, plainEnglishLabels } from '@/components/detection/DetectionTypeConfig'
+import { FixPanel } from '@/components/detection/FixPanel'
 import { useDetections } from '@/hooks/useDetections'
 
 function confidenceTier(confidence: number): string {
@@ -100,6 +101,8 @@ export function DetectionDetailClient({ id }: { id: string }) {
             )
           })()
         )}
+
+        {detection?.detected && <FixPanel detectionId={id} />}
       </div>
     </Layout>
   )
