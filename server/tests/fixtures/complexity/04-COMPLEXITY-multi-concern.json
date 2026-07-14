@@ -1,0 +1,32 @@
+{
+  "name": "COMPLEXITY-004: Multiple unrelated concerns in one workflow",
+  "nodes": [
+    {"id": "n1", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0]},
+    {"id": "n2", "name": "Email Reader", "type": "n8n-nodes-base.gmail", "typeVersion": 2, "position": [200, -200]},
+    {"id": "n3", "name": "Slack Poster", "type": "n8n-nodes-base.slack", "typeVersion": 2, "position": [200, -100]},
+    {"id": "n4", "name": "DB Query", "type": "n8n-nodes-base.postgres", "typeVersion": 2, "position": [200, 0]},
+    {"id": "n5", "name": "File Upload", "type": "n8n-nodes-base.googleDrive", "typeVersion": 3, "position": [200, 100]},
+    {"id": "n6", "name": "Calendar Create", "type": "n8n-nodes-base.googleCalendar", "typeVersion": 1, "position": [200, 200]},
+    {"id": "n7", "name": "AI Summarize", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, -200]},
+    {"id": "n8", "name": "AI Translate", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, -100]},
+    {"id": "n9", "name": "AI Classify", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, 0]},
+    {"id": "n10", "name": "Twitter Post", "type": "n8n-nodes-base.twitter", "typeVersion": 2, "position": [400, 100]},
+    {"id": "n11", "name": "Invoice Gen", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [400, 200]},
+    {"id": "n12", "name": "Payment Process", "type": "n8n-nodes-base.stripe", "typeVersion": 2, "position": [600, -100]},
+    {"id": "n13", "name": "CRM Update", "type": "n8n-nodes-base.hubspot", "typeVersion": 2, "position": [600, 0]},
+    {"id": "n14", "name": "Analytics Send", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [600, 100]},
+    {"id": "n15", "name": "Final Merge", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [800, 0]}
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Email Reader", "type": "main", "index": 0}], [{"node": "DB Query", "type": "main", "index": 0}]]},
+    "Email Reader": {"main": [[{"node": "AI Summarize", "type": "main", "index": 0}], [{"node": "Slack Poster", "type": "main", "index": 0}]]},
+    "DB Query": {"main": [[{"node": "AI Classify", "type": "main", "index": 0}], [{"node": "File Upload", "type": "main", "index": 0}]]},
+    "AI Summarize": {"main": [[{"node": "Payment Process", "type": "main", "index": 0}]]},
+    "AI Classify": {"main": [[{"node": "CRM Update", "type": "main", "index": 0}]]},
+    "File Upload": {"main": [[{"node": "Twitter Post", "type": "main", "index": 0}]]},
+    "Calendar Create": {"main": [[{"node": "Invoice Gen", "type": "main", "index": 0}]]},
+    "Payment Process": {"main": [[{"node": "Final Merge", "type": "main", "index": 0}]]},
+    "CRM Update": {"main": [[{"node": "Final Merge", "type": "main", "index": 1}]]},
+    "Analytics Send": {"main": [[{"node": "Final Merge", "type": "main", "index": 2}]]}
+  }
+}

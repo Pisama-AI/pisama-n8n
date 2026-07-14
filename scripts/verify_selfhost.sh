@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE="${1:-$REPO/../pisama-worktrees/n8n-eval-harness/n8n-workflows/executions/error/ERROR-01-throw.json}"
+FIXTURE="${1:-$REPO/server/tests/fixtures/executions/error/ERROR-01-throw.json}"
 KEY="selfhost-smoke-key"
 PORT=8400
 

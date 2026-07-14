@@ -1,0 +1,32 @@
+{
+  "name": "COMPLEXITY-002: Deep nested branching (5+ levels)",
+  "nodes": [
+    {"id": "n1", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0]},
+    {"id": "n2", "name": "IF Level 1", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [200, 0]},
+    {"id": "n3", "name": "IF Level 2a", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, -150]},
+    {"id": "n4", "name": "IF Level 2b", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, 150]},
+    {"id": "n5", "name": "IF Level 3a", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [600, -250]},
+    {"id": "n6", "name": "IF Level 3b", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [600, -50]},
+    {"id": "n7", "name": "IF Level 3c", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [600, 50]},
+    {"id": "n8", "name": "IF Level 3d", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [600, 250]},
+    {"id": "n9", "name": "Switch Level 4", "type": "n8n-nodes-base.switch", "typeVersion": 3, "position": [800, -300]},
+    {"id": "n10", "name": "IF Level 5", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1000, -400]},
+    {"id": "n11", "name": "Agent A", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [1200, -450]},
+    {"id": "n12", "name": "Agent B", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [1200, -350]},
+    {"id": "n13", "name": "Code 1", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [800, 300]},
+    {"id": "n14", "name": "Merge All", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [1400, 0]}
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "IF Level 1", "type": "main", "index": 0}]]},
+    "IF Level 1": {"main": [[{"node": "IF Level 2a", "type": "main", "index": 0}], [{"node": "IF Level 2b", "type": "main", "index": 0}]]},
+    "IF Level 2a": {"main": [[{"node": "IF Level 3a", "type": "main", "index": 0}], [{"node": "IF Level 3b", "type": "main", "index": 0}]]},
+    "IF Level 2b": {"main": [[{"node": "IF Level 3c", "type": "main", "index": 0}], [{"node": "IF Level 3d", "type": "main", "index": 0}]]},
+    "IF Level 3a": {"main": [[{"node": "Switch Level 4", "type": "main", "index": 0}], [{"node": "Merge All", "type": "main", "index": 0}]]},
+    "Switch Level 4": {"main": [[{"node": "IF Level 5", "type": "main", "index": 0}], [{"node": "Merge All", "type": "main", "index": 1}], [{"node": "Merge All", "type": "main", "index": 2}]]},
+    "IF Level 5": {"main": [[{"node": "Agent A", "type": "main", "index": 0}], [{"node": "Agent B", "type": "main", "index": 0}]]},
+    "Agent A": {"main": [[{"node": "Merge All", "type": "main", "index": 3}]]},
+    "Agent B": {"main": [[{"node": "Merge All", "type": "main", "index": 4}]]},
+    "IF Level 3d": {"main": [[{"node": "Code 1", "type": "main", "index": 0}], [{"node": "Merge All", "type": "main", "index": 5}]]},
+    "Code 1": {"main": [[{"node": "Merge All", "type": "main", "index": 6}]]}
+  }
+}

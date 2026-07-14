@@ -1,0 +1,26 @@
+{
+  "name": "COMPLEXITY-006: Nested split-in-batches patterns",
+  "nodes": [
+    {"id": "n1", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0]},
+    {"id": "n2", "name": "Get Items", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [200, 0]},
+    {"id": "n3", "name": "Split Outer", "type": "n8n-nodes-base.splitInBatches", "typeVersion": 3, "position": [400, 0]},
+    {"id": "n4", "name": "Process Batch", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 0]},
+    {"id": "n5", "name": "Split Inner", "type": "n8n-nodes-base.splitInBatches", "typeVersion": 3, "position": [800, 0]},
+    {"id": "n6", "name": "AI Process", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [1000, 0]},
+    {"id": "n7", "name": "Store Result", "type": "n8n-nodes-base.postgres", "typeVersion": 2, "position": [1200, 0]},
+    {"id": "n8", "name": "Loop Inner", "type": "n8n-nodes-base.splitInBatches", "typeVersion": 3, "position": [1400, 0]},
+    {"id": "n9", "name": "Send Notification", "type": "n8n-nodes-base.slack", "typeVersion": 2, "position": [1600, 0]},
+    {"id": "n10", "name": "Final Merge", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [1800, 0]}
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Get Items", "type": "main", "index": 0}]]},
+    "Get Items": {"main": [[{"node": "Split Outer", "type": "main", "index": 0}]]},
+    "Split Outer": {"main": [[{"node": "Process Batch", "type": "main", "index": 0}], [{"node": "Final Merge", "type": "main", "index": 0}]]},
+    "Process Batch": {"main": [[{"node": "Split Inner", "type": "main", "index": 0}]]},
+    "Split Inner": {"main": [[{"node": "AI Process", "type": "main", "index": 0}], [{"node": "Split Outer", "type": "main", "index": 0}]]},
+    "AI Process": {"main": [[{"node": "Store Result", "type": "main", "index": 0}]]},
+    "Store Result": {"main": [[{"node": "Loop Inner", "type": "main", "index": 0}]]},
+    "Loop Inner": {"main": [[{"node": "Send Notification", "type": "main", "index": 0}], [{"node": "Split Inner", "type": "main", "index": 0}]]},
+    "Send Notification": {"main": [[{"node": "Loop Inner", "type": "main", "index": 0}]]}
+  }
+}

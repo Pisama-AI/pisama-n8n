@@ -1,0 +1,50 @@
+{
+  "name": "COMPLEXITY-005: Many parallel branches",
+  "nodes": [
+    {"id": "n1", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0]},
+    {"id": "n2", "name": "Switch", "type": "n8n-nodes-base.switch", "typeVersion": 3, "position": [200, 0]},
+    {"id": "n3", "name": "Branch 1", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, -300]},
+    {"id": "n4", "name": "Branch 2", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, -200]},
+    {"id": "n5", "name": "Branch 3", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, -100]},
+    {"id": "n6", "name": "Branch 4", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, 0]},
+    {"id": "n7", "name": "Branch 5", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, 100]},
+    {"id": "n8", "name": "Branch 6", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, 200]},
+    {"id": "n9", "name": "Branch 7", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [400, 300]},
+    {"id": "n10", "name": "Process 1", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, -300]},
+    {"id": "n11", "name": "Process 2", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, -200]},
+    {"id": "n12", "name": "Process 3", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, -100]},
+    {"id": "n13", "name": "Process 4", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 0]},
+    {"id": "n14", "name": "Process 5", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 100]},
+    {"id": "n15", "name": "Process 6", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 200]},
+    {"id": "n16", "name": "Process 7", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 300]},
+    {"id": "n17", "name": "Merge All", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [800, 0]},
+    {"id": "n18", "name": "Output", "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1000, 0]}
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Switch", "type": "main", "index": 0}]]},
+    "Switch": {"main": [
+      [{"node": "Branch 1", "type": "main", "index": 0}],
+      [{"node": "Branch 2", "type": "main", "index": 0}],
+      [{"node": "Branch 3", "type": "main", "index": 0}],
+      [{"node": "Branch 4", "type": "main", "index": 0}],
+      [{"node": "Branch 5", "type": "main", "index": 0}],
+      [{"node": "Branch 6", "type": "main", "index": 0}],
+      [{"node": "Branch 7", "type": "main", "index": 0}]
+    ]},
+    "Branch 1": {"main": [[{"node": "Process 1", "type": "main", "index": 0}]]},
+    "Branch 2": {"main": [[{"node": "Process 2", "type": "main", "index": 0}]]},
+    "Branch 3": {"main": [[{"node": "Process 3", "type": "main", "index": 0}]]},
+    "Branch 4": {"main": [[{"node": "Process 4", "type": "main", "index": 0}]]},
+    "Branch 5": {"main": [[{"node": "Process 5", "type": "main", "index": 0}]]},
+    "Branch 6": {"main": [[{"node": "Process 6", "type": "main", "index": 0}]]},
+    "Branch 7": {"main": [[{"node": "Process 7", "type": "main", "index": 0}]]},
+    "Process 1": {"main": [[{"node": "Merge All", "type": "main", "index": 0}]]},
+    "Process 2": {"main": [[{"node": "Merge All", "type": "main", "index": 1}]]},
+    "Process 3": {"main": [[{"node": "Merge All", "type": "main", "index": 2}]]},
+    "Process 4": {"main": [[{"node": "Merge All", "type": "main", "index": 3}]]},
+    "Process 5": {"main": [[{"node": "Merge All", "type": "main", "index": 4}]]},
+    "Process 6": {"main": [[{"node": "Merge All", "type": "main", "index": 5}]]},
+    "Process 7": {"main": [[{"node": "Merge All", "type": "main", "index": 6}]]},
+    "Merge All": {"main": [[{"node": "Output", "type": "main", "index": 0}]]}
+  }
+}

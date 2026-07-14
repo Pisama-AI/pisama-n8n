@@ -1,0 +1,50 @@
+{
+  "name": "COMPLEXITY-003: High cyclomatic complexity (many paths)",
+  "nodes": [
+    {"id": "n1", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0]},
+    {"id": "n2", "name": "Switch Main", "type": "n8n-nodes-base.switch", "typeVersion": 3, "position": [200, 0]},
+    {"id": "n3", "name": "Path A IF", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, -200]},
+    {"id": "n4", "name": "Path B IF", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, -100]},
+    {"id": "n5", "name": "Path C IF", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, 0]},
+    {"id": "n6", "name": "Path D IF", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, 100]},
+    {"id": "n7", "name": "Path E IF", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, 200]},
+    {"id": "n8", "name": "Agent A1", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [600, -250]},
+    {"id": "n9", "name": "Agent A2", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [600, -200]},
+    {"id": "n10", "name": "Agent B1", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [600, -150]},
+    {"id": "n11", "name": "Agent B2", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [600, -100]},
+    {"id": "n12", "name": "Code C1", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, -50]},
+    {"id": "n13", "name": "Code C2", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 0]},
+    {"id": "n14", "name": "HTTP D1", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [600, 50]},
+    {"id": "n15", "name": "HTTP D2", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [600, 100]},
+    {"id": "n16", "name": "Set E1", "type": "n8n-nodes-base.set", "typeVersion": 3, "position": [600, 150]},
+    {"id": "n17", "name": "Set E2", "type": "n8n-nodes-base.set", "typeVersion": 3, "position": [600, 200]},
+    {"id": "n18", "name": "Merge All", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [800, 0]},
+    {"id": "n19", "name": "Output", "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1000, 0]}
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Switch Main", "type": "main", "index": 0}]]},
+    "Switch Main": {"main": [
+      [{"node": "Path A IF", "type": "main", "index": 0}],
+      [{"node": "Path B IF", "type": "main", "index": 0}],
+      [{"node": "Path C IF", "type": "main", "index": 0}],
+      [{"node": "Path D IF", "type": "main", "index": 0}],
+      [{"node": "Path E IF", "type": "main", "index": 0}]
+    ]},
+    "Path A IF": {"main": [[{"node": "Agent A1", "type": "main", "index": 0}], [{"node": "Agent A2", "type": "main", "index": 0}]]},
+    "Path B IF": {"main": [[{"node": "Agent B1", "type": "main", "index": 0}], [{"node": "Agent B2", "type": "main", "index": 0}]]},
+    "Path C IF": {"main": [[{"node": "Code C1", "type": "main", "index": 0}], [{"node": "Code C2", "type": "main", "index": 0}]]},
+    "Path D IF": {"main": [[{"node": "HTTP D1", "type": "main", "index": 0}], [{"node": "HTTP D2", "type": "main", "index": 0}]]},
+    "Path E IF": {"main": [[{"node": "Set E1", "type": "main", "index": 0}], [{"node": "Set E2", "type": "main", "index": 0}]]},
+    "Agent A1": {"main": [[{"node": "Merge All", "type": "main", "index": 0}]]},
+    "Agent A2": {"main": [[{"node": "Merge All", "type": "main", "index": 1}]]},
+    "Agent B1": {"main": [[{"node": "Merge All", "type": "main", "index": 2}]]},
+    "Agent B2": {"main": [[{"node": "Merge All", "type": "main", "index": 3}]]},
+    "Code C1": {"main": [[{"node": "Merge All", "type": "main", "index": 4}]]},
+    "Code C2": {"main": [[{"node": "Merge All", "type": "main", "index": 5}]]},
+    "HTTP D1": {"main": [[{"node": "Merge All", "type": "main", "index": 6}]]},
+    "HTTP D2": {"main": [[{"node": "Merge All", "type": "main", "index": 7}]]},
+    "Set E1": {"main": [[{"node": "Merge All", "type": "main", "index": 8}]]},
+    "Set E2": {"main": [[{"node": "Merge All", "type": "main", "index": 9}]]},
+    "Merge All": {"main": [[{"node": "Output", "type": "main", "index": 0}]]}
+  }
+}

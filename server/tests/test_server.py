@@ -15,9 +15,7 @@ from fastapi.testclient import TestClient
 from pisama_n8n_server.app import app, get_storage
 from pisama_n8n_server.storage import Storage
 
-FIXTURES = Path(
-    "/Users/tuomonikulainen/pisama-worktrees/n8n-eval-harness/n8n-workflows"
-)
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _load(rel: str) -> dict:

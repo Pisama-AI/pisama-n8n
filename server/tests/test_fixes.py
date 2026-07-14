@@ -19,9 +19,8 @@ def _client(tmp_path, monkeypatch):
 
 def _seed(client):
     fx = json.load(open(os.path.join(
-        os.path.dirname(__file__), "..", "..",
-        "..", "pisama-worktrees", "n8n-eval-harness",
-        "n8n-workflows", "executions", "error", "ERROR-01-throw.json")))
+        os.path.dirname(__file__), "fixtures",
+        "executions", "error", "ERROR-01-throw.json")))
     client.post("/api/v1/n8n/webhook", headers={"Authorization": "Bearer k"}, json=fx)
     return client.get("/api/v1/detections", headers={"Authorization": "Bearer k"}).json()[0]["id"]
 

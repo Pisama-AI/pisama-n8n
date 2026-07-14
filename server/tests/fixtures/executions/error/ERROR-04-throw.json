@@ -1,0 +1,288 @@
+{
+  "customData": {},
+  "data": {
+    "executionData": {
+      "contextData": {},
+      "nodeExecutionStack": [
+        {
+          "data": {
+            "main": [
+              [
+                {
+                  "json": {
+                    "body": {
+                      "trigger": true
+                    },
+                    "executionMode": "production",
+                    "headers": {
+                      "accept": "*/*",
+                      "accept-encoding": "gzip, deflate, br, zstd",
+                      "connection": "keep-alive",
+                      "content-length": "16",
+                      "content-type": "application/json",
+                      "host": "localhost:5679",
+                      "user-agent": "python-httpx/0.28.1"
+                    },
+                    "params": {},
+                    "query": {},
+                    "webhookUrl": "http://localhost:5678/webhook/er-5b4625-4"
+                  },
+                  "pairedItem": {
+                    "item": 0
+                  }
+                }
+              ]
+            ]
+          },
+          "node": {
+            "id": "ca639109-06d3-487e-9b06-653410dbc86b",
+            "name": "Error Code",
+            "parameters": {
+              "jsCode": "throw new Error(\"Simulated failure for testing\");",
+              "language": "javaScript",
+              "mode": "runOnceForAllItems",
+              "notice": ""
+            },
+            "position": [
+              220,
+              0
+            ],
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2
+          },
+          "source": {
+            "main": [
+              {
+                "previousNode": "Webhook"
+              }
+            ]
+          }
+        }
+      ],
+      "waitingExecution": {}
+    },
+    "resultData": {
+      "error": {
+        "description": null,
+        "level": "error",
+        "lineNumber": 1,
+        "message": "Simulated failure for testing [line 1]",
+        "node": {
+          "id": "ca639109-06d3-487e-9b06-653410dbc86b",
+          "name": "Error Code",
+          "parameters": {
+            "jsCode": "throw new Error(\"Simulated failure for testing\");",
+            "language": "javaScript",
+            "mode": "runOnceForAllItems",
+            "notice": ""
+          },
+          "position": [
+            220,
+            0
+          ],
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2
+        },
+        "stack": "Error: Simulated failure for testing\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:1:104\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:2:2\n    at VM2 Wrapper.apply (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/bridge.js:490:11)\n    at NodeVM.run (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/nodevm.js:497:23)\n    at JavaScriptSandbox.runCodeAllItems (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/JavaScriptSandbox.js:73:39)\n    at ExecuteContext.execute (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/Code.node.js:155:31)\n    at WorkflowExecute.runNode (/usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:687:50)\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:921:62\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:1257:20",
+        "tags": {}
+      },
+      "lastNodeExecuted": "Error Code",
+      "runData": {
+        "Error Code": [
+          {
+            "error": {
+              "description": null,
+              "level": "error",
+              "lineNumber": 1,
+              "message": "Simulated failure for testing [line 1]",
+              "node": {
+                "id": "ca639109-06d3-487e-9b06-653410dbc86b",
+                "name": "Error Code",
+                "parameters": {
+                  "jsCode": "throw new Error(\"Simulated failure for testing\");",
+                  "language": "javaScript",
+                  "mode": "runOnceForAllItems",
+                  "notice": ""
+                },
+                "position": [
+                  220,
+                  0
+                ],
+                "type": "n8n-nodes-base.code",
+                "typeVersion": 2
+              },
+              "stack": "Error: Simulated failure for testing\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:1:104\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:2:2\n    at VM2 Wrapper.apply (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/bridge.js:490:11)\n    at NodeVM.run (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/nodevm.js:497:23)\n    at JavaScriptSandbox.runCodeAllItems (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/JavaScriptSandbox.js:73:39)\n    at ExecuteContext.execute (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/Code.node.js:155:31)\n    at WorkflowExecute.runNode (/usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:687:50)\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:921:62\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:1257:20",
+              "tags": {}
+            },
+            "executionIndex": 1,
+            "executionStatus": "error",
+            "executionTime": 4,
+            "hints": [],
+            "source": [
+              {
+                "previousNode": "Webhook"
+              }
+            ],
+            "startTime": 1784061183477
+          }
+        ],
+        "Webhook": [
+          {
+            "data": {
+              "main": [
+                [
+                  {
+                    "json": {
+                      "body": {
+                        "trigger": true
+                      },
+                      "executionMode": "production",
+                      "headers": {
+                        "accept": "*/*",
+                        "accept-encoding": "gzip, deflate, br, zstd",
+                        "connection": "keep-alive",
+                        "content-length": "16",
+                        "content-type": "application/json",
+                        "host": "localhost:5679",
+                        "user-agent": "python-httpx/0.28.1"
+                      },
+                      "params": {},
+                      "query": {},
+                      "webhookUrl": "http://localhost:5678/webhook/er-5b4625-4"
+                    },
+                    "pairedItem": {
+                      "item": 0
+                    }
+                  }
+                ]
+              ]
+            },
+            "executionIndex": 0,
+            "executionStatus": "success",
+            "executionTime": 0,
+            "hints": [],
+            "source": [],
+            "startTime": 1784061183477
+          }
+        ]
+      }
+    },
+    "startData": {}
+  },
+  "finished": false,
+  "id": "14",
+  "mode": "webhook",
+  "retryOf": null,
+  "retrySuccessId": null,
+  "startedAt": "2026-07-14T20:33:03.456Z",
+  "stoppedAt": "2026-07-14T20:33:03.481Z",
+  "waitTill": null,
+  "workflow": {
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "index": 0,
+              "node": "Error Code",
+              "type": "main"
+            }
+          ]
+        ]
+      }
+    },
+    "name": "ERROR-04-throw",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "er-5b4625-4",
+          "responseMode": "lastNode"
+        },
+        "position": [
+          0,
+          0
+        ],
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "webhookId": "er-5b4625-4"
+      },
+      {
+        "name": "Error Code",
+        "parameters": {
+          "jsCode": "throw new Error(\"Simulated failure for testing\");"
+        },
+        "position": [
+          220,
+          0
+        ],
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2
+      }
+    ],
+    "settings": {}
+  },
+  "workflowData": {
+    "active": true,
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "index": 0,
+              "node": "Error Code",
+              "type": "main"
+            }
+          ]
+        ]
+      }
+    },
+    "createdAt": "2026-07-14T20:33:02.828Z",
+    "id": "WAyWs6DdlayhxugV",
+    "name": "ERROR-04-throw",
+    "nodes": [
+      {
+        "id": "1d62905d-69b4-4d77-aae3-5da626b3174d",
+        "name": "Webhook",
+        "parameters": {
+          "authentication": "none",
+          "httpMethod": "POST",
+          "multipleMethods": false,
+          "options": {},
+          "path": "er-5b4625-4",
+          "responseData": "firstEntryJson",
+          "responseMode": "lastNode"
+        },
+        "position": [
+          0,
+          0
+        ],
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "webhookId": "er-5b4625-4"
+      },
+      {
+        "id": "ca639109-06d3-487e-9b06-653410dbc86b",
+        "name": "Error Code",
+        "parameters": {
+          "jsCode": "throw new Error(\"Simulated failure for testing\");",
+          "language": "javaScript",
+          "mode": "runOnceForAllItems",
+          "notice": ""
+        },
+        "position": [
+          220,
+          0
+        ],
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2
+      }
+    ],
+    "pinData": null,
+    "settings": {},
+    "staticData": {},
+    "updatedAt": "2026-07-14T20:33:02.881Z"
+  },
+  "workflowId": "WAyWs6DdlayhxugV"
+}

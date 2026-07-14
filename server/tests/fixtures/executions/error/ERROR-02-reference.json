@@ -1,0 +1,288 @@
+{
+  "customData": {},
+  "data": {
+    "executionData": {
+      "contextData": {},
+      "nodeExecutionStack": [
+        {
+          "data": {
+            "main": [
+              [
+                {
+                  "json": {
+                    "body": {
+                      "trigger": true
+                    },
+                    "executionMode": "production",
+                    "headers": {
+                      "accept": "*/*",
+                      "accept-encoding": "gzip, deflate, br, zstd",
+                      "connection": "keep-alive",
+                      "content-length": "16",
+                      "content-type": "application/json",
+                      "host": "localhost:5679",
+                      "user-agent": "python-httpx/0.28.1"
+                    },
+                    "params": {},
+                    "query": {},
+                    "webhookUrl": "http://localhost:5678/webhook/er-5b4625-2"
+                  },
+                  "pairedItem": {
+                    "item": 0
+                  }
+                }
+              ]
+            ]
+          },
+          "node": {
+            "id": "6d44661a-458b-4b99-8d78-4c7f09273509",
+            "name": "Error Code",
+            "parameters": {
+              "jsCode": "const x = undefined.property; return [];",
+              "language": "javaScript",
+              "mode": "runOnceForAllItems",
+              "notice": ""
+            },
+            "position": [
+              220,
+              0
+            ],
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2
+          },
+          "source": {
+            "main": [
+              {
+                "previousNode": "Webhook"
+              }
+            ]
+          }
+        }
+      ],
+      "waitingExecution": {}
+    },
+    "resultData": {
+      "error": {
+        "description": "TypeError",
+        "level": "error",
+        "lineNumber": 1,
+        "message": "Cannot read properties of undefined (reading 'property') [line 1]",
+        "node": {
+          "id": "6d44661a-458b-4b99-8d78-4c7f09273509",
+          "name": "Error Code",
+          "parameters": {
+            "jsCode": "const x = undefined.property; return [];",
+            "language": "javaScript",
+            "mode": "runOnceForAllItems",
+            "notice": ""
+          },
+          "position": [
+            220,
+            0
+          ],
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2
+        },
+        "stack": "TypeError: Cannot read properties of undefined (reading 'property')\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:1:118\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:2:2\n    at VM2 Wrapper.apply (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/bridge.js:490:11)\n    at NodeVM.run (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/nodevm.js:497:23)\n    at JavaScriptSandbox.runCodeAllItems (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/JavaScriptSandbox.js:73:39)\n    at ExecuteContext.execute (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/Code.node.js:155:31)\n    at WorkflowExecute.runNode (/usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:687:50)\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:921:62\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:1257:20",
+        "tags": {}
+      },
+      "lastNodeExecuted": "Error Code",
+      "runData": {
+        "Error Code": [
+          {
+            "error": {
+              "description": "TypeError",
+              "level": "error",
+              "lineNumber": 1,
+              "message": "Cannot read properties of undefined (reading 'property') [line 1]",
+              "node": {
+                "id": "6d44661a-458b-4b99-8d78-4c7f09273509",
+                "name": "Error Code",
+                "parameters": {
+                  "jsCode": "const x = undefined.property; return [];",
+                  "language": "javaScript",
+                  "mode": "runOnceForAllItems",
+                  "notice": ""
+                },
+                "position": [
+                  220,
+                  0
+                ],
+                "type": "n8n-nodes-base.code",
+                "typeVersion": 2
+              },
+              "stack": "TypeError: Cannot read properties of undefined (reading 'property')\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:1:118\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:2:2\n    at VM2 Wrapper.apply (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/bridge.js:490:11)\n    at NodeVM.run (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/nodevm.js:497:23)\n    at JavaScriptSandbox.runCodeAllItems (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/JavaScriptSandbox.js:73:39)\n    at ExecuteContext.execute (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/Code.node.js:155:31)\n    at WorkflowExecute.runNode (/usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:687:50)\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:921:62\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:1257:20",
+              "tags": {}
+            },
+            "executionIndex": 1,
+            "executionStatus": "error",
+            "executionTime": 22,
+            "hints": [],
+            "source": [
+              {
+                "previousNode": "Webhook"
+              }
+            ],
+            "startTime": 1784061150227
+          }
+        ],
+        "Webhook": [
+          {
+            "data": {
+              "main": [
+                [
+                  {
+                    "json": {
+                      "body": {
+                        "trigger": true
+                      },
+                      "executionMode": "production",
+                      "headers": {
+                        "accept": "*/*",
+                        "accept-encoding": "gzip, deflate, br, zstd",
+                        "connection": "keep-alive",
+                        "content-length": "16",
+                        "content-type": "application/json",
+                        "host": "localhost:5679",
+                        "user-agent": "python-httpx/0.28.1"
+                      },
+                      "params": {},
+                      "query": {},
+                      "webhookUrl": "http://localhost:5678/webhook/er-5b4625-2"
+                    },
+                    "pairedItem": {
+                      "item": 0
+                    }
+                  }
+                ]
+              ]
+            },
+            "executionIndex": 0,
+            "executionStatus": "success",
+            "executionTime": 0,
+            "hints": [],
+            "source": [],
+            "startTime": 1784061150227
+          }
+        ]
+      }
+    },
+    "startData": {}
+  },
+  "finished": false,
+  "id": "12",
+  "mode": "webhook",
+  "retryOf": null,
+  "retrySuccessId": null,
+  "startedAt": "2026-07-14T20:32:30.224Z",
+  "stoppedAt": "2026-07-14T20:32:30.249Z",
+  "waitTill": null,
+  "workflow": {
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "index": 0,
+              "node": "Error Code",
+              "type": "main"
+            }
+          ]
+        ]
+      }
+    },
+    "name": "ERROR-02-reference",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "er-5b4625-2",
+          "responseMode": "lastNode"
+        },
+        "position": [
+          0,
+          0
+        ],
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "webhookId": "er-5b4625-2"
+      },
+      {
+        "name": "Error Code",
+        "parameters": {
+          "jsCode": "const x = undefined.property; return [];"
+        },
+        "position": [
+          220,
+          0
+        ],
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2
+      }
+    ],
+    "settings": {}
+  },
+  "workflowData": {
+    "active": true,
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "index": 0,
+              "node": "Error Code",
+              "type": "main"
+            }
+          ]
+        ]
+      }
+    },
+    "createdAt": "2026-07-14T20:32:29.648Z",
+    "id": "naGTT0PeO36bGJYn",
+    "name": "ERROR-02-reference",
+    "nodes": [
+      {
+        "id": "b1823918-420b-4a07-ac88-1f728db6deba",
+        "name": "Webhook",
+        "parameters": {
+          "authentication": "none",
+          "httpMethod": "POST",
+          "multipleMethods": false,
+          "options": {},
+          "path": "er-5b4625-2",
+          "responseData": "firstEntryJson",
+          "responseMode": "lastNode"
+        },
+        "position": [
+          0,
+          0
+        ],
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "webhookId": "er-5b4625-2"
+      },
+      {
+        "id": "6d44661a-458b-4b99-8d78-4c7f09273509",
+        "name": "Error Code",
+        "parameters": {
+          "jsCode": "const x = undefined.property; return [];",
+          "language": "javaScript",
+          "mode": "runOnceForAllItems",
+          "notice": ""
+        },
+        "position": [
+          220,
+          0
+        ],
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2
+      }
+    ],
+    "pinData": null,
+    "settings": {},
+    "staticData": {},
+    "updatedAt": "2026-07-14T20:32:29.676Z"
+  },
+  "workflowId": "naGTT0PeO36bGJYn"
+}
