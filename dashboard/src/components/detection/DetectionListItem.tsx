@@ -105,14 +105,12 @@ export function DetectionListItem({
       <div className="text-right">
         {showSimplifiedView ? (
           <div className="flex items-center gap-2">
-            <Link
-              href={`/detections/${detection.id}`}
-              onClick={(e) => e.stopPropagation()}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 text-ink rounded-lg transition-colors"
-            >
+            {/* Visual affordance only — the whole row is already a Link to the same
+                place; a nested <a> would be invalid HTML (hydration error). */}
+            <span className="flex items-center gap-1 px-3 py-1.5 text-sm bg-evidence hover:bg-evidence-2 text-evidence-ink rounded-lg transition-colors">
               <Wrench size={14} />
               View
-            </Link>
+            </span>
           </div>
         ) : (
           <>

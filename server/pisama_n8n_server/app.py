@@ -22,6 +22,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from pisama_n8n_engine.orchestrator import DetectionReport, analyze
 from pisama_n8n_engine.trace.execution import execution_to_turns_and_metadata
@@ -34,6 +35,17 @@ app = FastAPI(
     title="Pisama n8n Server",
     description="Self-host detection server for n8n workflow executions.",
     version="0.1.0",
+)
+
+# The dashboard is a separate origin (its own port/host), so it needs CORS to read the
+# detections API from the browser. Configurable via PISAMA_CORS_ORIGINS (comma-separated);
+# defaults to "*" for zero-config self-host since auth is the bearer token, not the origin.
+_cors_origins = os.environ.get("PISAMA_CORS_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
