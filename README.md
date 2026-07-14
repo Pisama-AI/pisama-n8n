@@ -60,10 +60,12 @@ banner). This prevents the two-copy drift that has already bitten the project on
 
 ## Roadmap
 
-- **Verified n8n community node** — `n8n-nodes-pisama` is MIT and dependency-free;
-  submission to n8n's verified-community-node program is in progress.
 - **Detection recall** — validating against mined real-world n8n failures (the current
-  precision numbers are trustworthy; recall is the open work).
+  precision numbers are trustworthy; recall is the open work). This is the priority.
+- **n8n community node** — `n8n-nodes-pisama` (MIT, dependency-free) is published on npm
+  and installable on self-hosted n8n today. n8n Cloud's *verified* listing is a later
+  step, not a blocker: the webhook and API-polling ingestion channels need no node
+  install and work on both self-hosted and Cloud.
 - **AI-agent detectors** — loop/hallucination/derailment on n8n AI Agent nodes, as a paid
   cloud capability (they need embeddings and don't belong in the dependency-free engine).
 
