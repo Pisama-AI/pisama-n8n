@@ -1,11 +1,79 @@
 'use client'
 
 import Link from 'next/link'
+import { useQuery } from '@tanstack/react-query'
+import { signOut } from 'next-auth/react'
 import { PisamaMark } from '@/components/common/PisamaMark'
+import { IS_SAAS } from '@/lib/saas'
+import { fetchApi } from '@/lib/api/client'
 
 interface HeaderProps {
   onMenuClick?: () => void
   title?: string
+}
+
+interface Me {
+  name?: string // the tenant name — for SaaS tenants this is the sign-in email
+  plan?: string
+}
+
+// The right-side indicator. OSS self-host shows a static "Self-host" pill; the hosted
+// SaaS build (NEXT_PUBLIC_SAAS=1) shows the signed-in account's plan + email + sign out.
+function StatusPill() {
+  const { data } = useQuery<Me>({
+    queryKey: ['me'],
+    queryFn: () => fetchApi('/api/v1/me'),
+    enabled: IS_SAAS, // build-time constant; the query never runs in OSS mode
+    staleTime: 60_000,
+  })
+
+  const pillStyle = {
+    fontFamily: 'var(--font-mono)',
+    fontSize: 10,
+    letterSpacing: '.12em',
+    textTransform: 'uppercase' as const,
+    color: 'var(--ink-2)',
+    borderColor: 'var(--rule)',
+    background: 'transparent',
+  }
+  const dot = (
+    <span
+      aria-hidden
+      style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--evidence)', display: 'inline-block' }}
+    />
+  )
+
+  if (!IS_SAAS) {
+    return (
+      <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 border" style={pillStyle}>
+        {dot}
+        Self-host
+      </span>
+    )
+  }
+
+  const plan = (data?.plan || 'free').toUpperCase()
+  const email = data?.name
+
+  return (
+    <div className="flex items-center gap-3">
+      {email && (
+        <span className="hidden md:inline text-xs" style={{ color: 'var(--ink-3)' }}>
+          {email}
+        </span>
+      )}
+      <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 border" style={pillStyle}>
+        {dot}
+        {plan}
+      </span>
+      <button
+        onClick={() => signOut({ callbackUrl: '/sign-in' })}
+        className="text-xs text-ink-3 hover:text-ink transition-colors"
+      >
+        Sign out
+      </button>
+    </div>
+  )
 }
 
 export function Header({ onMenuClick, title }: HeaderProps) {
@@ -53,30 +121,7 @@ export function Header({ onMenuClick, title }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-3">
-        <span
-          className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 border"
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            letterSpacing: '.12em',
-            textTransform: 'uppercase',
-            color: 'var(--ink-2)',
-            borderColor: 'var(--rule)',
-            background: 'transparent',
-          }}
-        >
-          <span
-            aria-hidden
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: 'var(--evidence)',
-              display: 'inline-block',
-            }}
-          />
-          Self-host
-        </span>
+        <StatusPill />
       </div>
     </header>
   )
