@@ -1,11 +1,19 @@
-// Plain fetch client for the pisama-n8n self-host server. Single-tenant: no BFF
-// proxy, no {tenant_id} templating, no next-auth. Bearer key comes from the
-// browser's localStorage (a Settings field) or NEXT_PUBLIC_API_KEY at build time.
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8400'
+// Plain fetch client. Two modes:
+//   OSS self-host (default): direct calls to the server, bearer key from
+//   localStorage (Settings) or NEXT_PUBLIC_API_KEY. Single-tenant.
+//   SaaS (NEXT_PUBLIC_SAAS=1): same-origin BFF proxy (/api/backend) — the session
+//   cookie authenticates, the proxy attaches the tenant JWT server-side, and no
+//   key exists in the browser at all.
+import { IS_SAAS } from '@/lib/saas'
+
+export const API_BASE = IS_SAAS
+  ? '/api/backend'
+  : process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8400'
 
 const KEY_STORAGE = 'pisama_n8n_key'
 
 export function resolveKey(): string | undefined {
+  if (IS_SAAS) return undefined // session cookie + BFF, never a client-side key
   // Only touch localStorage in the browser — reading it during SSR throws.
   if (typeof window !== 'undefined') {
     const stored = window.localStorage.getItem(KEY_STORAGE)
