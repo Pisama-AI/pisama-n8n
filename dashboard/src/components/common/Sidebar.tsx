@@ -15,7 +15,7 @@ interface NavItem {
 
 // Single-tenant self-host nav: just the two views this dashboard ships.
 const navItems: NavItem[] = [
-  { label: 'Overview', href: '/', icon: LayoutDashboard },
+  { label: 'Overview', href: '/overview', icon: LayoutDashboard },
   { label: 'Detections', href: '/detections', icon: AlertTriangle },
 ]
 

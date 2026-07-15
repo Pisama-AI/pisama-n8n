@@ -89,6 +89,20 @@ def get_storage() -> Storage:
 
 # --- auth -----------------------------------------------------------------
 
+def public_read_enabled() -> bool:
+    """PISAMA_PUBLIC_READ=1 opens the read-only GETs (detections, stream, paid status)
+    while every POST stays key-gated. This is what makes a hosted public dashboard safe:
+    the browser needs no key to view, and no write/paid capability ships to the client."""
+    return os.environ.get("PISAMA_PUBLIC_READ", "").lower() in ("1", "true", "yes")
+
+
+def require_read_auth(authorization: Optional[str] = Header(default=None)) -> None:
+    """Auth for read-only endpoints: open when PISAMA_PUBLIC_READ=1, else same as write."""
+    if public_read_enabled():
+        return
+    require_auth(authorization)
+
+
 def require_auth(authorization: Optional[str] = Header(default=None)) -> None:
     """Static bearer-token auth. If ``PISAMA_API_KEY`` is unset, dev mode: allow.
 
@@ -144,7 +158,7 @@ async def n8n_sync(
         await client.aclose()
 
 
-@app.get("/api/v1/detections", dependencies=[Depends(require_auth)])
+@app.get("/api/v1/detections", dependencies=[Depends(require_read_auth)])
 async def list_detections(
     storage: Storage = Depends(get_storage),
 ) -> List[Dict[str, Any]]:
@@ -153,7 +167,7 @@ async def list_detections(
 
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
 
-@app.get("/api/v1/paid/status", dependencies=[Depends(require_auth)])
+@app.get("/api/v1/paid/status", dependencies=[Depends(require_read_auth)])
 async def paid_status() -> Dict[str, bool]:
     """Whether the paid tier (fix suggestions + auto-fix) is configured on this server."""
     from pisama_n8n_server.fixes import is_paid_configured
@@ -226,10 +240,10 @@ async def n8n_rollback(body: Dict[str, Any]) -> Dict[str, Any]:
 @app.get("/api/v1/stream")
 async def stream(request: Request) -> StreamingResponse:
     """SSE stream of live detection events, so the dashboard updates as executions arrive.
-    Auth is via the `token` query param (EventSource can't set headers); falls back to
-    dev-mode-open when PISAMA_API_KEY is unset."""
+    Auth is via the `token` query param (EventSource can't set headers); open when
+    PISAMA_PUBLIC_READ=1 (read-only stream) or when PISAMA_API_KEY is unset (dev mode)."""
     expected = os.environ.get("PISAMA_API_KEY")
-    if expected and request.query_params.get("token") != expected:
+    if (not public_read_enabled()) and expected and request.query_params.get("token") != expected:
         raise HTTPException(status_code=401, detail="Invalid or missing token.")
 
     async def gen() -> AsyncIterator[str]:
