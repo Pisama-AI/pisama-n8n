@@ -40,6 +40,13 @@ BENIGN_LOOP_PATTERNS: Set[str] = {
     "cron", "interval", "webhook response", "respond to webhook",
 }
 
+# n8n loop constructs that are ALWAYS bounded — they terminate when the input
+# items are exhausted (the empty output-0 "done" branch). A graph cycle that
+# passes through one of these is an intentional batch loop, not an infinite loop.
+# Real-world validation (2,348 community workflows) showed the graph-cycle path
+# flagged 237/238 of these benign loops before this guard.
+BOUNDED_LOOP_NODE_MARKERS = ("splitinbatches", "loopoveritems")
+
 
 def content_similarity(a: str, b: str) -> float:
     """Calculate similarity ratio between two strings (0.0 to 1.0)."""
@@ -382,7 +389,7 @@ class N8NCycleDetector(TurnAwareDetector):
             if node_name in neighbors:
                 node = node_lookup.get(node_name, {})
                 node_type = node.get("type", "")
-                bounded = self._node_has_iteration_bound(node)
+                bounded = self._node_is_bounded_loop(node)
                 issues.append({
                     "type": "self_loop",
                     "node": node_name,
@@ -432,8 +439,13 @@ class N8NCycleDetector(TurnAwareDetector):
             has_break_condition = self._cycle_has_break_condition(
                 cycle_nodes, node_lookup, adjacency
             )
-
-            potentially_infinite = not has_break_condition
+            # A cycle through an n8n bounded-loop node (Loop Over Items /
+            # SplitInBatches) or a node with a finite iteration cap is intentional
+            # and terminates on item exhaustion — not an infinite-loop risk.
+            has_bounded_loop_node = any(
+                self._node_is_bounded_loop(node_lookup.get(n, {})) for n in cycle_nodes
+            )
+            potentially_infinite = not (has_break_condition or has_bounded_loop_node)
 
             issues.append({
                 "type": "graph_cycle",
@@ -462,6 +474,19 @@ class N8NCycleDetector(TurnAwareDetector):
         infinite_count = sum(1 for i in issues if i.get("potentially_infinite", False))
         self_loop_count = sum(1 for i in issues if i.get("type") == "self_loop")
         cycle_count = sum(1 for i in issues if i.get("type") == "graph_cycle")
+
+        # Only a genuinely UNBOUNDED cycle is a failure. If every cycle/self-loop in
+        # the graph is bounded (an intentional n8n loop construct), do not fire —
+        # this is the precision fix that stops flagging batch loops as infinite loops.
+        if infinite_count == 0:
+            return TurnAwareDetectionResult(
+                detected=False,
+                severity=TurnAwareSeverity.NONE,
+                confidence=0.85,
+                failure_mode=None,
+                explanation="Workflow contains only bounded loop constructs (no infinite-loop risk)",
+                detector_name=self.name,
+            )
 
         if infinite_count >= 2 or self_loop_count >= 1:
             severity = TurnAwareSeverity.SEVERE
@@ -501,6 +526,16 @@ class N8NCycleDetector(TurnAwareDetector):
             ),
             detector_name=self.name,
         )
+
+    @staticmethod
+    def _node_is_bounded_loop(node: Dict[str, Any]) -> bool:
+        """True if the node is an n8n bounded-loop construct (Loop Over Items /
+        SplitInBatches — always terminates on item exhaustion) or carries a finite
+        iteration cap. Such a node makes any cycle through it intentional, not infinite."""
+        ntype = (node.get("type") or "").lower()
+        if any(marker in ntype for marker in BOUNDED_LOOP_NODE_MARKERS):
+            return True
+        return N8NCycleDetector._node_has_iteration_bound(node)
 
     @staticmethod
     def _node_has_iteration_bound(node: Dict[str, Any]) -> bool:

@@ -262,6 +262,25 @@ class N8NSchemaDetector(TurnAwareDetector):
                 detector_name=self.name,
             )
 
+        # Static schema-mismatch detection is DISABLED for the workflow-JSON path.
+        # Real-world validation (2,348 community workflows + adversarial judging) found
+        # it fired on ~31% of workflows at ~0 precision: n8n's data model is dynamic JSON,
+        # so there is no static type contract between connected nodes to violate. Genuine
+        # type/schema errors surface at RUNTIME (an execution's error state) and are the
+        # error detector's domain. The inference code below is retained but unreachable;
+        # re-enable only behind a runtime-grounded rework.
+        return TurnAwareDetectionResult(
+            detected=False,
+            severity=TurnAwareSeverity.NONE,
+            confidence=0.0,
+            failure_mode=None,
+            explanation=(
+                "Static schema-mismatch detection is disabled — unreliable for n8n's "
+                "dynamic JSON data model. Real type errors are caught at runtime."
+            ),
+            detector_name=self.name,
+        )
+
         # Build node lookup dict keyed by node name
         node_lookup: Dict[str, Dict[str, Any]] = {}
         for node in nodes:
