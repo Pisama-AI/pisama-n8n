@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getDetections, getDetection } from '@/lib/api/detections'
+import { getDetections, getDetection, getDetectionTrace } from '@/lib/api/detections'
 import { API_BASE, resolveKey } from '@/lib/api/client'
 
 export function useDetections() {
@@ -38,6 +38,15 @@ export function useDetection(id: string) {
   return useQuery({
     queryKey: ['detection', id],
     queryFn: () => getDetection(id),
+    enabled: Boolean(id),
+  })
+}
+
+// The per-node execution trace for the detail view's in-app trace panel.
+export function useDetectionTrace(id: string) {
+  return useQuery({
+    queryKey: ['detection-trace', id],
+    queryFn: () => getDetectionTrace(id),
     enabled: Boolean(id),
   })
 }

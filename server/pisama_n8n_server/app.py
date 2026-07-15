@@ -178,6 +178,19 @@ async def get_detection(
     return row
 
 
+@app.get("/api/v1/detections/{detection_id}/trace", dependencies=[Depends(require_read_auth)])
+async def get_detection_trace(
+    detection_id: int,
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """The per-node execution trace behind a detection, so the detail view can show
+    which node failed, how long it took, and what it emitted. 404 for an unknown id."""
+    trace = storage.get_execution_trace(detection_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Unknown detection id.")
+    return trace
+
+
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
 
 @app.get("/api/v1/paid/status", dependencies=[Depends(require_read_auth)])

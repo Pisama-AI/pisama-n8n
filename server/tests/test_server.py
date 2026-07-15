@@ -156,3 +156,43 @@ def test_get_detection_by_id(client):
 
     missing = client.get("/api/v1/detections/999999")
     assert missing.status_code == 404, missing.text
+
+
+# 8. Execution trace: per-node timing/status/errors behind a detection.
+
+def _first_detection_id(client) -> int:
+    return client.get("/api/v1/detections").json()[0]["id"]
+
+
+def test_trace_runtime_surfaces_slow_node(client):
+    assert client.post("/api/v1/n8n/webhook", json=_load("executions/timeout/TIMEOUT-01.json")).status_code == 200
+    trace = client.get(f"/api/v1/detections/{_first_detection_id(client)}/trace").json()
+
+    assert trace["available"] and trace["kind"] == "runtime", trace
+    by_name = {n["name"]: n for n in trace["nodes"]}
+    assert "Slow Code" in by_name, trace
+    # The slow node's real execution time is carried through (~64s).
+    assert by_name["Slow Code"]["execution_time_ms"] > 60_000, by_name["Slow Code"]
+    assert by_name["Slow Code"]["type"] == "n8n-nodes-base.code", by_name["Slow Code"]
+
+
+def test_trace_runtime_marks_error_node(client):
+    assert client.post("/api/v1/n8n/webhook", json=_load("executions/error/ERROR-01-throw.json")).status_code == 200
+    trace = client.get(f"/api/v1/detections/{_first_detection_id(client)}/trace").json()
+
+    assert trace["status"] == "error", trace
+    assert trace["error"], "expected a top-level error message"
+    errored = [n for n in trace["nodes"] if n["status"] == "error"]
+    assert errored and errored[0]["error"], errored
+
+
+def test_trace_static_for_bare_workflow(client):
+    assert client.post("/api/v1/n8n/webhook", json=_load("complexity/01-COMPLEXITY-high-node-count.json")).status_code == 200
+    trace = client.get(f"/api/v1/detections/{_first_detection_id(client)}/trace").json()
+
+    assert trace["available"] and trace["kind"] == "static", trace
+    assert trace["node_count"] > 0 and all(n["ran"] is False for n in trace["nodes"]), trace
+
+
+def test_trace_unknown_id_404(client):
+    assert client.get("/api/v1/detections/999999/trace").status_code == 404

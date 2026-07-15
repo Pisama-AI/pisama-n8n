@@ -100,6 +100,131 @@ def _extract_workflow_name(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _workflow_block(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """The block holding the workflow nodes: workflowData/workflow on a full
+    execution, or the payload itself on a bare workflow POST."""
+    for key in ("workflowData", "workflow"):
+        block = raw.get(key)
+        if isinstance(block, dict) and block.get("nodes"):
+            return block
+    if raw.get("nodes"):
+        return raw
+    return {}
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def parse_trace(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn a stored n8n execution payload into a per-node trace the dashboard can
+    render: what ran, its status, timing, item counts, and errors. Two kinds:
+    ``runtime`` (has data.resultData.runData) and ``static`` (workflow nodes only,
+    e.g. a structural detection). ``{"available": False}`` when neither is present."""
+    if not isinstance(raw, dict):
+        return {"available": False}
+
+    block = _workflow_block(raw)
+    node_type = {
+        n.get("name"): n.get("type")
+        for n in (block.get("nodes") or [])
+        if isinstance(n, dict)
+    }
+    order_names = [n.get("name") for n in (block.get("nodes") or []) if isinstance(n, dict)]
+
+    data = raw.get("data")
+    result = data.get("resultData") if isinstance(data, dict) else None
+    result = result if isinstance(result, dict) else {}
+    run_data = result.get("runData")
+
+    top_error = result.get("error", {}).get("message") if isinstance(result.get("error"), dict) else None
+    started, stopped = _parse_iso(raw.get("startedAt")), _parse_iso(raw.get("stoppedAt"))
+    duration_ms = int((stopped - started).total_seconds() * 1000) if started and stopped else None
+
+    if isinstance(run_data, dict) and run_data:
+        nodes: List[Dict[str, Any]] = []
+        for name, runs in run_data.items():
+            if not isinstance(runs, list):
+                continue
+            total_time, total_items, status, node_err, order = 0, 0, "success", None, None
+            for run in runs:
+                if not isinstance(run, dict):
+                    continue
+                total_time += int(run.get("executionTime") or 0)
+                for branch in ((run.get("data") or {}).get("main") or []):
+                    if isinstance(branch, list):
+                        total_items += len(branch)
+                errored = run.get("executionStatus") == "error" or bool(run.get("error"))
+                if errored:
+                    status = "error"
+                    if node_err is None and isinstance(run.get("error"), dict):
+                        node_err = run["error"].get("message")
+                if order is None:
+                    order = run.get("executionIndex")
+            nodes.append(
+                {
+                    "name": name,
+                    "type": node_type.get(name),
+                    "ran": True,
+                    "status": status,
+                    "execution_time_ms": total_time,
+                    "items_out": total_items,
+                    "error": node_err,
+                    "runs": len(runs),
+                    "_order": order if order is not None else 10**9,
+                }
+            )
+        nodes.sort(key=lambda n: n["_order"])
+        for n in nodes:
+            n.pop("_order", None)
+        overall = "error" if (top_error or any(n["status"] == "error" for n in nodes)) else (
+            "success" if raw.get("finished") else "unknown"
+        )
+        return {
+            "available": True,
+            "kind": "runtime",
+            "status": overall,
+            "finished": bool(raw.get("finished")),
+            "duration_ms": duration_ms,
+            "error": top_error,
+            "last_node": result.get("lastNodeExecuted"),
+            "node_count": len(nodes),
+            "nodes": nodes,
+        }
+
+    if order_names:
+        return {
+            "available": True,
+            "kind": "static",
+            "status": None,
+            "finished": None,
+            "duration_ms": None,
+            "error": None,
+            "last_node": None,
+            "node_count": len(order_names),
+            "nodes": [
+                {
+                    "name": nm,
+                    "type": node_type.get(nm),
+                    "ran": False,
+                    "status": "unknown",
+                    "execution_time_ms": None,
+                    "items_out": None,
+                    "error": None,
+                    "runs": 0,
+                }
+                for nm in order_names
+            ],
+        }
+
+    return {"available": False}
+
+
 def database_url() -> str:
     return os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL
 
@@ -262,3 +387,20 @@ class Storage:
                 .where(DetectionRow.id == detection_id)
             ).first()
             return self._enrich(*row) if row else None
+
+    def get_execution_trace(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        """The per-node execution trace for a detection's execution — what ran, its
+        status, timing, and errors. None if the detection id is unknown; a
+        ``{"available": False}`` dict if the stored payload has no parseable trace."""
+        with self._Session() as session:
+            det = session.get(DetectionRow, detection_id)
+            if det is None:
+                return None
+            execution = session.get(Execution, det.execution_id)
+            if execution is None:
+                return {"available": False}
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return {"available": False}
+            return parse_trace(raw)

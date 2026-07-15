@@ -81,3 +81,31 @@ export async function getDetection(id: string): Promise<Detection> {
   const row = await fetchApi<ServerDetection>(`/api/v1/detections/${id}`)
   return adaptDetection(row)
 }
+
+// Per-node execution trace behind a detection (GET /detections/{id}/trace).
+export interface TraceNode {
+  name: string
+  type: string | null
+  ran: boolean
+  status: 'success' | 'error' | 'unknown'
+  execution_time_ms: number | null
+  items_out: number | null
+  error: string | null
+  runs: number
+}
+
+export interface Trace {
+  available: boolean
+  kind?: 'runtime' | 'static'
+  status?: 'success' | 'error' | null
+  finished?: boolean | null
+  duration_ms?: number | null
+  error?: string | null
+  last_node?: string | null
+  node_count?: number
+  nodes?: TraceNode[]
+}
+
+export function getDetectionTrace(id: string): Promise<Trace> {
+  return fetchApi<Trace>(`/api/v1/detections/${id}/trace`)
+}

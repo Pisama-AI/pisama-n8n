@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { formatConfidencePct } from '@/lib/utils'
 import { detectionTypeConfig, plainEnglishLabels, severityConfig } from '@/components/detection/DetectionTypeConfig'
 import { FixPanel } from '@/components/detection/FixPanel'
+import { TraceView } from '@/components/detection/TraceView'
 import { useDetection } from '@/hooks/useDetections'
 import { N8N_BASE_URL } from '@/lib/flags'
 
@@ -161,6 +162,8 @@ export function DetectionDetailClient({ id }: { id: string }) {
                     </div>
                   )}
                 </Card>
+
+                <TraceView detectionId={id} />
 
                 {detection.detected && <FixPanel detectionId={id} />}
               </>
