@@ -35,7 +35,25 @@ export class PisamaApi implements ICredentialType {
 			typeOptions: { password: true },
 			default: '',
 			description:
-				'Optional HMAC secret for signing webhook payloads. Shown once when you register a workflow.',
+				'HMAC secret for signing webhook payloads. Shown once when you register the workflow in Pisama. Registration is required: the Pisama webhook rejects unsigned executions.',
+		},
+		{
+			displayName: 'n8n API URL',
+			name: 'n8nApiUrl',
+			type: 'string',
+			default: '',
+			placeholder: 'https://your-instance.app.n8n.cloud/api/v1',
+			description:
+				'Optional. Base URL of your n8n public REST API. When set (with an API key), the node fetches authoritative execution status, real start/finish timestamps, per-node run data, and the full workflow JSON — the only source that unblinds the structural quality checks. Leave empty to send best-effort telemetry from the node execution context.',
+		},
+		{
+			displayName: 'n8n API Key',
+			name: 'n8nApiKey',
+			type: 'string',
+			typeOptions: { password: true },
+			default: '',
+			description:
+				'Optional. n8n public API key (Settings → n8n API). Sent as X-N8N-API-KEY only to the n8n API URL above, never to Pisama. Enables authoritative, full-fidelity execution telemetry.',
 		},
 	];
 
