@@ -1,0 +1,36 @@
+# Hosted pisama-n8n detection API (backs the dashboard at n8n.pisama.ai).
+# A separate Fly app — fully isolated from the main pisama-api.
+#   fly deploy --config deploy/fly.toml --dockerfile deploy/Dockerfile.server
+app = "pisama-n8n-api"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile.server"
+
+[env]
+  PISAMA_PUBLIC_READ = "1"
+  DATABASE_URL = "sqlite:////data/pisama.db"
+  # The dashboard origin; extend comma-separated if more origins need read access.
+  PISAMA_CORS_ORIGINS = "*"
+
+[[mounts]]
+  source = "pisama_n8n_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8400
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

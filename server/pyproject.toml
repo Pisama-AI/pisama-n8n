@@ -17,6 +17,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "sqlalchemy",
+    "httpx",
 ]
 
 [project.urls]
