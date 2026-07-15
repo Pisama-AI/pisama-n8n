@@ -9,8 +9,10 @@ import {
   requestFix,
   applyFix,
   rollbackFix,
+  startCheckout,
   type FixSuggestion,
 } from '@/lib/api/fixes'
+import { IS_SAAS } from '@/lib/saas'
 
 // The paid-tier affordance: request an AI-generated fix from the Pisama cloud. Shown as a
 // locked upsell when the server has no cloud key; a live "Get fix" when it does.
@@ -97,10 +99,38 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
           to enable fixes with your own key.
         </p>
       ) : !enabled ? (
-        <p className="text-sm text-ink-3">
-          AI fix suggestions and one-click auto-apply are part of the Pisama cloud tier.
-          Configure <code className="text-ink-2">PISAMA_CLOUD_KEY</code> on the server to enable.
-        </p>
+        IS_SAAS ? (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-3">
+              Pisama can generate a targeted fix for this failure and apply it to your live
+              workflow with one approval. AI fixes are part of Pisama Pro.
+            </p>
+            <Button
+              variant="primary"
+              size="sm"
+              isLoading={loading}
+              leftIcon={<Sparkles size={14} />}
+              onClick={async () => {
+                setLoading(true)
+                setError(null)
+                try {
+                  window.location.href = await startCheckout()
+                } catch {
+                  setError('Could not start checkout. Try again.')
+                  setLoading(false)
+                }
+              }}
+            >
+              Upgrade to Pro
+            </Button>
+            {error && <p className="text-sm" style={{ color: 'var(--fail)' }}>{error}</p>}
+          </div>
+        ) : (
+          <p className="text-sm text-ink-3">
+            AI fix suggestions and one-click auto-apply are part of the Pisama cloud tier.
+            Configure <code className="text-ink-2">PISAMA_CLOUD_KEY</code> on the server to enable.
+          </p>
+        )
       ) : suggestion ? (
         <div className="space-y-4">
           <p className="text-sm text-ink-2">{suggestion.explanation}</p>
