@@ -1,14 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowLeft, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, ExternalLink } from 'lucide-react'
 import { Layout } from '@/components/common/Layout'
 import { Card, CardHeader, CardTitle, Badge, ConfidenceTierBadge, EmptyState } from '@/components/ui'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { formatConfidencePct } from '@/lib/utils'
-import { detectionTypeConfig, plainEnglishLabels } from '@/components/detection/DetectionTypeConfig'
+import { detectionTypeConfig, plainEnglishLabels, severityConfig } from '@/components/detection/DetectionTypeConfig'
 import { FixPanel } from '@/components/detection/FixPanel'
 import { useDetections } from '@/hooks/useDetections'
+import { N8N_BASE_URL } from '@/lib/flags'
 
 function confidenceTier(confidence: number): string {
   if (confidence >= 0.8) return 'HIGH'
@@ -17,9 +18,17 @@ function confidenceTier(confidence: number): string {
   return 'LOW'
 }
 
+// Plain-English gloss on what a tier means, so the number isn't naked.
+const tierMeaning: Record<string, string> = {
+  HIGH: 'Strong evidence this failure occurred.',
+  LIKELY: 'Good evidence this failure occurred.',
+  POSSIBLE: 'Some evidence — worth a look.',
+  LOW: 'Weak signal — may be a false positive.',
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 py-3 border-b border-rule last:border-0">
+    <div className="flex flex-col gap-1">
       <span className="text-xs uppercase tracking-wide text-ink-3">{label}</span>
       <span className="text-sm text-ink-2">{value}</span>
     </div>
@@ -66,43 +75,89 @@ export function DetectionDetailClient({ id }: { id: string }) {
               detectionTypeConfig[detection.detection_type] || detectionTypeConfig.infinite_loop
             const TypeIcon = typeConfig.icon
             const label = plainEnglishLabels[detection.detection_type] || typeConfig.label
+            const tier = confidenceTier(detection.confidence)
+            const severity =
+              severityConfig[detection.details?.severity || 'medium'] || severityConfig.medium
+            const execUrl = N8N_BASE_URL
+              ? `${N8N_BASE_URL.replace(/\/$/, '')}/executions`
+              : null
             return (
-              <Card padding="lg">
-                <CardHeader className="mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-paper-3/40">
-                      <TypeIcon size={20} className={typeConfig.color} />
+              <>
+                <Card padding="lg">
+                  <CardHeader className="mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-paper-3/40">
+                        <TypeIcon size={20} className={typeConfig.color} />
+                      </div>
+                      <div className="flex-1">
+                        <CardTitle>{label}</CardTitle>
+                        <span className="text-xs text-ink-3">{typeConfig.label}</span>
+                      </div>
+                      <ConfidenceTierBadge tier={tier} />
                     </div>
-                    <div className="flex-1">
-                      <CardTitle>{label}</CardTitle>
-                      <span className="text-xs text-ink-3">{typeConfig.label}</span>
-                    </div>
-                    <ConfidenceTierBadge tier={confidenceTier(detection.confidence)} />
-                  </div>
-                </CardHeader>
+                  </CardHeader>
 
-                <Field label="Detector" value={detection.detection_type} />
-                <Field
-                  label="Confidence"
-                  value={`${formatConfidencePct(detection.confidence)}`}
-                />
-                <Field
-                  label="Status"
-                  value={
-                    <Badge variant={detection.detected ? 'warning' : 'default'} size="sm">
-                      {detection.detected ? 'Fired' : 'Clear'}
-                    </Badge>
-                  }
-                />
-                <Field label="Failure mode" value={detection.failure_mode ?? '—'} />
-                <Field label="Explanation" value={detection.business_impact || '—'} />
-                <Field label="Execution" value={`#${detection.trace_id}`} />
-              </Card>
+                  {/* What happened — the narrative, up top and readable. */}
+                  <div className="mb-6">
+                    <div className="text-xs uppercase tracking-wide text-ink-3 mb-1.5">
+                      What happened
+                    </div>
+                    <p className="text-sm text-ink-2 leading-relaxed">
+                      {detection.business_impact || 'No description available for this detection.'}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-5 pt-5 border-t border-rule">
+                    <Field label="Detector" value={detection.detection_type} />
+                    <Field label="Failure mode" value={detection.failure_mode ?? '—'} />
+                    <Field
+                      label="Confidence"
+                      value={
+                        <span>
+                          {formatConfidencePct(detection.confidence)}{' '}
+                          <span className="text-ink-3">· {tierMeaning[tier]}</span>
+                        </span>
+                      }
+                    />
+                    <Field
+                      label="Severity"
+                      value={
+                        <span className={`px-2 py-0.5 rounded-full text-xs ${severity.bg} ${severity.color}`}>
+                          {severity.label}
+                        </span>
+                      }
+                    />
+                    <Field
+                      label="Status"
+                      value={
+                        <Badge variant={detection.detected ? 'warning' : 'default'} size="sm">
+                          {detection.detected ? 'Fired' : 'Clear'}
+                        </Badge>
+                      }
+                    />
+                    <Field label="Execution" value={`#${detection.trace_id}`} />
+                  </div>
+
+                  {execUrl && (
+                    <div className="mt-6 pt-5 border-t border-rule">
+                      <a
+                        href={execUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-sm text-evidence hover:underline"
+                      >
+                        Open executions in n8n
+                        <ExternalLink size={13} />
+                      </a>
+                    </div>
+                  )}
+                </Card>
+
+                {detection.detected && <FixPanel detectionId={id} />}
+              </>
             )
           })()
         )}
-
-        {detection?.detected && <FixPanel detectionId={id} />}
       </div>
     </Layout>
   )

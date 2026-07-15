@@ -10,17 +10,13 @@ interface LayoutProps {
 }
 
 export function Layout({ children, title }: LayoutProps) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   return (
     <div className="flex min-h-screen bg-paper">
       {/* Desktop Sidebar */}
       <div className="hidden lg:flex">
-        <Sidebar
-          isCollapsed={sidebarCollapsed}
-          onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
+        <Sidebar />
       </div>
 
       {/* Mobile Sidebar Overlay */}
