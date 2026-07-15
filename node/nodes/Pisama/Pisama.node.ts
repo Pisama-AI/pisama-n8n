@@ -238,18 +238,24 @@ export class Pisama implements INodeType {
 		}
 
 		try {
-			const response = await this.helpers.request({
+			const response = await this.helpers.httpRequest({
 				method: 'POST',
 				url,
 				headers,
 				body,
 				json: false,
-				resolveWithFullResponse: false,
 			});
 			const parsed = typeof response === 'string' ? JSON.parse(response) : response;
-			returnData.push({ json: parsed });
+			returnData.push({ json: parsed as IDataObject, pairedItem: { item: 0 } });
 		} catch (error) {
-			throw new NodeApiError(this.getNode(), error as JsonObject);
+			if (this.continueOnFail()) {
+				returnData.push({
+					json: { error: (error as Error).message },
+					pairedItem: { item: 0 },
+				});
+			} else {
+				throw new NodeApiError(this.getNode(), error as JsonObject);
+			}
 		}
 
 		return [returnData];
