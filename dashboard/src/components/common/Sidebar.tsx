@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, AlertTriangle } from 'lucide-react'
+import { LayoutDashboard, AlertTriangle, Settings } from 'lucide-react'
 import { PisamaMark } from '@/components/common/PisamaMark'
 
 interface NavItem {
@@ -12,10 +12,10 @@ interface NavItem {
   icon: React.ElementType
 }
 
-// Single-tenant self-host nav: just the two views this dashboard ships.
 const navItems: NavItem[] = [
   { label: 'Overview', href: '/overview', icon: LayoutDashboard },
   { label: 'Detections', href: '/detections', icon: AlertTriangle },
+  { label: 'Settings', href: '/settings', icon: Settings },
 ]
 
 function NavLink({ item, pathname }: { item: NavItem; pathname: string | null }) {

@@ -22,6 +22,20 @@ export function resolveKey(): string | undefined {
   return process.env.NEXT_PUBLIC_API_KEY || undefined
 }
 
+// OSS self-host: persist / clear the bearer key the dashboard sends on POSTs
+// (used when the server sets PISAMA_API_KEY). Set from the Settings page.
+export function setStoredKey(key: string): void {
+  if (typeof window !== 'undefined') window.localStorage.setItem(KEY_STORAGE, key)
+}
+
+export function clearStoredKey(): void {
+  if (typeof window !== 'undefined') window.localStorage.removeItem(KEY_STORAGE)
+}
+
+export function hasStoredKey(): boolean {
+  return typeof window !== 'undefined' && Boolean(window.localStorage.getItem(KEY_STORAGE))
+}
+
 export async function fetchApi<T>(path: string): Promise<T> {
   const key = resolveKey()
   const headers: Record<string, string> = { Accept: 'application/json' }
