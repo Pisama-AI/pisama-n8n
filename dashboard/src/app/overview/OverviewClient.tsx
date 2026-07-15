@@ -149,6 +149,43 @@ function RecentActivity({ fired }: { fired: Detection[] }) {
   )
 }
 
+// Fired detections grouped by the workflow they came from, noisiest first.
+function TopWorkflows({ fired }: { fired: Detection[] }) {
+  const counts = new Map<string, number>()
+  for (const d of fired) {
+    const key = d.workflow_name || d.workflow_id || 'Unknown workflow'
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+  const max = Math.max(1, ...rows.map(([, n]) => n))
+
+  return (
+    <Card padding="lg">
+      <CardHeader className="mb-4">
+        <CardTitle>Top workflows</CardTitle>
+        <p className="text-xs text-ink-3 mt-1">Where failures concentrate</p>
+      </CardHeader>
+      {rows.length === 0 ? (
+        <p className="text-sm text-ink-3">No failures detected yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {rows.map(([name, n]) => (
+            <div key={name}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-ink-2 truncate" title={name}>{name}</span>
+                <span className="text-xs text-ink-3 font-mono ml-2">{n}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-paper-3 overflow-hidden">
+                <div className="h-full rounded-full bg-evidence/70" style={{ width: `${(n / max) * 100}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 export function OverviewClient() {
   const { data, isLoading, isError, error } = useDetections()
 
@@ -224,7 +261,10 @@ export function OverviewClient() {
               <ByType fired={fired} />
             </div>
 
-            <RecentActivity fired={fired} />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <RecentActivity fired={fired} />
+              <TopWorkflows fired={fired} />
+            </div>
           </>
         )}
       </div>

@@ -12,6 +12,11 @@ export interface ServerDetection {
   // Added by the server (join on executions.received_at); may be absent on
   // older rows, so the adapter falls back.
   received_at?: string
+  // Workflow context (join on executions). workflow_name/n8n_execution_id are
+  // null on legacy rows ingested before those columns existed.
+  workflow_id?: string | null
+  workflow_name?: string | null
+  n8n_execution_id?: string | null
 }
 
 // Shape the copied DetectionListItem (and the detail view) expect. `detected`
@@ -29,6 +34,9 @@ export interface Detection {
   created_at: string
   detected: boolean
   failure_mode: string | null
+  workflow_id?: string | null
+  workflow_name?: string | null
+  n8n_execution_id?: string | null
   details?: {
     severity?: string
     affected_agents?: number
@@ -53,6 +61,9 @@ export function adaptDetection(row: ServerDetection): Detection {
     created_at: row.received_at ?? new Date().toISOString(),
     detected: row.detected,
     failure_mode: row.failure_mode,
+    workflow_id: row.workflow_id ?? null,
+    workflow_name: row.workflow_name ?? null,
+    n8n_execution_id: row.n8n_execution_id ?? null,
     details: {
       severity: severityFromConfidence(row.confidence),
     },
@@ -62,4 +73,11 @@ export function adaptDetection(row: ServerDetection): Detection {
 export async function getDetections(): Promise<Detection[]> {
   const rows = await fetchApi<ServerDetection[]>('/api/v1/detections')
   return rows.map(adaptDetection)
+}
+
+// Fetch a single detection by id (GET /api/v1/detections/{id}), so the detail
+// view works on a cold deep link without loading the whole list.
+export async function getDetection(id: string): Promise<Detection> {
+  const row = await fetchApi<ServerDetection>(`/api/v1/detections/${id}`)
+  return adaptDetection(row)
 }

@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getDetections } from '@/lib/api/detections'
+import { getDetections, getDetection } from '@/lib/api/detections'
 import { API_BASE, resolveKey } from '@/lib/api/client'
 
 export function useDetections() {
@@ -29,5 +29,15 @@ export function useDetections() {
   return useQuery({
     queryKey: ['detections'],
     queryFn: getDetections,
+  })
+}
+
+// Detail view: fetch one detection by id via GET /api/v1/detections/{id}, so a cold
+// deep link resolves without depending on the full list being loaded.
+export function useDetection(id: string) {
+  return useQuery({
+    queryKey: ['detection', id],
+    queryFn: () => getDetection(id),
+    enabled: Boolean(id),
   })
 }

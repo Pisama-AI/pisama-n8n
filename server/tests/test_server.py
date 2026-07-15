@@ -120,3 +120,39 @@ def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+# 6. Enriched detection rows: workflow name/id + n8n execution id are surfaced.
+
+def test_detections_carry_workflow_context(client):
+    payload = _load("executions/timeout/TIMEOUT-01.json")
+    assert client.post("/api/v1/n8n/webhook", json=payload).status_code == 200
+
+    rows = client.get("/api/v1/detections").json()
+    assert rows, "expected persisted detections"
+    row = rows[0]
+    # New context fields are present on every row...
+    assert {"workflow_id", "workflow_name", "n8n_execution_id"} <= row.keys(), row
+    # ...and populated from the payload's workflowData.
+    assert row["workflow_name"] == "TIMEOUT-01", row
+    assert row["workflow_id"] == "66C4S8I05eHPyJhR", row
+    # Webhook push has no upstream n8n execution id (poll-only).
+    assert row["n8n_execution_id"] is None, row
+
+
+# 7. Fetch a single detection by id; unknown id → 404.
+
+def test_get_detection_by_id(client):
+    payload = _load("executions/timeout/TIMEOUT-01.json")
+    assert client.post("/api/v1/n8n/webhook", json=payload).status_code == 200
+
+    listed = client.get("/api/v1/detections").json()
+    det_id = listed[0]["id"]
+
+    one = client.get(f"/api/v1/detections/{det_id}")
+    assert one.status_code == 200, one.text
+    assert one.json()["id"] == det_id
+    assert one.json()["workflow_name"] == "TIMEOUT-01"
+
+    missing = client.get("/api/v1/detections/999999")
+    assert missing.status_code == 404, missing.text

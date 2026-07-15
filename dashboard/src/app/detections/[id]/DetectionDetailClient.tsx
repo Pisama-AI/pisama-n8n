@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { formatConfidencePct } from '@/lib/utils'
 import { detectionTypeConfig, plainEnglishLabels, severityConfig } from '@/components/detection/DetectionTypeConfig'
 import { FixPanel } from '@/components/detection/FixPanel'
-import { useDetections } from '@/hooks/useDetections'
+import { useDetection } from '@/hooks/useDetections'
 import { N8N_BASE_URL } from '@/lib/flags'
 
 function confidenceTier(confidence: number): string {
@@ -36,9 +36,8 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 export function DetectionDetailClient({ id }: { id: string }) {
-  const { data, isLoading, isError, error } = useDetections()
-
-  const detection = data?.find((d) => d.id === id)
+  const { data: detection, isLoading, isError, error } = useDetection(id)
+  const notFound = isError && /404/.test((error as Error)?.message ?? '')
 
   return (
     <Layout title="Detection">
@@ -53,20 +52,20 @@ export function DetectionDetailClient({ id }: { id: string }) {
 
         {isLoading ? (
           <Skeleton className="h-64" />
-        ) : isError ? (
-          <Card>
-            <EmptyState
-              icon={AlertTriangle}
-              title="Couldn't reach the server"
-              description={(error as Error)?.message}
-            />
-          </Card>
-        ) : !detection ? (
+        ) : notFound ? (
           <Card>
             <EmptyState
               icon={AlertTriangle}
               title="Detection not found"
               description={`No detection with id ${id}.`}
+            />
+          </Card>
+        ) : isError || !detection ? (
+          <Card>
+            <EmptyState
+              icon={AlertTriangle}
+              title="Couldn't reach the server"
+              description={(error as Error)?.message}
             />
           </Card>
         ) : (
@@ -78,9 +77,19 @@ export function DetectionDetailClient({ id }: { id: string }) {
             const tier = confidenceTier(detection.confidence)
             const severity =
               severityConfig[detection.details?.severity || 'medium'] || severityConfig.medium
-            const execUrl = N8N_BASE_URL
-              ? `${N8N_BASE_URL.replace(/\/$/, '')}/executions`
-              : null
+            const workflowLabel = detection.workflow_name || detection.workflow_id || '—'
+
+            // Precise per-execution deep link when we have the workflow + upstream
+            // execution id; otherwise fall back to the instance's executions view.
+            const base = N8N_BASE_URL.replace(/\/$/, '')
+            const precise = detection.workflow_id && detection.n8n_execution_id
+            const execUrl = !N8N_BASE_URL
+              ? null
+              : precise
+              ? `${base}/workflow/${detection.workflow_id}/executions/${detection.n8n_execution_id}`
+              : `${base}/executions`
+            const execLabel = precise ? 'Open this execution in n8n' : 'Open executions in n8n'
+
             return (
               <>
                 <Card padding="lg">
@@ -108,8 +117,8 @@ export function DetectionDetailClient({ id }: { id: string }) {
                   </div>
 
                   <div className="grid grid-cols-2 gap-x-6 gap-y-5 pt-5 border-t border-rule">
+                    <Field label="Workflow" value={workflowLabel} />
                     <Field label="Detector" value={detection.detection_type} />
-                    <Field label="Failure mode" value={detection.failure_mode ?? '—'} />
                     <Field
                       label="Confidence"
                       value={
@@ -127,6 +136,7 @@ export function DetectionDetailClient({ id }: { id: string }) {
                         </span>
                       }
                     />
+                    <Field label="Failure mode" value={detection.failure_mode ?? '—'} />
                     <Field
                       label="Status"
                       value={
@@ -135,7 +145,6 @@ export function DetectionDetailClient({ id }: { id: string }) {
                         </Badge>
                       }
                     />
-                    <Field label="Execution" value={`#${detection.trace_id}`} />
                   </div>
 
                   {execUrl && (
@@ -146,7 +155,7 @@ export function DetectionDetailClient({ id }: { id: string }) {
                         rel="noreferrer"
                         className="inline-flex items-center gap-1.5 text-sm text-evidence hover:underline"
                       >
-                        Open executions in n8n
+                        {execLabel}
                         <ExternalLink size={13} />
                       </a>
                     </div>

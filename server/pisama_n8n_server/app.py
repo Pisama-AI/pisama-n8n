@@ -165,6 +165,19 @@ async def list_detections(
     return storage.list_detections()
 
 
+@app.get("/api/v1/detections/{detection_id}", dependencies=[Depends(require_read_auth)])
+async def get_detection(
+    detection_id: int,
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """One enriched detection by id, so the detail view can deep-link without loading
+    the whole list. 404 when the id is unknown."""
+    row = storage.get_detection(detection_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Unknown detection id.")
+    return row
+
+
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
 
 @app.get("/api/v1/paid/status", dependencies=[Depends(require_read_auth)])

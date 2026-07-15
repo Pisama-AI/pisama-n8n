@@ -23,7 +23,9 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -45,6 +47,9 @@ class Execution(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workflow_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Human-readable workflow name (from the execution payload), so the dashboard can
+    # group detections by workflow and label them without the opaque n8n id.
+    workflow_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     received_at: Mapped[str] = mapped_column(String, nullable=False)
     raw: Mapped[str] = mapped_column(Text, nullable=False)
     # The upstream n8n execution id, when this row came from API polling — used to
@@ -81,8 +86,50 @@ class DetectionRow(Base):
         }
 
 
+def _extract_workflow_name(payload: Dict[str, Any]) -> Optional[str]:
+    """Pull the workflow name out of an execution payload. Full executions carry it
+    under ``workflowData``/``workflow``; a bare workflow POST has it at the top level."""
+    for key in ("workflowData", "workflow"):
+        block = payload.get(key)
+        if isinstance(block, dict) and block.get("name"):
+            return str(block["name"])
+    if payload.get("workflowName"):
+        return str(payload["workflowName"])
+    if payload.get("name") and ("nodes" in payload or "connections" in payload):
+        return str(payload["name"])
+    return None
+
+
 def database_url() -> str:
     return os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL
+
+
+# Columns added after the first (id, workflow_id, received_at, raw) release, keyed by
+# table. create_all() only creates missing TABLES, not missing columns, so an existing
+# self-host DB needs these added in place. ALTER TABLE ADD COLUMN is supported by both
+# SQLite and Postgres. Keep every post-initial column here so an upgraded instance's
+# DB catches up (source_execution_id shipped without a migration and would otherwise
+# break reads on a pre-polling DB).
+_ADDED_COLUMNS = {
+    "executions": {
+        "source_execution_id": "VARCHAR",
+        "workflow_name": "VARCHAR",
+    },
+}
+
+
+def _ensure_columns(engine) -> None:
+    """Additive, idempotent schema catch-up for a no-migration-framework server."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            if table not in existing_tables:
+                continue  # create_all already made it with every column
+            present = {c["name"] for c in inspector.get_columns(table)}
+            for name, ddl_type in columns.items():
+                if name not in present:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
 
 
 def make_engine(url: Optional[str] = None):
@@ -92,6 +139,7 @@ def make_engine(url: Optional[str] = None):
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args, future=True)
     Base.metadata.create_all(engine)
+    _ensure_columns(engine)
     return engine
 
 
@@ -115,11 +163,13 @@ class Storage:
             raw = str(execution_data)
 
         workflow_id = report.workflow_id or execution_data.get("workflowId")
+        workflow_name = _extract_workflow_name(execution_data)
         received_at = datetime.now(timezone.utc).isoformat()
 
         with self._Session() as session:
             execution = Execution(
                 workflow_id=workflow_id,
+                workflow_name=workflow_name,
                 received_at=received_at,
                 raw=raw,
                 source_execution_id=source_execution_id,
@@ -171,16 +221,44 @@ class Storage:
                 "workflow_id": execution.workflow_id if execution else None,
             }
 
+    # The execution columns joined onto every detection row the API returns.
+    _EXEC_COLS = (
+        Execution.received_at,
+        Execution.workflow_id,
+        Execution.workflow_name,
+        Execution.source_execution_id,
+    )
+
+    @staticmethod
+    def _enrich(det: DetectionRow, received_at, workflow_id, workflow_name, source_id) -> Dict[str, Any]:
+        return {
+            **det.to_dict(),
+            "received_at": received_at,
+            "workflow_id": workflow_id,
+            "workflow_name": workflow_name,
+            # The upstream n8n execution id (poll-ingested rows only); lets the
+            # dashboard deep-link to the exact execution in the user's n8n.
+            "n8n_execution_id": source_id,
+        }
+
     def list_detections(self) -> List[Dict[str, Any]]:
         with self._Session() as session:
-            # Join executions so each detection carries the real ingest time,
-            # giving the dashboard a genuine timestamp instead of a fabricated one.
+            # Join executions so each detection carries the real ingest time plus the
+            # workflow it came from, instead of a fabricated timestamp and no context.
             rows = session.execute(
-                select(DetectionRow, Execution.received_at)
+                select(DetectionRow, *self._EXEC_COLS)
                 .join(Execution, DetectionRow.execution_id == Execution.id)
                 .order_by(DetectionRow.id)
             ).all()
-            return [
-                {**row.to_dict(), "received_at": received_at}
-                for row, received_at in rows
-            ]
+            return [self._enrich(*row) for row in rows]
+
+    def get_detection(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        """A single enriched detection row, or None if the id is unknown. Backs the
+        detail view's fetch-by-id so a deep link doesn't depend on the full list."""
+        with self._Session() as session:
+            row = session.execute(
+                select(DetectionRow, *self._EXEC_COLS)
+                .join(Execution, DetectionRow.execution_id == Execution.id)
+                .where(DetectionRow.id == detection_id)
+            ).first()
+            return self._enrich(*row) if row else None
