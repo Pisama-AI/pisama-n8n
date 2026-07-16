@@ -230,6 +230,14 @@ current release decision.
   Pisama therefore reports `n8n_retry_not_observed` and deliberately withholds both
   `n8n_retry_exhausted` and duplicate-side-effect claims. This behavior is protected by
   a live n8n regression test.
+- Current source revision `5ba622e` captured two controlled error-route failures in the
+  isolated SQLite lane. n8n accepted a source configured to a missing target ID, and
+  Pisama retained `n8n_error_workflow_target_missing` after its API returned `404`.
+  A separate source targeted an existing ordinary workflow without an Error Trigger;
+  n8n returned the source `500`, created no target execution, and Pisama retained
+  `n8n_error_workflow_missing_trigger`. The first poll ingested both real executions;
+  the second added zero. Both detections retain their resolver facts and are visible in
+  the authenticated detection detail without exposing raw execution payloads.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API

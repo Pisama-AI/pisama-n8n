@@ -38,6 +38,40 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+function evidenceLabel(key: string): string {
+  return key.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function evidenceValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(evidenceValue).join(', ')
+  if (value && typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function EvidenceRecord({ evidence }: { evidence?: Record<string, unknown> }) {
+  const entries = Object.entries(evidence ?? {})
+  if (!entries.length) return null
+
+  return (
+    <Card padding="lg" className="border-rule bg-paper-2">
+      <CardHeader className="mb-5">
+        <CardTitle>Evidence used</CardTitle>
+        <p className="mt-1 text-sm text-ink-3">
+          The detector facts retained for this finding. Raw workflow payloads stay local.
+        </p>
+      </CardHeader>
+      <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+        {entries.map(([key, value]) => (
+          <div key={key} className="min-w-0 border-l border-rule pl-3">
+            <dt className="text-xs uppercase tracking-wide text-ink-3">{evidenceLabel(key)}</dt>
+            <dd className="mt-1 break-words font-mono text-sm text-ink-2">{evidenceValue(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
+  )
+}
+
 export function DetectionDetailClient({ id }: { id: string }) {
   const { data: detection, isLoading, isError, error, refetch } = useDetection(id)
   const notFound = isError && /404/.test((error as Error)?.message ?? '')
@@ -164,6 +198,8 @@ export function DetectionDetailClient({ id }: { id: string }) {
                     </div>
                   )}
                 </Card>
+
+                {detection.detected && <EvidenceRecord evidence={detection.evidence} />}
 
                 <TraceView detectionId={id} />
 
