@@ -22,6 +22,9 @@ OWNER = ("harness@pisama.test", "PisamaHarness123!")
 
 
 def _provision_key() -> str:
+    configured_key = os.environ.get("PISAMA_TEST_N8N_API_KEY")
+    if configured_key:
+        return configured_key
     with httpx.Client(base_url=N8N_URL, timeout=30) as c:
         c.post("/rest/owner/setup", json={
             "email": OWNER[0], "firstName": "P", "lastName": "H", "password": OWNER[1]})

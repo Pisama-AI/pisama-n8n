@@ -69,8 +69,12 @@ incidents and repeated observed repair outcomes.
 - Docker n8n `1.91.3` is healthy in both the SQLite lane (`5681`) and the Postgres 16
   lane (`5682`), with separate projects and volumes.
 - The SQLite companion Pisama server is running with a 60-second polling interval.
-- **Open compatibility finding:** on this n8n version, `POST /api/v1/workflows/{id}/activate`
-  returns `200` and the workflow reads back as `active: true`, yet a production webhook
-  immediately returns `404` as unregistered. No execution evidence has been promoted from
-  that workflow path. Resolve this with a real n8n execution mechanism before claiming the
-  webhook-trigger dogfood lane passes.
+- A real n8n `1.91.3` webhook execution that deliberately raises an error has been created
+  and polled through Pisama. The live polling E2E passed, including real n8n deduplication
+  on the second poll and an `error` detection.
+- Compatibility detail: create Webhook-node test workflows with a `webhookId` matching the
+  configured path. Without it, n8n registers a workflow-scoped URL instead of the expected
+  short production URL. This is covered by the live polling test.
+- The poller now fetches the associated workflow for an execution before analysis because
+  the n8n executions API omits that node context. The persistent Pisama dogfood database is
+  the internal regression corpus; it contains only disposable internal executions.
