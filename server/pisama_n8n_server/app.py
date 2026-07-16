@@ -18,12 +18,15 @@ override for Postgres later). No mocks anywhere.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -96,24 +99,67 @@ def public_read_enabled() -> bool:
     return os.environ.get("PISAMA_PUBLIC_READ", "").lower() in ("1", "true", "yes")
 
 
-def require_read_auth(authorization: Optional[str] = Header(default=None)) -> None:
+# The community node (n8n-nodes-pisama, published v0.3.0 — contract verified
+# against the actual npm tarball, NOT a local checkout, which diverged) signs
+# each POST body as "sha256=" + hex(HMAC-SHA256(secret, "{timestamp}.{body}"))
+# sent in X-Pisama-Signature, alongside X-Pisama-Timestamp (unix seconds) and
+# X-Pisama-Nonce (sent, but NOT part of the signature base). Its secret is the
+# credential's separate "Webhook Secret" field, so verify against
+# PISAMA_WEBHOOK_SECRET when set, falling back to PISAMA_API_KEY. The node
+# also always sends its apiKey credential as X-Pisama-API-Key; accept that as
+# equivalent to Bearer so a node with no Webhook Secret can still authenticate.
+_HMAC_FRESHNESS_SECONDS = 300  # reject signatures older/newer than 5 minutes
+
+
+async def require_read_auth(request: Request) -> None:
     """Auth for read-only endpoints: open when PISAMA_PUBLIC_READ=1, else same as write."""
     if public_read_enabled():
         return
-    require_auth(authorization)
+    await require_auth(request)
 
 
-def require_auth(authorization: Optional[str] = Header(default=None)) -> None:
-    """Static bearer-token auth. If ``PISAMA_API_KEY`` is unset, dev mode: allow.
+async def require_auth(request: Request) -> None:
+    """Bearer/X-Pisama-API-Key auth (PISAMA_API_KEY) OR the node's HMAC signature.
 
-    TODO: additionally accept the community node's HMAC signature header.
+    If ``PISAMA_API_KEY`` is unset, dev mode: allow.
     """
     expected = os.environ.get("PISAMA_API_KEY")
     if not expected:
         logger.warning("PISAMA_API_KEY unset — running open (dev mode).")
         return
-    if authorization != f"Bearer {expected}":
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+    authorization = request.headers.get("authorization")
+    if authorization is not None and hmac.compare_digest(
+        authorization.encode(), f"Bearer {expected}".encode()
+    ):
+        return
+    api_key_header = request.headers.get("x-pisama-api-key")
+    if api_key_header is not None and hmac.compare_digest(
+        api_key_header.encode(), expected.encode()
+    ):
+        return
+    signature = request.headers.get("x-pisama-signature")
+    timestamp = request.headers.get("x-pisama-timestamp")
+    if signature and timestamp:
+        if _valid_hmac_signature(await request.body(), signature, timestamp):
+            return
+        raise HTTPException(status_code=401, detail="Invalid or stale webhook signature.")
+    raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+
+
+def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
+    """Verify "sha256=" + hex(HMAC-SHA256(secret, "{timestamp}.{body}")) within freshness."""
+    secret = os.environ.get("PISAMA_WEBHOOK_SECRET") or os.environ.get("PISAMA_API_KEY")
+    if not secret:
+        return False
+    try:
+        signed_at = int(timestamp)
+    except ValueError:
+        return False
+    if abs(time.time() - signed_at) > _HMAC_FRESHNESS_SECONDS:
+        return False
+    payload = f"{timestamp}.".encode() + body
+    computed = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed.encode(), signature.encode())
 
 
 # --- routes ---------------------------------------------------------------
