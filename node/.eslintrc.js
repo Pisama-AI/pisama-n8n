@@ -34,6 +34,13 @@ module.exports = {
 				// "Pisama" is a brand name (title case per our house style); the
 				// action-casing rule would lowercase it.
 				'n8n-nodes-base/node-param-operation-option-action-miscased': 'off',
+				// The node uses the modern `NodeConnectionTypes.Main` enum for
+				// inputs/outputs (as the npm-published, n8n-scanner-verified 0.3.0
+				// does). eslint-plugin-n8n-nodes-base@1.16 predates that enum and
+				// would autofix it back to the legacy `['main']` string literal,
+				// diverging this copy from the published package. Keep the enum.
+				'n8n-nodes-base/node-class-description-inputs-wrong-regular-node': 'off',
+				'n8n-nodes-base/node-class-description-outputs-wrong': 'off',
 			},
 		},
 	],

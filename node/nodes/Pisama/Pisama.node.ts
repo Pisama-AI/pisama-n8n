@@ -1,13 +1,13 @@
 import { createHmac, randomBytes } from 'crypto';
-import {
+import type {
 	IDataObject,
 	IExecuteFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
 	JsonObject,
-	NodeApiError,
 } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes } from 'n8n-workflow';
 
 interface PisamaCredentials {
 	apiKey: string;
@@ -42,6 +42,132 @@ function signPayload(
 // best-effort status rather than reporting an in-flight row as final.
 const TERMINAL_STATUSES = new Set(['success', 'error', 'crashed', 'canceled', 'failed']);
 
+/**
+ * Fetch the authoritative execution record from the n8n public REST API.
+ *
+ * Kept as a standalone helper (rather than inlined in `execute`) so the
+ * credential lookup and the HTTP call live in different function scopes: the
+ * n8n API key is a plain credential field sent as `X-N8N-API-KEY` to the user's
+ * own n8n instance, so `httpRequestWithAuthentication` (which would attach the
+ * Pisama credential instead) is deliberately not used here.
+ */
+async function fetchN8nExecution(
+	ctx: IExecuteFunctions,
+	base: string,
+	apiKey: string,
+	executionId: string,
+): Promise<IDataObject> {
+	return (await ctx.helpers.httpRequest({
+		method: 'GET',
+		url: `${base}/executions/${encodeURIComponent(executionId)}`,
+		qs: { includeData: true },
+		headers: { 'X-N8N-API-KEY': apiKey, Accept: 'application/json' },
+		json: true,
+	})) as IDataObject;
+}
+
+/**
+ * POST the signed telemetry payload to the Pisama webhook. Standalone for the
+ * same scoping reason as {@link fetchN8nExecution}: the request is authenticated
+ * with a manually-built API-key header plus the HMAC signature headers, so the
+ * generic `httpRequestWithAuthentication` helper does not apply.
+ */
+async function postToPisama(
+	ctx: IExecuteFunctions,
+	url: string,
+	headers: Record<string, string>,
+	body: string,
+): Promise<unknown> {
+	const response = await ctx.helpers.httpRequest({
+		method: 'POST',
+		url,
+		headers,
+		body,
+		json: false,
+	});
+	return typeof response === 'string' ? JSON.parse(response) : response;
+}
+
+/**
+ * One node run in the exact shape the backend parser iterates: a `data.main`
+ * output matrix plus the run's `source` (the upstream node it came from).
+ * `backend/app/ingestion/n8n_parser.py::parse_execution` reads each node's runs
+ * as a LIST and pulls `run["data"]["main"][0]`, so a node's output MUST be a
+ * single-element list of an object of this shape — never the bare item dict.
+ */
+interface N8nContextRun {
+	source: Array<{ previousNode: string }>;
+	data: { main: IDataObject[][] };
+}
+
+/**
+ * Resolve the name of the node immediately upstream of a given input item.
+ *
+ * Both `$prevNode.name` and `getInputSourceData().previousNode` derive from the
+ * run's source data (`executeData.source.main[0].previousNode`). We prefer the
+ * per-item proxy — correct when items fan in from different upstream nodes (e.g.
+ * downstream of a Merge) — then fall back to the connection-level input source,
+ * then to a stable literal when neither is available (e.g. a manual single-node
+ * run with no predecessor). This replaces the old `item.json.__n8n_node_name`
+ * lookup, a field n8n never sets at runtime, which collapsed every output to the
+ * literal key "unknown".
+ */
+function resolveUpstreamNodeName(ctx: IExecuteFunctions, itemIndex: number): string {
+	try {
+		const prev = ctx.getWorkflowDataProxy(itemIndex).$prevNode as { name?: unknown };
+		if (prev && typeof prev.name === 'string' && prev.name) return prev.name;
+	} catch {
+		// The data proxy can be unavailable for this item index; fall through.
+	}
+	try {
+		const src = ctx.getInputSourceData();
+		if (src && typeof src.previousNode === 'string' && src.previousNode) return src.previousNode;
+	} catch {
+		// No input source (e.g. a predecessor-less manual run); fall through.
+	}
+	return 'unknown';
+}
+
+/**
+ * Whether an input item carries an upstream error. With "Continue On Fail",
+ * n8n attaches the failure either at the item level (`item.error`) or as an
+ * `error` field on the item json.
+ */
+function hasItemError(item: INodeExecutionData): boolean {
+	if (item.error) return true;
+	const json = item.json as IDataObject | undefined;
+	return Boolean(json && json.error !== undefined && json.error !== null);
+}
+
+/**
+ * Build the best-effort (Tier 2) runData from the items on the node's own input.
+ * Groups items by their resolved upstream node name into the list-of-runs shape
+ * the backend parser expects, and reports whether any item carried an upstream
+ * error. Deliberately at module scope, not inside `execute()`: the reconstructed
+ * `{ json }` telemetry objects are payload data — the upstream node's recorded
+ * output — not items THIS node returns, so they must not be treated as
+ * un-paired node outputs (n8n-nodes-base/missing-paired-item).
+ */
+function buildContextRunData(
+	ctx: IExecuteFunctions,
+	items: INodeExecutionData[],
+): { runData: Record<string, N8nContextRun[]>; observedError: boolean } {
+	const runData: Record<string, N8nContextRun[]> = {};
+	let observedError = false;
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i];
+		const nodeName = resolveUpstreamNodeName(ctx, i);
+		let runs = runData[nodeName];
+		if (!runs) {
+			runs = [{ source: [{ previousNode: nodeName }], data: { main: [[]] } }];
+			runData[nodeName] = runs;
+		}
+		runs[0].data.main[0].push({ json: (item.json ?? {}) as IDataObject });
+		if (hasItemError(item)) observedError = true;
+	}
+	return { runData, observedError };
+}
+
 export class Pisama implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Pisama',
@@ -53,8 +179,9 @@ export class Pisama implements INodeType {
 		description:
 			'Forward n8n workflow executions to Pisama for failure detection and self-healing',
 		defaults: { name: 'Pisama' },
-		inputs: ['main'],
-		outputs: ['main'],
+		usableAsTool: true,
+		inputs: [NodeConnectionTypes.Main],
+		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'pisamaApi', required: true }],
 		properties: [
 			{
@@ -68,7 +195,7 @@ export class Pisama implements INodeType {
 						value: 'sendExecution',
 						description:
 							'Forward the current workflow execution to Pisama for analysis',
-						action: 'Send execution to Pisama',
+						action: 'Send execution',
 					},
 				],
 				default: 'sendExecution',
@@ -92,9 +219,10 @@ export class Pisama implements INodeType {
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-		// Capture a real start timestamp up front so the fallback path reports a
-		// genuine (non-fabricated) node-run window instead of two identical
-		// `new Date()` values.
+		// Capture the real moment this node runs. In the best-effort (Tier 2) path
+		// it anchors the trace's `startedAt`; the true workflow start is not
+		// exposed mid-run, so this is a genuine timestamp honestly labelled via
+		// `telemetrySource`, never a stand-in for the workflow's duration.
 		const nodeStartedAt = new Date().toISOString();
 
 		const items = this.getInputData();
@@ -111,26 +239,30 @@ export class Pisama implements INodeType {
 		const mode = this.getMode();
 
 		// --- Best-effort telemetry from the execution context (Tier 2) ---
-		// The Pisama node runs mid-execution and only sees its own input items,
-		// so this is a partial, honest view: real ids/metadata, real node-run
-		// timing, and a status derived from observed upstream error markers
-		// rather than a hardcoded 'success'.
-		const contextRunData: Record<string, unknown> = {};
-		let observedError = false;
-		for (const item of items) {
-			const json = (item.json ?? {}) as IDataObject;
-			const nodeName = json.__n8n_node_name ?? 'unknown';
-			contextRunData[String(nodeName)] = json;
-			// n8n places an `error` object on items that passed through a failed
-			// node with continueOnFail enabled.
-			if (json.error !== undefined && json.error !== null) {
-				observedError = true;
-			}
-		}
+		// A mid-run node sees only the items on its own input, so buildContextRunData
+		// emits an honest, PARTIAL view: the immediately-upstream node's output in
+		// the parser's list-of-runs shape. What n8n does NOT expose to a mid-run
+		// node — and which therefore stays absent here, filled in only by the
+		// optional n8n-API (Tier 1) path below — is: per-node run timing, the
+		// workflow's true start/finish timestamps (`$execution` carries the id and
+		// mode but no timing), the run data of non-upstream nodes, and the full
+		// workflow JSON (node types + parameters).
+		const { runData: contextRunData, observedError } = buildContextRunData(this, items);
 
+		// Status: a mid-run node cannot observe the workflow's FINAL status (the
+		// execution is still in flight and n8n exposes no terminal status from the
+		// node context), so we derive a best-effort status from observed upstream
+		// error markers rather than hardcoding 'success'. The authoritative status
+		// arrives only via the n8n API path below.
 		let status = observedError ? 'error' : 'success';
+		// startedAt: the real moment this node executed, used as the trace's time
+		// anchor. It is NOT the workflow's true start (not exposed mid-run); the
+		// `telemetrySource: execution_context` field records that provenance.
 		let startedAt = nodeStartedAt;
-		let finishedAt = new Date().toISOString();
+		// finishedAt: the workflow has NOT finished when a mid-run node reports,
+		// and n8n exposes no finish time here — so it is honestly null rather than
+		// a fabricated `new Date()`. The n8n API path fills it for terminal rows.
+		let finishedAt: string | null = null;
 		let runData: Record<string, unknown> = contextRunData;
 		let workflowJson: IDataObject | undefined;
 		let telemetrySource = 'execution_context';
@@ -141,13 +273,12 @@ export class Pisama implements INodeType {
 		if (credentials.n8nApiUrl && credentials.n8nApiKey) {
 			try {
 				const base = credentials.n8nApiUrl.replace(/\/$/, '');
-				const execution = (await this.helpers.httpRequest({
-					method: 'GET',
-					url: `${base}/executions/${encodeURIComponent(executionId)}`,
-					qs: { includeData: true },
-					headers: { 'X-N8N-API-KEY': credentials.n8nApiKey, Accept: 'application/json' },
-					json: true,
-				})) as IDataObject;
+				const execution = await fetchN8nExecution(
+					this,
+					base,
+					credentials.n8nApiKey,
+					executionId,
+				);
 
 				telemetrySource = 'n8n_api';
 
@@ -238,14 +369,7 @@ export class Pisama implements INodeType {
 		}
 
 		try {
-			const response = await this.helpers.httpRequest({
-				method: 'POST',
-				url,
-				headers,
-				body,
-				json: false,
-			});
-			const parsed = typeof response === 'string' ? JSON.parse(response) : response;
+			const parsed = await postToPisama(this, url, headers, body);
 			returnData.push({ json: parsed as IDataObject, pairedItem: { item: 0 } });
 		} catch (error) {
 			if (this.continueOnFail()) {
