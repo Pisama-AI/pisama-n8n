@@ -13,16 +13,19 @@ suggestions and auto-fixing) runs in the Pisama cloud.
 >
 > **Honest about quality:** detector *precision* is measured on real n8n templates and is
 > solid; *recall* is not yet validated against real-world failures (current positive
-> fixtures are synthetic) and the cycle detector is unsolved. We do not publish recall/F1
+> fixtures are synthetic). The cycle detector works but fires only on genuinely unbounded
+> cycles, and true infinite loops are rare in real workflows. We do not publish recall/F1
 > claims yet. See the engine README.
 
 ## What's here
 
 ```
-engine/     pisama-n8n-engine: the detection engine (PyPI target). Pure Python, the 6
+engine/     pisama-n8n-engine: the detection engine (PyPI target). Pure Python, the
             structural detectors import with ZERO config (no DB, no settings). Fair-code.
-server/     FastAPI self-host server: single-tenant, SQLite default, HMAC webhook,
-            API-polling ingestion, live SSE, bearer auth. Working; e2e-tested.
+server/     FastAPI self-host server: single-tenant, SQLite default, webhook ingest
+            (bearer-token auth, plus the community node's HMAC signatures via
+            PISAMA_WEBHOOK_SECRET, falling back to PISAMA_API_KEY), API-polling
+            ingestion, live SSE. Working; e2e-tested.
 dashboard/  Next.js dashboard (overview, detections list + detail, settings). Working;
             typechecks, builds, Playwright-smoked.
 deploy/     docker-compose + Dockerfile for `docker compose up` self-host.
@@ -45,11 +48,13 @@ for d in report.fired:
     print(d.detector, d.confidence, d.explanation)
 ```
 
-Six structural detectors: cycle, schema, resource, timeout, error, complexity. The
+Five active detectors: cycle, resource, timeout, error, complexity. (A schema detector
+ships in the package, but its static path is deliberately disabled because it cannot be
+made precise against n8n's dynamic JSON data model; it never fires.) The
 execution-lane detectors (timeout/error/resource) also run on parsed runtime data via
 `analyze(turns=...)`, the runtime-observed product.
 
-## Licensing (the OSS/paid boundary)
+## Licensing (the fair-code/paid boundary)
 
 - `engine/`, `server/`, `dashboard/`, `deploy/` are **fair-code** (Sustainable Use License,
   like n8n itself). Source-available, free for internal use, no competing commercial
@@ -83,8 +88,12 @@ truth. Detector fixes land in the monorepo and are re-extracted here, not edited
 
 ## Honest state of detection quality
 
-Structural precision is real and verified (Schema/Complexity/Resource: 0 false positives
-on real n8n templates after tuning). Recall is not yet validated against real-world n8n
-failures: current positive fixtures are synthetic, and the Cycle detector is unsolved
-(n8n workflows are DAGs; their "loops" are behavioral, not graph cycles). Validating
-recall needs mined real-world failure data. Do not publish recall/F1 claims until then.
+Structural precision is real and verified (Complexity/Resource: 0 false positives on
+real n8n templates after tuning; the static schema path fired at near-zero precision on
+real community workflows and is permanently disabled). Recall is not yet validated against
+real-world n8n failures: current positive fixtures are synthetic. The Cycle detector
+works: it recognizes n8n's intentional bounded loops (Loop Over Items, iteration caps,
+explicit break conditions) and fires only on genuinely unbounded cycles. True infinite
+loops are rare in real workflows, which is exactly why recall there is hard to measure.
+Validating recall needs mined real-world failure data. Do not publish recall/F1 claims
+until then.

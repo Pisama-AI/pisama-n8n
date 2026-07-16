@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   Zap,
   GitBranch,
-  FileWarning,
   Webhook,
   RadioTower,
   TerminalSquare,
@@ -18,7 +17,7 @@ import { PisamaMark } from '@/components/common/PisamaMark'
 export const metadata: Metadata = {
   title: 'Pisama for n8n: failure detection for your workflows',
   description:
-    'Detect failures in n8n workflow executions with self-hosted OSS, free cloud, or Pro cloud plans for AI fixes and approvals.',
+    'Detect failures in n8n workflow executions. Self-host the fair-code version, or use the free and Pro cloud plans for AI fixes and approvals.',
 }
 
 const DETECTORS = [
@@ -47,11 +46,6 @@ const DETECTORS = [
     name: 'Excess complexity',
     desc: 'Control flow tangled enough to be a reliability risk, calibrated on thousands of real community workflows.',
   },
-  {
-    icon: FileWarning,
-    name: 'Schema drift',
-    desc: 'Runtime output shape changes between executions. Static guessing is deliberately disabled; only real signal fires.',
-  },
 ]
 
 const CHANNELS = [
@@ -75,7 +69,7 @@ const CHANNELS = [
 const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
   ['n8n connections', 'You manage them', '1', '5'],
-  ['Failure detection', 'All six detectors', 'All six detectors', 'All six detectors'],
+  ['Failure detection', 'All five detectors', 'All five detectors', 'All five detectors'],
   ['AI fix suggestions', 'With a cloud key', 'Not included', 'Monthly allocation'],
   ['Apply approved fixes', 'With a cloud key', 'Not included', 'Snapshots and rollback'],
 ]
@@ -124,7 +118,7 @@ function PlanComparison() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <article className="rounded-lg border border-rule bg-paper-2 p-6 flex flex-col">
             <div className="font-mono text-xs uppercase tracking-[0.18em] text-ink-3 mb-5">
-              OSS
+              Fair-code
             </div>
             <h3 className="font-serif text-2xl mb-3">Self-hosted</h3>
             <p className="text-sm text-ink-3 leading-relaxed mb-6">
@@ -133,7 +127,7 @@ function PlanComparison() {
             <ul className="space-y-3 text-sm text-ink-2 mb-8">
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                All six detectors
+                All five detectors
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -148,7 +142,7 @@ function PlanComparison() {
               href="https://github.com/Pisama-AI/pisama-n8n"
               className="mt-auto inline-block w-fit px-4 py-2 rounded-lg border border-rule text-sm font-medium text-ink-2 hover:text-ink hover:border-ink-4 transition-colors"
             >
-              Self-host OSS
+              Self-host (fair-code)
             </a>
           </article>
 
@@ -167,7 +161,7 @@ function PlanComparison() {
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                All six detectors
+                All five detectors
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -216,11 +210,11 @@ function PlanComparison() {
 
         <div className="mt-8 overflow-x-auto rounded-lg border border-rule bg-paper">
           <table className="w-full min-w-[660px] text-left text-sm">
-            <caption className="sr-only">Comparison of OSS, free cloud, and Pro cloud options</caption>
+            <caption className="sr-only">Comparison of self-host, free cloud, and Pro cloud options</caption>
             <thead className="border-b border-rule text-xs uppercase tracking-[0.14em] text-ink-4">
               <tr>
                 <th scope="col" className="px-5 py-4 font-medium">Includes</th>
-                <th scope="col" className="px-5 py-4 font-medium">OSS</th>
+                <th scope="col" className="px-5 py-4 font-medium">Self-host</th>
                 <th scope="col" className="px-5 py-4 font-medium">Free cloud</th>
                 <th scope="col" className="px-5 py-4 font-medium text-evidence">Pro cloud</th>
               </tr>
@@ -299,7 +293,7 @@ export default function Landing() {
                 href="https://github.com/Pisama-AI/pisama-n8n"
                 className="px-5 py-2.5 rounded-lg border border-rule text-ink-2 hover:text-ink hover:border-ink-4 transition-colors"
               >
-                Self-host OSS
+                Self-host (fair-code)
               </a>
               <Link href="#plans" className="text-sm text-ink-3 hover:text-ink transition-colors">
                 Compare all options
@@ -329,15 +323,15 @@ export default function Landing() {
       {/* detectors */}
       <section className="border-t border-rule bg-paper-2/40">
         <div className="mx-auto max-w-5xl px-6 py-16">
-          <SectionLabel>Six detectors, two lanes</SectionLabel>
+          <SectionLabel>Five detectors, two lanes</SectionLabel>
           <h2 className="font-serif text-2xl mb-3">
             Structural analysis of the workflow, runtime analysis of the execution
           </h2>
           <p className="text-ink-3 max-w-2xl mb-10">
-            The structural lane reads the workflow graph itself. The runtime lane reads
-            what actually happened in an execution: real timings, real errors, real
-            payload sizes. Precision is tuned against thousands of real community
-            workflows.
+            The structural lane reads the workflow graph itself, with precision tuned
+            against thousands of real community workflows. The runtime lane reads what
+            actually happened in an execution: real timings, real errors, real payload
+            sizes, validated on a smaller corpus of real executions.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {DETECTORS.map((d) => (
