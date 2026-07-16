@@ -36,6 +36,16 @@ export function hasStoredKey(): boolean {
   return typeof window !== 'undefined' && Boolean(window.localStorage.getItem(KEY_STORAGE))
 }
 
+// SaaS mode: a 401 from the BFF means the session is beyond repair (the proxy
+// already retried a server-side token refresh) — send the user to sign-in
+// instead of a dead-end "couldn't reach the server" card.
+function redirectToSignIn(): void {
+  if (!IS_SAAS || typeof window === 'undefined') return
+  if (window.location.pathname.startsWith('/sign-in')) return
+  const callbackUrl = encodeURIComponent(window.location.pathname + window.location.search)
+  window.location.assign(`/sign-in?callbackUrl=${callbackUrl}`)
+}
+
 export async function fetchApi<T>(path: string): Promise<T> {
   const key = resolveKey()
   const headers: Record<string, string> = { Accept: 'application/json' }
@@ -43,6 +53,7 @@ export async function fetchApi<T>(path: string): Promise<T> {
 
   const res = await fetch(`${API_BASE}${path}`, { headers })
   if (!res.ok) {
+    if (res.status === 401) redirectToSignIn()
     throw new Error(`GET ${path} failed: ${res.status} ${res.statusText}`)
   }
   return res.json() as Promise<T>
@@ -62,6 +73,7 @@ export async function postApi<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
+    if (res.status === 401) redirectToSignIn()
     // 402 = paid feature not configured; surface it distinctly.
     const err = new Error(`POST ${path} failed: ${res.status}`)
     ;(err as Error & { status?: number }).status = res.status
