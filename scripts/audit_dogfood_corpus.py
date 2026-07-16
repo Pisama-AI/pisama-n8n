@@ -33,6 +33,9 @@ class EvidenceTarget:
     family: str
     detector: str
     failure_mode: str
+    # A withheld target stays visible in the ledger but cannot be included in a
+    # release gate until real n8n telemetry proves the detector contract.
+    release_gate: bool = True
 
     @property
     def fingerprint(self) -> str:
@@ -50,7 +53,13 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
     EvidenceTarget("P1", "Expression classification", "error", "n8n_expression"),
     EvidenceTarget("P1", "Timeout classification", "error", "n8n_timeout"),
     EvidenceTarget("P1", "Runtime timeout detector", "timeout", "F13"),
-    EvidenceTarget("P1", "Retry recovery", "retry_recovery", "n8n_retry_exhausted"),
+    EvidenceTarget(
+        "P1",
+        "Retry exhaustion (withheld pending telemetry)",
+        "retry_recovery",
+        "n8n_retry_exhausted",
+        release_gate=False,
+    ),
     EvidenceTarget(
         "P1", "Retry configuration gap", "retry_recovery", "n8n_retry_not_observed"
     ),
@@ -194,7 +203,13 @@ def catalog_status(observed: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         {
             **asdict(target),
             "fingerprint": target.fingerprint,
-            "status": "present" if counts.get(target.fingerprint, 0) else "missing",
+            "status": (
+                "withheld"
+                if not target.release_gate
+                else "present"
+                if counts.get(target.fingerprint, 0)
+                else "missing"
+            ),
             "observation_count": counts.get(target.fingerprint, 0),
         }
         for target in EVIDENCE_CATALOG
@@ -247,7 +262,7 @@ def required_fingerprints(
         selected.update(
             target.fingerprint
             for target in EVIDENCE_CATALOG
-            if target.priority in priorities
+            if target.priority in priorities and target.release_gate
         )
     return sorted(selected)
 

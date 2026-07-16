@@ -337,6 +337,105 @@ def _run_retrying_post_to_disposable_sink(key: str) -> Tuple[str, str]:
     return sink, caller
 
 
+def _run_looped_retry_failure(key: str) -> str:
+    """Record two normal loop runs on a retry-enabled node, then fail the second.
+
+    This is deliberately distinct from a node retry. n8n retains both loop runs in
+    one node's runData array, so it proves Pisama must not turn a repeated node run
+    into an exhausted-retry claim.
+    """
+    path = f"retry-loop-{uuid.uuid4().hex[:8]}"
+    seed = {
+        "id": "seed",
+        "name": "Seed items",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [220, 0],
+        "parameters": {
+            "jsCode": "return [{ json: { index: 0 } }, { json: { index: 1 } }];"
+        },
+    }
+    loop = {
+        "id": "loop",
+        "name": "Loop Over Items",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [440, 0],
+        "parameters": {"batchSize": 1, "options": {}},
+    }
+    work = {
+        "id": "work",
+        "name": "Retrying loop work",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [660, 0],
+        "retryOnFail": True,
+        "maxTries": 2,
+        "waitBetweenTries": 100,
+        "parameters": {
+            "jsCode": (
+                "if ($json.index === 1) { "
+                "throw new Error('controlled loop retry failure'); "
+                "} return [{ json: $json }];"
+            )
+        },
+    }
+    workflow_id = _create_active_workflow(
+        key,
+        f"poll-{path}",
+        [_webhook_node(path), seed, loop, work],
+        {
+            "Webhook": {
+                "main": [[{"node": "Seed items", "type": "main", "index": 0}]]
+            },
+            "Seed items": {
+                "main": [
+                    [{"node": "Loop Over Items", "type": "main", "index": 0}]
+                ]
+            },
+            "Loop Over Items": {
+                "main": [
+                    [],
+                    [
+                        {
+                            "node": "Retrying loop work",
+                            "type": "main",
+                            "index": 0,
+                        }
+                    ],
+                ]
+            },
+            "Retrying loop work": {
+                "main": [
+                    [{"node": "Loop Over Items", "type": "main", "index": 0}]
+                ]
+            },
+        },
+    )
+    response = _trigger_webhook(path)
+    assert response.status_code == 500, response.text
+    time.sleep(3)
+    return workflow_id
+
+
+def _recorded_node_run_count(key: str, workflow_id: str, node_name: str) -> int:
+    """Read the retained count for one node from a real n8n execution."""
+    headers = {"X-N8N-API-KEY": key}
+    with httpx.Client(
+        base_url=N8N_URL + "/api/v1", headers=headers, timeout=30
+    ) as client:
+        response = client.get(
+            "/executions", params={"workflowId": workflow_id, "includeData": "true"}
+        )
+        response.raise_for_status()
+    executions = response.json().get("data", [])
+    assert len(executions) == 1
+    run_data = (
+        (executions[0].get("data") or {}).get("resultData", {}).get("runData", {})
+    )
+    return len(run_data.get(node_name, []))
+
+
 def _delete_workflows(key: str, workflow_ids: List[str]) -> None:
     headers = {"X-N8N-API-KEY": key}
     with httpx.Client(
@@ -367,6 +466,18 @@ def _fired_for_workflow(detections: List[Dict[str, Any]], workflow_id: str) -> s
         for row in detections
         if row["workflow_id"] == workflow_id and row["detected"]
     }
+
+
+def _retry_results_for_workflow(
+    detections: List[Dict[str, Any]], workflow_id: str
+) -> List[Dict[str, Any]]:
+    """Return every retry-recovery result retained for one workflow."""
+    return [
+        row
+        for row in detections
+        if row["workflow_id"] == workflow_id
+        and row["detector"] == "retry_recovery"
+    ]
 
 
 def _execution_ids_for_workflow(
@@ -516,12 +627,48 @@ def test_poll_records_when_n8n_hides_retry_attempts(tmp_path, monkeypatch):
         detections = client.get("/api/v1/detections", headers=headers).json()
         caller_fired = _fired_for_workflow(detections, caller_id)
         sink_executions = _execution_ids_for_workflow(detections, sink_id)
+        retry_findings = _retry_results_for_workflow(detections, caller_id)
         assert ("retry_recovery", "n8n_retry_not_observed") in caller_fired
         assert ("retry_recovery", "n8n_retry_exhausted") not in caller_fired
         assert ("idempotency", "n8n_duplicate_side_effect_risk") not in caller_fired
         assert len(sink_executions) >= 2
+        assert len(retry_findings) == 1
+        retry_result = retry_findings[0]
+        assert retry_result["failure_mode"] == "n8n_retry_not_observed"
+        assert retry_result["detector_version"] == "1.1"
+        assert retry_result["evidence"] == {
+            "nodes": ["Unsafe retrying POST"],
+            "recorded_node_runs": 1,
+            "retry_observed": False,
+        }
     finally:
         _delete_workflows(key, [caller_id, sink_id])
+
+
+def test_poll_withholds_retry_claim_for_repeated_loop_runs(tmp_path, monkeypatch):
+    """Two real loop runs are not evidence that a node exhausted its retry budget."""
+    key = _provision_key()
+    workflow_id = _run_looped_retry_failure(key)
+    try:
+        assert _recorded_node_run_count(key, workflow_id, "Retrying loop work") == 2
+        client, headers, _ = _polling_client(
+            tmp_path, monkeypatch, key, "looped-retry.db"
+        )
+        sync = client.post("/api/v1/n8n/sync", headers=headers)
+        assert sync.status_code == 200, sync.text
+        detections = client.get("/api/v1/detections", headers=headers).json()
+        fired = _fired_for_workflow(detections, workflow_id)
+        retry_results = _retry_results_for_workflow(detections, workflow_id)
+        assert ("retry_recovery", "n8n_retry_not_observed") not in fired
+        assert ("retry_recovery", "n8n_retry_exhausted") not in fired
+        assert len(retry_results) == 1
+        retry_result = retry_results[0]
+        assert retry_result["detected"] is False
+        assert retry_result["failure_mode"] is None
+        assert retry_result["detector_version"] == "1.1"
+        assert "exhausted-retry detection is withheld" in retry_result["explanation"]
+    finally:
+        _delete_workflows(key, [workflow_id])
 
 
 def test_repair_verification_observes_a_real_post_apply_execution(

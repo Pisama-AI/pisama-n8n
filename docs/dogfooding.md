@@ -122,7 +122,8 @@ Use an explicit gate only when its required captures are expected to be present:
 python scripts/audit_dogfood_corpus.py --require-profile core
 ```
 
-`core` requires the P0/P1 catalog; `full` also requires P2/P3. Either gate exits
+`core` requires enabled P0/P1 catalog entries; `full` also requires enabled P2/P3.
+Withheld modes remain visible in the catalog but never satisfy a release gate. Either gate exits
 nonzero and lists its missing fingerprints. A fresh or recreated dogfood volume can
 legitimately fail even if a historical exercise passed, so do not substitute prose or a
 past CI result for this check.
@@ -137,6 +138,17 @@ python scripts/audit_dogfood_corpus.py --require-profile core --require-current-
 This reads the running server's `/healthz` revision and requires every selected
 fingerprint to have at least one observation from that revision. A server reporting
 `unknown` cannot pass this form of the gate.
+
+### Withheld detector modes
+
+`n8n_retry_exhausted` is withheld from rollout and release gates. Controlled HTTP retries
+in both n8n `1.70.0` and `1.91.3` made two actual requests, while each caller execution
+exported one node run and no authoritative retry-attempt link. Pisama therefore ships
+only `n8n_retry_not_observed` for this surface until a real n8n telemetry source can
+prove retry exhaustion without confusing it with an ordinary repeated node run.
+A separate real `Loop Over Items` capture retained two normal runs of one retry-enabled
+node, one successful and one failed. It must also produce no retry claim, because those
+are loop iterations rather than evidence that a retry budget was exhausted.
 
 The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
 The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so
@@ -251,9 +263,12 @@ current release decision.
   the authenticated detection detail without exposing raw execution payloads.
 - The same current-source lane then reran the retained provider, credential, rate-limit,
   expression/data-contract, retry, timeout, and payload workflows. It ingested nine new
-  real executions, and the second poll added zero. The current-build core gate now fails
-  only for `truncation:n8n_truncation` and `retry_recovery:n8n_retry_exhausted`; neither
-  absence is relabeled as a passing result.
+  real executions, and the second poll added zero. Before retry exhaustion was withheld,
+  the current-build core gate failed only for that mode and
+  `truncation:n8n_truncation`; neither absence was relabeled as a passing result.
+- An isolated n8n `1.70.0` lane reproduced the retry-export limitation: a retry-enabled
+  POST made two real sink executions, while the caller exported one node run and no
+  retry linkage. This matches `1.91.3` and is why `n8n_retry_exhausted` is withheld.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API

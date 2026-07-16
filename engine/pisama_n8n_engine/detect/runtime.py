@@ -139,6 +139,58 @@ def _error_turns(turns: Iterable[TurnSnapshot]) -> List[TurnSnapshot]:
     return [turn for turn in turns if (turn.turn_metadata or {}).get("has_error")]
 
 
+def _retry_enabled_error_turns(turns: Iterable[TurnSnapshot]) -> List[TurnSnapshot]:
+    """Return failed nodes for which n8n retained retry-on-fail configuration."""
+    return [
+        turn
+        for turn in _error_turns(turns)
+        if (turn.turn_metadata or {}).get("retry_on_fail")
+    ]
+
+
+def _recorded_retry_attempt_count(turns: Iterable[TurnSnapshot]) -> int:
+    """Return the largest retained node run count for this retry check."""
+    return max(
+        int((turn.turn_metadata or {}).get("attempt_count") or 1) for turn in turns
+    )
+
+
+def _retry_outcome_is_ambiguous(
+    turns: Iterable[TurnSnapshot], metadata: Optional[Dict[str, Any]]
+) -> bool:
+    """Whether n8n recorded retry-like facts without a node-budget linkage."""
+    execution = metadata or {}
+    return _recorded_retry_attempt_count(turns) > 1 or bool(
+        execution.get("retry_of") or execution.get("retry_success_id")
+    )
+
+
+def _retry_not_observed_result(
+    detector_name: str, detector_version: str, turns: List[TurnSnapshot]
+) -> TurnAwareDetectionResult:
+    """Report a retry-enabled failure whose retry behavior was not retained."""
+    names = ", ".join(dict.fromkeys(turn.participant_id for turn in turns))
+    return TurnAwareDetectionResult(
+        detected=True,
+        severity=TurnAwareSeverity.MODERATE,
+        confidence=0.95,
+        failure_mode="n8n_retry_not_observed",
+        explanation=(
+            f"Retry-enabled node(s) failed, but this n8n execution recorded no repeat attempt: {names}. "
+            "Verify retry support and settings for this node type before relying on recovery."
+        ),
+        affected_turns=[turn.turn_number for turn in turns],
+        evidence={
+            "nodes": [turn.participant_id for turn in turns],
+            "recorded_node_runs": _recorded_retry_attempt_count(turns),
+            "retry_observed": False,
+        },
+        suggested_fix="Verify the node's retry behavior with a controlled failure and route unrecoverable errors to an error workflow.",
+        detector_name=detector_name,
+        detector_version=detector_version,
+    )
+
+
 def _failed_workflow_status(metadata: Dict[str, Any]) -> bool:
     """Whether n8n recorded a workflow status that needs error-route review."""
     return str(metadata.get("workflow_status") or "").lower() in {
@@ -292,10 +344,10 @@ class N8NTruncationDetector(TurnAwareDetector):
 
 
 class N8NRetryRecoveryDetector(TurnAwareDetector):
-    """Flag an observed failure after a node's configured retry budget was used."""
+    """Flag a retry-enabled failure when n8n cannot prove its retry outcome."""
 
     name = "N8NRetryRecoveryDetector"
-    version = "1.0"
+    version = "1.1"
     supported_failure_modes = ["F14"]
 
     def detect(
@@ -303,48 +355,21 @@ class N8NRetryRecoveryDetector(TurnAwareDetector):
         turns: List[TurnSnapshot],
         conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
-        exhausted = [
-            turn
-            for turn in _error_turns(turns)
-            if (turn.turn_metadata or {}).get("retry_on_fail")
-        ]
-        if not exhausted:
+        retry_enabled_failures = _retry_enabled_error_turns(turns)
+        if not retry_enabled_failures:
             return _clear(
-                self.name, "No recorded node failure exhausted a configured retry path."
+                self.name,
+                "No recorded retry-enabled node failure requires a retry-evidence check.",
             )
-        names = ", ".join(dict.fromkeys(turn.participant_id for turn in exhausted))
-        attempts = max(
-            int((turn.turn_metadata or {}).get("attempt_count") or 1)
-            for turn in exhausted
-        )
-        observed_retry = attempts > 1 or bool(
-            (conversation_metadata or {}).get("retry_of")
-        )
-        failure_mode = (
-            "n8n_retry_exhausted" if observed_retry else "n8n_retry_not_observed"
-        )
-        explanation = (
-            f"Retry-enabled node(s) still failed after n8n recorded {attempts} attempt(s): {names}. "
-            "Review the underlying incident, then set bounded backoff and a recovery or alert path."
-            if observed_retry
-            else f"Retry-enabled node(s) failed, but this n8n execution recorded no repeat attempt: {names}. "
-            "Verify retry support and settings for this node type before relying on recovery."
-        )
-        return TurnAwareDetectionResult(
-            detected=True,
-            severity=TurnAwareSeverity.MODERATE,
-            confidence=0.95,
-            failure_mode=failure_mode,
-            explanation=explanation,
-            affected_turns=[turn.turn_number for turn in exhausted],
-            evidence={
-                "nodes": [turn.participant_id for turn in exhausted],
-                "attempts": attempts,
-                "observed_retry": observed_retry,
-            },
-            suggested_fix="Use bounded exponential backoff only for transient errors and send exhausted retries to an error workflow.",
-            detector_name=self.name,
-            detector_version=self.version,
+        if _retry_outcome_is_ambiguous(
+            retry_enabled_failures, conversation_metadata
+        ):
+            return _clear(
+                self.name,
+                "n8n recorded repeated runs or a workflow retry without an authoritative link to this node's retry budget; exhausted-retry detection is withheld.",
+            )
+        return _retry_not_observed_result(
+            self.name, self.version, retry_enabled_failures
         )
 
 
