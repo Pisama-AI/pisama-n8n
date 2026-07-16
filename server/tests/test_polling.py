@@ -11,6 +11,7 @@ import time
 import uuid
 from asyncio import run
 from copy import deepcopy
+from typing import Any, Dict, List, Tuple
 
 import httpx
 import pytest
@@ -57,37 +58,40 @@ def _provision_key() -> str:
         return r.json()["data"]["rawApiKey"]
 
 
-def _create_active_webhook_workflow(key: str, path: str, name: str, node: dict) -> str:
+def _create_active_workflow(
+    key: str, name: str, nodes: List[Dict[str, Any]], connections: Dict[str, Any]
+) -> str:
     """Create one disposable real n8n workflow and return its API id."""
-    wf = {
-        "name": name,
-        "settings": {},
-        "nodes": [
-            {
-                "id": "w",
-                "name": "Webhook",
-                "type": "n8n-nodes-base.webhook",
-                "typeVersion": 2,
-                "position": [0, 0],
-                "parameters": {
-                    "path": path,
-                    "httpMethod": "POST",
-                    "responseMode": "lastNode",
-                },
-                "webhookId": path,
-            },
-            node,
-        ],
-        "connections": {
-            "Webhook": {"main": [[{"node": node["name"], "type": "main", "index": 0}]]}
-        },
-    }
+    wf = {"name": name, "settings": {}, "nodes": nodes, "connections": connections}
     h = {"X-N8N-API-KEY": key}
     with httpx.Client(base_url=N8N_URL + "/api/v1", headers=h, timeout=30) as c:
         body = c.post("/workflows", json=wf).json()
         wid = (body.get("data", body))["id"]
         c.post(f"/workflows/{wid}/activate")
     return wid
+
+
+def _webhook_node(path: str) -> Dict[str, Any]:
+    return {
+        "id": "w",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [0, 0],
+        "parameters": {"path": path, "httpMethod": "POST", "responseMode": "lastNode"},
+        "webhookId": path,
+    }
+
+
+def _create_active_webhook_workflow(
+    key: str, path: str, name: str, node: Dict[str, Any]
+) -> str:
+    return _create_active_workflow(
+        key,
+        name,
+        [_webhook_node(path), node],
+        {"Webhook": {"main": [[{"node": node["name"], "type": "main", "index": 0}]]}},
+    )
 
 
 def _trigger_webhook(path: str) -> httpx.Response:
@@ -140,6 +144,105 @@ def _run_timeout_workflow(key: str) -> str:
     return wid
 
 
+def _run_payload_growth_workflow(key: str) -> str:
+    """Produce a bounded, real n8n data amplification execution."""
+    path = f"payload-{uuid.uuid4().hex[:8]}"
+    seed = {
+        "id": "seed",
+        "name": "Seed payload",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [220, 0],
+        "parameters": {"jsCode": 'return [{ json: { source: "dogfood" } }];'},
+    }
+    expand = {
+        "id": "expand",
+        "name": "Expand payload",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [440, 0],
+        "parameters": {
+            "jsCode": (
+                "return Array.from({ length: 10 }, (_, index) => "
+                '({ json: { index, payload: "x".repeat(1500) } }));'
+            )
+        },
+    }
+    wid = _create_active_workflow(
+        key,
+        f"poll-{path}",
+        [_webhook_node(path), seed, expand],
+        {
+            "Webhook": {
+                "main": [[{"node": "Seed payload", "type": "main", "index": 0}]]
+            },
+            "Seed payload": {
+                "main": [[{"node": "Expand payload", "type": "main", "index": 0}]]
+            },
+        },
+    )
+    response = _trigger_webhook(path)
+    assert response.status_code == 200, response.text
+    time.sleep(2)
+    return wid
+
+
+def _run_retrying_post_to_disposable_sink(key: str) -> Tuple[str, str]:
+    """Use two real n8n workflows to observe retry metadata without side effects."""
+    suffix = uuid.uuid4().hex[:8]
+    sink_path = f"retry-sink-{suffix}"
+    caller_path = f"retry-caller-{suffix}"
+    sink = _create_active_webhook_workflow(
+        key,
+        sink_path,
+        f"poll-{sink_path}",
+        {
+            "id": "sink-failure",
+            "name": "Disposable sink failure",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [220, 0],
+            "parameters": {
+                "jsCode": "throw new Error('disposable retry sink failure');"
+            },
+        },
+    )
+    caller = _create_active_webhook_workflow(
+        key,
+        caller_path,
+        f"poll-{caller_path}",
+        {
+            "id": "unsafe-post",
+            "name": "Unsafe retrying POST",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [220, 0],
+            "retryOnFail": True,
+            "maxTries": 2,
+            "waitBetweenTries": 100,
+            "parameters": {
+                "method": "POST",
+                "url": f"http://127.0.0.1:5678/webhook/{sink_path}",
+                "options": {},
+            },
+        },
+    )
+    response = _trigger_webhook(caller_path)
+    assert response.status_code == 500, response.text
+    time.sleep(3)
+    return sink, caller
+
+
+def _delete_workflows(key: str, workflow_ids: List[str]) -> None:
+    headers = {"X-N8N-API-KEY": key}
+    with httpx.Client(
+        base_url=N8N_URL + "/api/v1", headers=headers, timeout=30
+    ) as client:
+        for workflow_id in workflow_ids:
+            client.post(f"/workflows/{workflow_id}/deactivate")
+            client.delete(f"/workflows/{workflow_id}")
+
+
 def _polling_client(tmp_path, monkeypatch, key: str, database_name: str):
     """Create a real temporary SQLite Pisama server against the live n8n harness."""
     monkeypatch.setenv("PISAMA_N8N_URL", N8N_URL)
@@ -152,6 +255,24 @@ def _polling_client(tmp_path, monkeypatch, key: str, database_name: str):
 
     appmod._storage = Storage()
     return TestClient(appmod.app), {"Authorization": "Bearer srv-key"}, appmod._storage
+
+
+def _fired_for_workflow(detections: List[Dict[str, Any]], workflow_id: str) -> set:
+    return {
+        (row["detector"], row["failure_mode"])
+        for row in detections
+        if row["workflow_id"] == workflow_id and row["detected"]
+    }
+
+
+def _execution_ids_for_workflow(
+    detections: List[Dict[str, Any]], workflow_id: str
+) -> set:
+    return {
+        row["n8n_execution_id"]
+        for row in detections
+        if row["workflow_id"] == workflow_id and row["n8n_execution_id"]
+    }
 
 
 def test_poll_ingests_and_dedups(tmp_path, monkeypatch):
@@ -171,10 +292,7 @@ def test_poll_ingests_and_dedups(tmp_path, monkeypatch):
         r2 = client.post("/api/v1/n8n/sync", headers=hb)
         assert r2.json()["new"] == 0
     finally:
-        h = {"X-N8N-API-KEY": key}
-        with httpx.Client(base_url=N8N_URL + "/api/v1", headers=h, timeout=30) as c:
-            c.post(f"/workflows/{wid}/deactivate")
-            c.delete(f"/workflows/{wid}")
+        _delete_workflows(key, [wid])
 
 
 def test_poll_classifies_a_real_n8n_request_timeout(tmp_path, monkeypatch):
@@ -190,17 +308,48 @@ def test_poll_classifies_a_real_n8n_request_timeout(tmp_path, monkeypatch):
         sync = client.post("/api/v1/n8n/sync", headers=headers)
         assert sync.status_code == 200, sync.text
         detections = client.get("/api/v1/detections", headers=headers).json()
-        fired = {
-            (row["detector"], row["failure_mode"])
-            for row in detections
-            if row["workflow_id"] == wid and row["detected"]
-        }
+        fired = _fired_for_workflow(detections, wid)
         assert {("timeout", "F13"), ("error", "n8n_timeout")} <= fired
     finally:
-        h = {"X-N8N-API-KEY": key}
-        with httpx.Client(base_url=N8N_URL + "/api/v1", headers=h, timeout=30) as c:
-            c.post(f"/workflows/{wid}/deactivate")
-            c.delete(f"/workflows/{wid}")
+        _delete_workflows(key, [wid])
+
+
+def test_poll_detects_real_runtime_payload_growth(tmp_path, monkeypatch):
+    """A bounded n8n expansion must retain runtime evidence for resource F6."""
+    key = _provision_key()
+    wid = _run_payload_growth_workflow(key)
+    try:
+        client, headers, _ = _polling_client(tmp_path, monkeypatch, key, "payload.db")
+        sync = client.post("/api/v1/n8n/sync", headers=headers)
+        assert sync.status_code == 200, sync.text
+        detections = client.get("/api/v1/detections", headers=headers).json()
+        fired = _fired_for_workflow(detections, wid)
+        assert ("resource", "F6") in fired
+    finally:
+        _delete_workflows(key, [wid])
+
+
+def test_poll_records_when_n8n_hides_retry_attempts(tmp_path, monkeypatch):
+    """n8n 1.91 retries the request but retains one caller runData record.
+
+    The detector must surface that evidence gap, not invent an exhausted-retry or
+    duplicate-side-effect claim from the two sink executions.
+    """
+    key = _provision_key()
+    sink_id, caller_id = _run_retrying_post_to_disposable_sink(key)
+    try:
+        client, headers, _ = _polling_client(tmp_path, monkeypatch, key, "retry.db")
+        sync = client.post("/api/v1/n8n/sync", headers=headers)
+        assert sync.status_code == 200, sync.text
+        detections = client.get("/api/v1/detections", headers=headers).json()
+        caller_fired = _fired_for_workflow(detections, caller_id)
+        sink_executions = _execution_ids_for_workflow(detections, sink_id)
+        assert ("retry_recovery", "n8n_retry_not_observed") in caller_fired
+        assert ("retry_recovery", "n8n_retry_exhausted") not in caller_fired
+        assert ("idempotency", "n8n_duplicate_side_effect_risk") not in caller_fired
+        assert len(sink_executions) >= 2
+    finally:
+        _delete_workflows(key, [caller_id, sink_id])
 
 
 def test_repair_verification_observes_a_real_post_apply_execution(
@@ -353,7 +502,4 @@ def test_repair_verification_observes_a_real_post_apply_execution(
                     assert restored
                     storage.mark_repair_rolled_back(repair_id)
     finally:
-        h = {"X-N8N-API-KEY": key}
-        with httpx.Client(base_url=N8N_URL + "/api/v1", headers=h, timeout=30) as c:
-            c.post(f"/workflows/{wid}/deactivate")
-            c.delete(f"/workflows/{wid}")
+        _delete_workflows(key, [wid])

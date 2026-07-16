@@ -190,10 +190,23 @@ current release decision.
   `429` and a `401` authentication rejection. The standalone detector classified them as
   `n8n_rate_limit` and `n8n_credential`, respectively. A real Code-node missing-field
   execution also fired the runtime-only `n8n_data_contract` detector.
-- A retry-enabled unsafe HTTP write returned a real provider `502`, but this n8n release
-  recorded one attempt. Pisama therefore reports `n8n_retry_not_observed`, rather than
-  falsely claiming that a retry budget was exhausted. Duplicate-side-effect detection is
-  deliberately held until a real execution records repeated unsafe action attempts.
+- A current-source isolated server, built with retained provenance, re-ingested the
+  six local disposable executions and then observed live reruns plus poll deduplication.
+  It retained the concrete rate-limit, credential, provider, expression/data-contract,
+  retry-configuration-gap, and missing-error-workflow fingerprints under its build and
+  detector versions.
+- A real delayed HTTP request with an explicit 500 ms n8n timeout recorded n8n's
+  `connection was aborted` error after 537 ms. Pisama now classifies that corroborated
+  shape as `error:n8n_timeout` and `timeout:F13`; the detector contract is protected by
+  a live n8n regression test.
+- A separate bounded `Webhook → Code → Code` execution expanded one real item into ten
+  1,500-character items. The current server retained `resource:F6`, and its live n8n
+  regression test proves the runtime payload-growth path without a constructed trace.
+- In n8n `1.91.3`, a retry-enabled POST to a disposable internal failure sink executed
+  the sink twice, while the caller's exported `runData` retained only one node record.
+  Pisama therefore reports `n8n_retry_not_observed` and deliberately withholds both
+  `n8n_retry_exhausted` and duplicate-side-effect claims. This behavior is protected by
+  a live n8n regression test.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API

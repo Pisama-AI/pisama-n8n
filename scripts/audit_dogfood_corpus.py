@@ -49,6 +49,7 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
     EvidenceTarget("P1", "Provider classification", "error", "n8n_provider"),
     EvidenceTarget("P1", "Expression classification", "error", "n8n_expression"),
     EvidenceTarget("P1", "Timeout classification", "error", "n8n_timeout"),
+    EvidenceTarget("P1", "Runtime timeout detector", "timeout", "F13"),
     EvidenceTarget("P1", "Retry recovery", "retry_recovery", "n8n_retry_exhausted"),
     EvidenceTarget(
         "P1", "Retry configuration gap", "retry_recovery", "n8n_retry_not_observed"
