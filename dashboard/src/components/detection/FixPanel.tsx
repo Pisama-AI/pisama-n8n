@@ -59,10 +59,6 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
   const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null)
 
   const enabled = status?.enabled ?? false
-  // Public showcase (n8n.pisama.ai) runs read-only: no bearer key ships to the browser, so
-  // the interactive Get-fix / Apply calls would 401. In that mode we describe the paid
-  // capability honestly instead of rendering buttons that error for anonymous visitors.
-  const readOnly = process.env.NEXT_PUBLIC_READONLY === '1'
 
   async function onGetFix() {
     setLoading(true)
@@ -121,17 +117,7 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
         </div>
       </CardHeader>
 
-      {readOnly ? (
-        <p className="text-sm text-ink-3">
-          On the self-hosted server, Pisama generates a targeted fix for this failure and shows
-          the exact change to make in your n8n workflow. This is a live public demo, so fix
-          generation is read-only here.{' '}
-          <a href="https://github.com/Pisama-AI/pisama-n8n" className="text-evidence hover:underline">
-            Self-host it
-          </a>{' '}
-          to enable fixes with your own key.
-        </p>
-      ) : !enabled ? (
+      {!enabled ? (
         IS_SAAS && BILLING_ENABLED ? (
           <div className="space-y-3">
             <p className="text-sm text-ink-3">
