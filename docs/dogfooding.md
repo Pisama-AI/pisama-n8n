@@ -150,6 +150,19 @@ A separate real `Loop Over Items` capture retained two normal runs of one retry-
 node, one successful and one failed. It must also produce no retry claim, because those
 are loop iterations rather than evidence that a retry budget was exhausted.
 
+`n8n_duplicate_side_effect_risk` is also withheld from rollout and release gates.
+Two real, intentional `Loop Over Items` POST iterations reached a controlled receiver
+twice without an `Idempotency-Key`, which the earlier heuristic could not distinguish
+from one business event retried twice. Pisama therefore does not emit a generic
+duplicate-side-effect finding until it can correlate durable event identity, delivered
+request headers, and receiver outcomes for the same action.
+
+`n8n_agent_tool_recovery` and `n8n_agent_output_validation` are withheld as well. The
+local lane has no real AI-node execution, and exported n8n `runData` order alone cannot
+prove that a later model turn recovered from a specific tool failure. Re-enable these
+only after real agent/tool and parser captures establish the supported telemetry shape,
+event ordering, and agent-to-tool relationship.
+
 The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
 The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so
 it must never be presented as proof of observed runtime-loop coverage.
@@ -282,5 +295,6 @@ current release decision.
   success as prevention, then restored the controls in reverse order and retained their
   rolled-back audit records.
 - No real LLM token-limit or AI-agent tool/output-validation execution has yet been
-  captured in this lane. The associated detectors remain evidence-gated and must not be
-  described as validated until those captures exist.
+  captured in this lane. Truncation remains enabled but cannot pass its P0 gate without
+  a real capture; the unproven AI-agent modes are withheld rather than presented as
+  validated coverage.

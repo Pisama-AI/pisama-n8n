@@ -337,14 +337,10 @@ def _run_retrying_post_to_disposable_sink(key: str) -> Tuple[str, str]:
     return sink, caller
 
 
-def _run_looped_retry_failure(key: str) -> str:
-    """Record two normal loop runs on a retry-enabled node, then fail the second.
-
-    This is deliberately distinct from a node retry. n8n retains both loop runs in
-    one node's runData array, so it proves Pisama must not turn a repeated node run
-    into an exhausted-retry claim.
-    """
-    path = f"retry-loop-{uuid.uuid4().hex[:8]}"
+def _run_two_item_loop(
+    key: str, path: str, work: Dict[str, Any], expected_status: int
+) -> str:
+    """Run a real bounded n8n loop with two distinct input items."""
     seed = {
         "id": "seed",
         "name": "Seed items",
@@ -352,7 +348,10 @@ def _run_looped_retry_failure(key: str) -> str:
         "typeVersion": 2,
         "position": [220, 0],
         "parameters": {
-            "jsCode": "return [{ json: { index: 0 } }, { json: { index: 1 } }];"
+            "jsCode": (
+                "return [{ json: { index: 0, event: 'first' } }, "
+                "{ json: { index: 1, event: 'second' } }];"
+            )
         },
     }
     loop = {
@@ -363,6 +362,42 @@ def _run_looped_retry_failure(key: str) -> str:
         "position": [440, 0],
         "parameters": {"batchSize": 1, "options": {}},
     }
+    work_name = work["name"]
+    workflow_id = _create_active_workflow(
+        key,
+        f"poll-{path}",
+        [_webhook_node(path), seed, loop, work],
+        {
+            "Webhook": {
+                "main": [[{"node": "Seed items", "type": "main", "index": 0}]]
+            },
+            "Seed items": {
+                "main": [
+                    [{"node": "Loop Over Items", "type": "main", "index": 0}]
+                ]
+            },
+            "Loop Over Items": {
+                "main": [
+                    [],
+                    [{"node": work_name, "type": "main", "index": 0}],
+                ]
+            },
+            work_name: {
+                "main": [
+                    [{"node": "Loop Over Items", "type": "main", "index": 0}]
+                ]
+            },
+        },
+    )
+    response = _trigger_webhook(path)
+    assert response.status_code == expected_status, response.text
+    time.sleep(3)
+    return workflow_id
+
+
+def _run_looped_retry_failure(key: str) -> str:
+    """Record two normal loop runs on a retry-enabled node, then fail the second."""
+    path = f"retry-loop-{uuid.uuid4().hex[:8]}"
     work = {
         "id": "work",
         "name": "Retrying loop work",
@@ -380,42 +415,41 @@ def _run_looped_retry_failure(key: str) -> str:
             )
         },
     }
-    workflow_id = _create_active_workflow(
+    return _run_two_item_loop(key, path, work, expected_status=500)
+
+
+def _run_looped_posts_to_disposable_sink(key: str) -> Tuple[str, str]:
+    """Run two intentional, distinct POST loop iterations without an idempotency key."""
+    suffix = uuid.uuid4().hex[:8]
+    sink_path = f"idempotency-sink-{suffix}"
+    caller_path = f"idempotency-loop-{suffix}"
+    sink = _create_active_webhook_workflow(
         key,
-        f"poll-{path}",
-        [_webhook_node(path), seed, loop, work],
+        sink_path,
+        f"poll-{sink_path}",
         {
-            "Webhook": {
-                "main": [[{"node": "Seed items", "type": "main", "index": 0}]]
-            },
-            "Seed items": {
-                "main": [
-                    [{"node": "Loop Over Items", "type": "main", "index": 0}]
-                ]
-            },
-            "Loop Over Items": {
-                "main": [
-                    [],
-                    [
-                        {
-                            "node": "Retrying loop work",
-                            "type": "main",
-                            "index": 0,
-                        }
-                    ],
-                ]
-            },
-            "Retrying loop work": {
-                "main": [
-                    [{"node": "Loop Over Items", "type": "main", "index": 0}]
-                ]
-            },
+            "id": "sink",
+            "name": "Record intentional event",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [220, 0],
+            "parameters": {"jsCode": "return [{ json: { received: true } }];"},
         },
     )
-    response = _trigger_webhook(path)
-    assert response.status_code == 500, response.text
-    time.sleep(3)
-    return workflow_id
+    post = {
+        "id": "post",
+        "name": "Post distinct event",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [660, 0],
+        "parameters": {
+            "method": "POST",
+            "url": f"http://127.0.0.1:5678/webhook/{sink_path}",
+            "options": {},
+        },
+    }
+    caller = _run_two_item_loop(key, caller_path, post, expected_status=200)
+    return sink, caller
 
 
 def _recorded_node_run_count(key: str, workflow_id: str, node_name: str) -> int:
@@ -468,16 +502,22 @@ def _fired_for_workflow(detections: List[Dict[str, Any]], workflow_id: str) -> s
     }
 
 
-def _retry_results_for_workflow(
-    detections: List[Dict[str, Any]], workflow_id: str
+def _detector_results_for_workflow(
+    detections: List[Dict[str, Any]], workflow_id: str, detector: str
 ) -> List[Dict[str, Any]]:
-    """Return every retry-recovery result retained for one workflow."""
+    """Return every result from one detector retained for one workflow."""
     return [
         row
         for row in detections
         if row["workflow_id"] == workflow_id
-        and row["detector"] == "retry_recovery"
+        and row["detector"] == detector
     ]
+
+
+def _retry_results_for_workflow(
+    detections: List[Dict[str, Any]], workflow_id: str
+) -> List[Dict[str, Any]]:
+    return _detector_results_for_workflow(detections, workflow_id, "retry_recovery")
 
 
 def _execution_ids_for_workflow(
@@ -669,6 +709,32 @@ def test_poll_withholds_retry_claim_for_repeated_loop_runs(tmp_path, monkeypatch
         assert "exhausted-retry detection is withheld" in retry_result["explanation"]
     finally:
         _delete_workflows(key, [workflow_id])
+
+
+def test_poll_withholds_duplicate_side_effect_claim_for_looped_posts(
+    tmp_path, monkeypatch
+):
+    """Two intended POST loop iterations cannot prove a duplicated business event."""
+    key = _provision_key()
+    sink_id, caller_id = _run_looped_posts_to_disposable_sink(key)
+    try:
+        assert _recorded_node_run_count(key, caller_id, "Post distinct event") == 2
+        client, headers, _ = _polling_client(
+            tmp_path, monkeypatch, key, "looped-posts.db"
+        )
+        sync = client.post("/api/v1/n8n/sync", headers=headers)
+        assert sync.status_code == 200, sync.text
+        detections = client.get("/api/v1/detections", headers=headers).json()
+        fired = _fired_for_workflow(detections, caller_id)
+        sink_executions = _execution_ids_for_workflow(detections, sink_id)
+        idempotency_results = _detector_results_for_workflow(
+            detections, caller_id, "idempotency"
+        )
+        assert len(sink_executions) >= 2
+        assert ("idempotency", "n8n_duplicate_side_effect_risk") not in fired
+        assert idempotency_results == []
+    finally:
+        _delete_workflows(key, [caller_id, sink_id])
 
 
 def test_repair_verification_observes_a_real_post_apply_execution(

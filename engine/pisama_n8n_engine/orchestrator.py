@@ -21,9 +21,7 @@ from pisama_n8n_engine.detect.structural import (
     N8NComplexityDetector,
 )
 from pisama_n8n_engine.detect.runtime import (
-    N8NAgentDiagnosticsDetector,
     N8NErrorWorkflowDetector,
-    N8NIdempotencyDetector,
     N8NRetryRecoveryDetector,
     N8NTruncationDetector,
 )
@@ -42,8 +40,6 @@ _EXECUTION = {
     "truncation": N8NTruncationDetector,
     "retry_recovery": N8NRetryRecoveryDetector,
     "error_workflow": N8NErrorWorkflowDetector,
-    "idempotency": N8NIdempotencyDetector,
-    "agent_diagnostics": N8NAgentDiagnosticsDetector,
 }
 
 

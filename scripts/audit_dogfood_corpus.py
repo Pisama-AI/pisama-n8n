@@ -80,9 +80,10 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
     ),
     EvidenceTarget(
         "P2",
-        "Duplicate side-effect risk",
+        "Duplicate side-effect risk (withheld pending event correlation)",
         "idempotency",
         "n8n_duplicate_side_effect_risk",
+        release_gate=False,
     ),
     EvidenceTarget("P2", "Runtime payload growth", "resource", "F6"),
     EvidenceTarget("P2", "Oversized resource pressure", "resource", "F3"),
@@ -90,13 +91,18 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
     # This target must not be read as evidence for a runtime loop detector.
     EvidenceTarget("P3", "Workflow cycle configuration (static)", "cycle", "F11"),
     EvidenceTarget(
-        "P3", "Agent tool recovery", "agent_diagnostics", "n8n_agent_tool_recovery"
+        "P3",
+        "Agent tool recovery (withheld pending real telemetry)",
+        "agent_diagnostics",
+        "n8n_agent_tool_recovery",
+        release_gate=False,
     ),
     EvidenceTarget(
         "P3",
-        "Agent output validation",
+        "Agent output validation (withheld pending real telemetry)",
         "agent_diagnostics",
         "n8n_agent_output_validation",
+        release_gate=False,
     ),
 )
 

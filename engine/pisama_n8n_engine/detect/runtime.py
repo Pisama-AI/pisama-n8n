@@ -6,7 +6,6 @@ its workflow snapshot.  They do not infer an incident from a workflow's appearan
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional
 
 from pisama_n8n_engine.detect.base import (
@@ -18,7 +17,6 @@ from pisama_n8n_engine.detect.base import (
 from pisama_n8n_engine.detect.truncation import TRUNCATION_VALUES
 
 
-_UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _EXPRESSION_MARKERS = (
     "cannot read properties",
     "cannot read property",
@@ -342,7 +340,6 @@ class N8NTruncationDetector(TurnAwareDetector):
             detector_version=self.version,
         )
 
-
 class N8NRetryRecoveryDetector(TurnAwareDetector):
     """Flag a retry-enabled failure when n8n cannot prove its retry outcome."""
 
@@ -425,132 +422,4 @@ class N8NErrorWorkflowDetector(TurnAwareDetector):
             suggested_fix="Create and review a dedicated Error Trigger workflow, then attach it as this workflow's errorWorkflow setting.",
             detector_name=self.name,
             detector_version=self.version,
-        )
-
-
-class N8NIdempotencyDetector(TurnAwareDetector):
-    """Detect a repeated unsafe HTTP action without an idempotency key."""
-
-    name = "N8NIdempotencyDetector"
-    version = "1.0"
-    supported_failure_modes = ["F14"]
-
-    def detect(
-        self,
-        turns: List[TurnSnapshot],
-        conversation_metadata: Optional[Dict[str, Any]] = None,
-    ) -> TurnAwareDetectionResult:
-        repeated = Counter(turn.participant_id for turn in turns)
-        risky = [
-            turn
-            for turn in turns
-            if repeated[turn.participant_id] > 1
-            and str((turn.turn_metadata or {}).get("http_method") or "").upper()
-            in _UNSAFE_HTTP_METHODS
-            and not (turn.turn_metadata or {}).get("has_idempotency_key")
-        ]
-        if not risky:
-            return _clear(
-                self.name, "No repeated unsafe HTTP action lacked an idempotency key."
-            )
-        names = ", ".join(dict.fromkeys(turn.participant_id for turn in risky))
-        return TurnAwareDetectionResult(
-            detected=True,
-            severity=TurnAwareSeverity.SEVERE,
-            confidence=0.95,
-            failure_mode="n8n_duplicate_side_effect_risk",
-            explanation=(
-                f"n8n ran unsafe HTTP action(s) more than once without an Idempotency-Key: {names}. "
-                "A retry may have repeated an external side effect; add a stable idempotency key before enabling retries."
-            ),
-            affected_turns=sorted({turn.turn_number for turn in risky}),
-            evidence={
-                "nodes": list(dict.fromkeys(turn.participant_id for turn in risky))
-            },
-            suggested_fix="Generate a stable Idempotency-Key from the business event and verify the provider honors it before retrying writes.",
-            detector_name=self.name,
-            detector_version=self.version,
-        )
-
-
-class N8NAgentDiagnosticsDetector(TurnAwareDetector):
-    """Conservative AI-agent diagnostics, active only on observed agent/tool evidence."""
-
-    name = "N8NAgentDiagnosticsDetector"
-    version = "0.1"
-    supported_failure_modes = ["F6", "F14"]
-
-    def detect(
-        self,
-        turns: List[TurnSnapshot],
-        conversation_metadata: Optional[Dict[str, Any]] = None,
-    ) -> TurnAwareDetectionResult:
-        agent_turns = [
-            turn for turn in turns if (turn.turn_metadata or {}).get("is_ai_node")
-        ]
-        if not agent_turns:
-            return _clear(
-                self.name, "No AI-agent telemetry was recorded for this execution."
-            )
-        tool_failures = [
-            turn
-            for turn in _error_turns(turns)
-            if "tool" in str((turn.turn_metadata or {}).get("node_type") or "").lower()
-        ]
-        recovered_tools = [
-            failed
-            for failed in tool_failures
-            if any(agent.turn_number > failed.turn_number for agent in agent_turns)
-        ]
-        if recovered_tools:
-            names = ", ".join(
-                dict.fromkeys(turn.participant_id for turn in recovered_tools)
-            )
-            return TurnAwareDetectionResult(
-                detected=True,
-                severity=TurnAwareSeverity.MODERATE,
-                confidence=0.95,
-                failure_mode="n8n_agent_tool_recovery",
-                explanation=(
-                    f"AI-agent execution continued after a recorded tool failure: {names}. "
-                    "Review the agent's recovery path and validate that downstream actions did not use the failed tool result."
-                ),
-                affected_turns=[turn.turn_number for turn in recovered_tools],
-                evidence={
-                    "tool_nodes": [turn.participant_id for turn in recovered_tools]
-                },
-                suggested_fix="Route failed tool calls through an explicit recovery and output-validation step.",
-                detector_name=self.name,
-                detector_version=self.version,
-            )
-        parser_errors = [
-            turn
-            for turn in _error_turns(agent_turns)
-            if "output"
-            in str((turn.turn_metadata or {}).get("error_message") or "").lower()
-            and any(
-                marker
-                in str((turn.turn_metadata or {}).get("error_message") or "").lower()
-                for marker in ("parse", "schema", "json")
-            )
-        ]
-        if parser_errors:
-            return TurnAwareDetectionResult(
-                detected=True,
-                severity=TurnAwareSeverity.MODERATE,
-                confidence=0.95,
-                failure_mode="n8n_agent_output_validation",
-                explanation=(
-                    "An AI-node output failed n8n's recorded structured-output validation. "
-                    "Align the output parser/schema with the observed model response and retain validation before downstream actions."
-                ),
-                affected_turns=[turn.turn_number for turn in parser_errors],
-                evidence={"nodes": [turn.participant_id for turn in parser_errors]},
-                suggested_fix="Make the output schema explicit and route parser failures to a bounded recovery path.",
-                detector_name=self.name,
-                detector_version=self.version,
-            )
-        return _clear(
-            self.name,
-            "No observed AI-agent tool or output-validation failure was recorded.",
         )

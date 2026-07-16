@@ -8,7 +8,7 @@ from conftest import chain_workflow, fired_names
 STRUCTURAL = {"cycle", "complexity"}
 EXECUTION = {
     "schema", "timeout", "error", "resource", "truncation", "retry_recovery",
-    "error_workflow", "idempotency", "agent_diagnostics",
+    "error_workflow",
 }
 
 

@@ -94,17 +94,6 @@ def _error_details(error: Any, swallowed: Any) -> Tuple[Optional[str], Optional[
         return (str(message) if message else None, None)
 
 
-def _http_request_metadata(
-    parameters: Dict[str, Any], node_type: str
-) -> Tuple[Optional[str], bool]:
-    """Return HTTP method and explicit idempotency-key presence from node config."""
-    if "httprequest" not in node_type.lower():
-        return None, False
-    method = parameters.get("method") or parameters.get("requestMethod") or "GET"
-    encoded = json.dumps(parameters, default=str).lower()
-    return str(method).upper(), "idempotency-key" in encoded
-
-
 def _configured_request_timeout_ms(
     parameters: Dict[str, Any], node_type: str
 ) -> Optional[int]:
@@ -155,9 +144,6 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
         node_params = ndef.get("parameters", {})
         retry_on_fail = bool(ndef.get("retryOnFail"))
         retry_attempts = len(node_runs)
-        http_method, has_idempotency_key = _http_request_metadata(
-            node_params, node_type
-        )
         configured_timeout_ms = _configured_request_timeout_ms(node_params, node_type)
         is_ai = is_ai_node_type(node_type)
 
@@ -243,8 +229,6 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
                         "continue_on_fail": continue_on_fail,
                         "retry_on_fail": retry_on_fail,
                         "attempt_count": retry_attempts,
-                        "http_method": http_method,
-                        "has_idempotency_key": has_idempotency_key,
                         "configured_timeout_ms": configured_timeout_ms,
                         "is_ai_node": is_ai,
                         "finish_reason": finish_reason,
