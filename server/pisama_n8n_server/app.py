@@ -175,9 +175,14 @@ async def n8n_webhook(
     storage: Storage = Depends(get_storage),
 ) -> Dict[str, Any]:
     """Webhook / community-node / error-workflow push channel: receive one n8n
-    execution payload, run both lanes, persist, return the report."""
+    execution payload, run both lanes, persist, return the report. Accepts the plain
+    API export, the flatted DB wire format (a JSON array), and partially-dereferenced
+    DB dumps — normalization happens in process_execution."""
     payload = await request.json()
-    report = process_execution(payload, storage)
+    try:
+        report = process_execution(payload, storage)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     if report.get("detections"):
         await broadcaster.publish(fired_event(report))
     return report

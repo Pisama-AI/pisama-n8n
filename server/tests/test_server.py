@@ -196,3 +196,25 @@ def test_trace_static_for_bare_workflow(client):
 
 def test_trace_unknown_id_404(client):
     assert client.get("/api/v1/detections/999999/trace").status_code == 404
+
+
+# 9. Flatted DB wire format: a dumped execution_data column POSTs and detects.
+#    FLATTED-01-error.json is ERROR-01-throw.json's data column re-encoded in the
+#    `flatted` npm wire format (what n8n stores in the DB) — synthetic, no wild data.
+
+def test_flatted_array_execution_detects_and_persists(client):
+    payload = _load("executions/flatted/FLATTED-01-error.json")
+    assert isinstance(payload, list), "fixture must be the raw flatted ARRAY"
+
+    resp = client.post("/api/v1/n8n/webhook", json=payload)
+    assert resp.status_code == 200, resp.text
+    assert _fired(resp.json(), "error"), resp.json()
+
+    rows = client.get("/api/v1/detections").json()
+    assert any(r["detector"] == "error" and r["detected"] for r in rows), rows
+
+
+def test_undecodable_list_payload_is_422(client):
+    resp = client.post("/api/v1/n8n/webhook", json=[{"file": "notes.json"}, {"x": 1}])
+    assert resp.status_code == 422, resp.text
+    assert "Unrecognized execution payload" in resp.json()["detail"]

@@ -5,6 +5,11 @@ The public n8n `/executions?includeData=true` API (and the community node) retur
 per-node timing / error / output the timeout/error/resource detectors consume. Ported
 verbatim from the calibrated eval harness (proven: timeout node execTime, real error
 status, output size all reach the detectors).
+
+Payloads dumped from n8n's DB or logs arrive in the "flatted" wire format (a JSON array
+of index-referenced entries) or as partially-dereferenced variants of it; both entry
+points normalize those to the plain shape first, so callers can feed any of the wild
+export formats transparently. See ``trace/flatted.py``.
 """
 from __future__ import annotations
 
@@ -13,6 +18,17 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
 from pisama_n8n_engine.detect.base import TurnSnapshot
+from pisama_n8n_engine.trace.flatted import normalize_execution
+
+
+def _normalized(execution_data: Any) -> Dict[str, Any]:
+    normalized = normalize_execution(execution_data)
+    if normalized is None:
+        raise ValueError(
+            "unrecognized n8n execution payload: expected a plain execution export, "
+            "a flatted execution-data array, or a (partially dereferenced) data-column dump"
+        )
+    return normalized
 
 
 def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
@@ -54,8 +70,9 @@ def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
     return None
 
 
-def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
+def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     """Build the per-node runtime turns from a captured execution's runData."""
+    execution_data = _normalized(execution_data)
     turns: List[TurnSnapshot] = []
 
     workflow = execution_data.get("workflow") or execution_data.get("workflowData") or {}
@@ -160,9 +177,10 @@ def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
 
 
 def execution_to_turns_and_metadata(
-    execution_data: Dict[str, Any],
+    execution_data: Any,
 ) -> Tuple[List[TurnSnapshot], Dict[str, Any]]:
     """Turns plus the workflow-level metadata the timeout detector reads."""
+    execution_data = _normalized(execution_data)
     turns = execution_to_turns(execution_data)
     metadata = {
         "workflow_id": execution_data.get("workflowId"),
