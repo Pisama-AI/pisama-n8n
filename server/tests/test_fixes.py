@@ -3,6 +3,7 @@ the full cloud→apply→rollback loop is proven by the live harness (paid_e2e),
 
 import json
 import os
+from asyncio import run
 from copy import deepcopy
 
 from fastapi.testclient import TestClient
@@ -173,3 +174,21 @@ def test_fix_uses_a_fresh_n8n_workflow_as_its_stale_guard_baseline(
         response.json()["repair_id"], include_workflows=True
     )
     assert repair and repair["baseline_workflow"] == live_workflow
+
+
+def test_apply_fix_returns_the_storage_contract_field_names():
+    from pisama_n8n_server.fixes import apply_fix
+
+    baseline = {"name": "Before", "nodes": [], "connections": {}, "settings": {}}
+    proposed = {"name": "After", "nodes": [], "connections": {}, "settings": {}}
+
+    class FakeClient:
+        async def get_workflow(self, _workflow_id):
+            return baseline
+
+        async def update_workflow(self, _workflow_id, workflow):
+            return workflow
+
+    result = run(apply_fix(FakeClient(), "workflow-id", baseline, proposed))
+
+    assert result == {"snapshot": baseline, "applied_workflow": proposed}
