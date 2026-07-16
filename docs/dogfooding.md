@@ -68,7 +68,8 @@ docker compose -p pisama-n8n-cloud-dogfood -f deploy/docker-compose.dogfood.yml 
 ## Evidence required from every run
 
 1. A healthy execution and controlled executions for error, timeout, payload growth,
-   retry/recovery, invalid credentials, broken expression, and bounded/unbounded loop.
+   retry/recovery, invalid credentials, broken expression, error-workflow routing, and
+   bounded/unbounded loop.
 2. The raw execution returned by that real n8n instance, retained only when it contains
    no credentials or customer information.
 3. A webhook-ingestion result and an API-polling result from the same instance.
@@ -129,6 +130,28 @@ past CI result for this check.
 The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
 The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so
 it must never be presented as proof of observed runtime-loop coverage.
+
+## Error-workflow route evidence
+
+For a real failed execution with an `errorWorkflow` setting, the polling server resolves
+the configured target through n8n's API before classifying it. It reports a distinct
+finding only when n8n can prove the route is wrong:
+
+- no configured ID: `n8n_missing_error_workflow`;
+- a target that returns n8n's authoritative `404`:
+  `n8n_error_workflow_target_missing`;
+- an existing target with no `n8n-nodes-base.errorTrigger` node:
+  `n8n_error_workflow_missing_trigger`.
+
+An unavailable target, permission failure, polling delay, or absent handler execution is
+inconclusive. Pisama does not turn those absences into a broken-route finding. It also
+does not require the target to be active, because n8n accepts an Error Trigger workflow
+as the error route without that condition.
+
+Each fired route finding retains a small, authenticated local audit record: source n8n
+execution ID and mode, target ID, resolver outcome, failed node names, and trigger count
+when relevant. This supports review without returning the full raw n8n execution to the
+detection API.
 
 ## Reliability evidence definitions
 

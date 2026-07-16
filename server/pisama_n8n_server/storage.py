@@ -84,10 +84,18 @@ class DetectionRow(Base):
     failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     explanation: Mapped[str] = mapped_column(Text, default="")
     detector_version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Detector-specific, local audit facts. This is intentionally separate from
+    # the raw execution so the authenticated UI/API can explain a verdict without
+    # sending the full n8n payload back to a browser.
+    evidence: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
 
     execution: Mapped["Execution"] = relationship(back_populates="detections")
 
     def to_dict(self) -> Dict[str, Any]:
+        try:
+            evidence = json.loads(self.evidence) if self.evidence else {}
+        except (TypeError, ValueError):
+            evidence = {}
         return {
             "id": self.id,
             "execution_id": self.execution_id,
@@ -97,6 +105,7 @@ class DetectionRow(Base):
             "failure_mode": self.failure_mode,
             "explanation": self.explanation,
             "detector_version": self.detector_version,
+            "evidence": evidence if isinstance(evidence, dict) else {},
         }
 
 
@@ -531,6 +540,7 @@ _ADDED_COLUMNS = {
     },
     "detections": {
         "detector_version": "VARCHAR",
+        "evidence": "TEXT NOT NULL DEFAULT '{}'",
     },
     "reliability_cases": {
         "outcome": "VARCHAR",
@@ -612,6 +622,7 @@ class Storage:
                         failure_mode=d.failure_mode,
                         explanation=d.explanation or "",
                         detector_version=getattr(d, "detector_version", None),
+                        evidence=self._encode(getattr(d, "evidence", {}) or {}),
                     )
                 )
             session.add(execution)

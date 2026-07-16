@@ -271,6 +271,9 @@ def execution_to_turns_and_metadata(
     workflow_json = (
         execution_data.get("workflow") or execution_data.get("workflowData") or {}
     )
+    error_workflow_resolution = (
+        execution_data.get("pisama_error_workflow_resolution") or {}
+    )
     metadata = {
         "workflow_id": execution_data.get("workflowId"),
         "workflow_duration_ms": sum(
@@ -284,6 +287,14 @@ def execution_to_turns_and_metadata(
         "workflow_status": _workflow_status(execution_data),
         "workflow_json": workflow_json,
         "workflow_available": bool(workflow_json),
+        # Polling attaches the configured error workflow after fetching the source
+        # workflow. It remains separate from workflow_json so structural detectors
+        # continue to analyze only the executed workflow.
+        "error_workflow_json": execution_data.get("pisama_error_workflow") or {},
+        "error_workflow_available": bool(execution_data.get("pisama_error_workflow")),
+        "error_workflow_resolution": error_workflow_resolution
+        if isinstance(error_workflow_resolution, dict)
+        else {},
         "execution_id": execution_data.get("id") or execution_data.get("executionId"),
         "retry_of": execution_data.get("retryOf"),
         "retry_success_id": execution_data.get("retrySuccessId"),

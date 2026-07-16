@@ -10,6 +10,7 @@ export interface ServerDetection {
   failure_mode: string | null
   explanation: string
   detector_version?: string | null
+  evidence?: Record<string, unknown>
   // Added by the server (join on executions.received_at); may be absent on
   // older rows, so the adapter falls back.
   received_at?: string
@@ -39,6 +40,7 @@ export interface Detection {
   detected: boolean
   failure_mode: string | null
   detector_version?: string | null
+  evidence?: Record<string, unknown>
   workflow_id?: string | null
   workflow_name?: string | null
   n8n_execution_id?: string | null
@@ -112,6 +114,7 @@ export function adaptDetection(row: ServerDetection): Detection {
     detected: row.detected,
     failure_mode: row.failure_mode,
     detector_version: row.detector_version ?? null,
+    evidence: row.evidence ?? {},
     workflow_id: row.workflow_id ?? null,
     workflow_name: row.workflow_name ?? null,
     n8n_execution_id: row.n8n_execution_id ?? null,

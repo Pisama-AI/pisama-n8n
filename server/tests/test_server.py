@@ -107,6 +107,7 @@ def test_detections_are_persisted_and_listable(client):
     timeout = next(row for row in rows if row["detector"] == "timeout")
     assert timeout["detector_version"] == "1.1"
     assert timeout["build_revision"] == "unknown"
+    assert isinstance(timeout["evidence"], dict)
 
 
 # 4. Auth: with PISAMA_API_KEY set, missing bearer → 401; correct bearer → 200.
@@ -387,3 +388,4 @@ def test_existing_execution_and_detection_tables_receive_provenance_columns(tmp_
     }
     assert "build_revision" in execution_columns
     assert "detector_version" in detection_columns
+    assert "evidence" in detection_columns

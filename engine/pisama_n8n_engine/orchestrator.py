@@ -58,6 +58,9 @@ class Detection:
     # fingerprint is only useful as evidence when its producing detector contract
     # can be identified later.
     detector_version: Optional[str] = None
+    # Small detector-specific facts that support the verdict. The server persists
+    # this locally so an operator can audit a finding without relying on prose.
+    evidence: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -130,6 +133,7 @@ def analyze(
 
 
 def _to_detection(name: str, r: Any, detector_version: str) -> Detection:
+    evidence = getattr(r, "evidence", {}) or {}
     return Detection(
         detector=name,
         detected=bool(getattr(r, "detected", False)),
@@ -137,4 +141,5 @@ def _to_detection(name: str, r: Any, detector_version: str) -> Detection:
         failure_mode=getattr(r, "failure_mode", None),
         explanation=getattr(r, "explanation", "") or "",
         detector_version=detector_version,
+        evidence=evidence if isinstance(evidence, dict) else {},
     )

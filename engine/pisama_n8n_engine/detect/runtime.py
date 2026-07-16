@@ -139,6 +139,110 @@ def _error_turns(turns: Iterable[TurnSnapshot]) -> List[TurnSnapshot]:
     return [turn for turn in turns if (turn.turn_metadata or {}).get("has_error")]
 
 
+def _failed_workflow_status(metadata: Dict[str, Any]) -> bool:
+    """Whether n8n recorded a workflow status that needs error-route review."""
+    return str(metadata.get("workflow_status") or "").lower() in {
+        "error",
+        "crashed",
+        "failed",
+    }
+
+
+def _failed_turn_numbers(failed: List[TurnSnapshot]) -> List[int]:
+    return [turn.turn_number for turn in failed]
+
+
+def _failed_node_names(failed: List[TurnSnapshot]) -> List[str]:
+    return [turn.participant_id for turn in failed]
+
+
+def _error_route_evidence(
+    metadata: Dict[str, Any], error_workflow_id: Any, failed: List[TurnSnapshot]
+) -> Dict[str, Any]:
+    """Return the small, non-payload audit record for an error-route finding."""
+    resolution = metadata.get("error_workflow_resolution") or {}
+    status = resolution.get("status") if isinstance(resolution, dict) else None
+    return {
+        "source_execution_id": metadata.get("execution_id"),
+        "source_mode": metadata.get("workflow_mode"),
+        "error_workflow_id": str(error_workflow_id),
+        "resolver_status": status or "unverifiable",
+        "failed_nodes": _failed_node_names(failed),
+    }
+
+
+def _error_trigger_count(metadata: Dict[str, Any]) -> Optional[int]:
+    """Count a resolved n8n target's Error Trigger nodes, or return unknown."""
+    error_workflow = metadata.get("error_workflow_json") or {}
+    nodes = error_workflow.get("nodes") if isinstance(error_workflow, dict) else None
+    if not isinstance(nodes, list):
+        return None
+    return sum(
+        isinstance(node, dict)
+        and str(node.get("type") or "") == "n8n-nodes-base.errorTrigger"
+        for node in nodes
+    )
+
+
+def _configured_error_route_result(
+    detector_name: str,
+    detector_version: str,
+    metadata: Dict[str, Any],
+    error_workflow_id: Any,
+    failed: List[TurnSnapshot],
+) -> TurnAwareDetectionResult:
+    """Classify a configured route only when the n8n resolver proves its state."""
+    evidence = _error_route_evidence(metadata, error_workflow_id, failed)
+    status = evidence["resolver_status"]
+    if status == "missing":
+        return TurnAwareDetectionResult(
+            detected=True,
+            severity=TurnAwareSeverity.MODERATE,
+            confidence=0.95,
+            failure_mode="n8n_error_workflow_target_missing",
+            explanation=(
+                "This execution failed, and n8n's configured error-workflow ID no longer exists. "
+                "Route incidents to an existing Error Trigger workflow."
+            ),
+            affected_turns=_failed_turn_numbers(failed),
+            evidence=evidence,
+            suggested_fix="Choose an existing reviewed Error Trigger workflow and attach its current ID in this workflow's errorWorkflow setting.",
+            detector_name=detector_name,
+            detector_version=detector_version,
+        )
+    if status != "available":
+        return _clear(
+            detector_name,
+            "The configured error workflow could not be read, so its route is not classified.",
+        )
+    error_trigger_count = _error_trigger_count(metadata)
+    if error_trigger_count is None:
+        return _clear(
+            detector_name,
+            "The configured error workflow could not be read, so its route is not classified.",
+        )
+    if error_trigger_count:
+        return _clear(
+            detector_name,
+            "The failed workflow's configured error route contains an Error Trigger.",
+        )
+    return TurnAwareDetectionResult(
+        detected=True,
+        severity=TurnAwareSeverity.MODERATE,
+        confidence=0.95,
+        failure_mode="n8n_error_workflow_missing_trigger",
+        explanation=(
+            "This execution failed, and its configured n8n error workflow has no Error Trigger node. "
+            "n8n cannot use that workflow as an incident route."
+        ),
+        affected_turns=_failed_turn_numbers(failed),
+        evidence={**evidence, "error_trigger_count": 0},
+        suggested_fix="Replace the target with a reviewed Error Trigger workflow, then run a controlled failure to confirm it receives the incident.",
+        detector_name=detector_name,
+        detector_version=detector_version,
+    )
+
+
 class N8NTruncationDetector(TurnAwareDetector):
     """Detect an LLM output explicitly stopped at its token budget."""
 
@@ -245,10 +349,10 @@ class N8NRetryRecoveryDetector(TurnAwareDetector):
 
 
 class N8NErrorWorkflowDetector(TurnAwareDetector):
-    """Flag a real failed execution that lacks an n8n error-workflow route."""
+    """Flag a failed execution with no route or a verified invalid error route."""
 
     name = "N8NErrorWorkflowDetector"
-    version = "1.0"
+    version = "1.1"
     supported_failure_modes = ["F14"]
 
     def detect(
@@ -257,11 +361,7 @@ class N8NErrorWorkflowDetector(TurnAwareDetector):
         conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
         metadata = conversation_metadata or {}
-        if str(metadata.get("workflow_status") or "").lower() not in {
-            "error",
-            "crashed",
-            "failed",
-        }:
+        if not _failed_workflow_status(metadata):
             return _clear(
                 self.name, "No failed execution requires an error-workflow check."
             )
@@ -272,15 +372,19 @@ class N8NErrorWorkflowDetector(TurnAwareDetector):
             )
         workflow = metadata.get("workflow_json") or {}
         settings = workflow.get("settings") or {}
-        has_error_workflow = bool(settings.get("errorWorkflow"))
-        if has_error_workflow:
-            return _clear(
-                self.name, "The failed workflow has an error-workflow route configured."
-            )
         failed = _error_turns(turns)
         if not failed:
             return _clear(
                 self.name, "The execution failed without a node error to route."
+            )
+        error_workflow_id = settings.get("errorWorkflow")
+        if error_workflow_id:
+            return _configured_error_route_result(
+                self.name,
+                self.version,
+                metadata,
+                error_workflow_id,
+                failed,
             )
         return TurnAwareDetectionResult(
             detected=True,
@@ -291,8 +395,8 @@ class N8NErrorWorkflowDetector(TurnAwareDetector):
                 "This execution failed and its workflow has no configured n8n error workflow. "
                 "Create a dedicated Error Trigger workflow for alerting and attach its workflow ID in settings."
             ),
-            affected_turns=[turn.turn_number for turn in failed],
-            evidence={"failed_nodes": [turn.participant_id for turn in failed]},
+            affected_turns=_failed_turn_numbers(failed),
+            evidence={"failed_nodes": _failed_node_names(failed)},
             suggested_fix="Create and review a dedicated Error Trigger workflow, then attach it as this workflow's errorWorkflow setting.",
             detector_name=self.name,
             detector_version=self.version,

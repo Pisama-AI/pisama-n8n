@@ -23,12 +23,22 @@ pytestmark = pytest.mark.skipif(
 
 N8N_URL = os.environ.get("PISAMA_TEST_N8N_URL", "http://127.0.0.1:5679")
 OWNER = ("harness@pisama.test", "PisamaHarness123!")
+_PROVISIONED_KEY: str | None = None
 
 
 def _provision_key() -> str:
+    """Provision one scoped harness key per test process, never one per test.
+
+    Creating a fresh REST session and API key for every case eventually rate-limits
+    n8n's login endpoint. Reusing this short-lived key keeps the live suite an
+    accurate product test rather than a test of the harness rate limiter.
+    """
+    global _PROVISIONED_KEY
     configured_key = os.environ.get("PISAMA_TEST_N8N_API_KEY")
     if configured_key:
         return configured_key
+    if _PROVISIONED_KEY:
+        return _PROVISIONED_KEY
     with httpx.Client(base_url=N8N_URL, timeout=30) as c:
         c.post(
             "/rest/owner/setup",
@@ -39,30 +49,44 @@ def _provision_key() -> str:
                 "password": OWNER[1],
             },
         )
-        c.post(
+        login = c.post(
             "/rest/login", json={"emailOrLdapLoginId": OWNER[0], "password": OWNER[1]}
         )
+        login.raise_for_status()
         tok = c.cookies.get("n8n-auth")
         h = {"Cookie": f"n8n-auth={tok}"}
-        sc = c.get("/rest/api-keys/scopes", headers=h).json().get("data", [])
+        scopes_response = c.get("/rest/api-keys/scopes", headers=h)
+        scopes_response.raise_for_status()
+        sc = scopes_response.json().get("data", [])
         scopes = [s for s in sc if s.startswith(("workflow:", "execution:"))]
         r = c.post(
             "/rest/api-keys",
             json={
-                "label": f"poll-test-{int(time.time())}",
+                "label": f"poll-test-{uuid.uuid4().hex}",
                 "expiresAt": int(time.time()) + 3600,
                 "scopes": scopes,
             },
             headers=h,
         )
-        return r.json()["data"]["rawApiKey"]
+        r.raise_for_status()
+        _PROVISIONED_KEY = r.json()["data"]["rawApiKey"]
+        return _PROVISIONED_KEY
 
 
 def _create_active_workflow(
-    key: str, name: str, nodes: List[Dict[str, Any]], connections: Dict[str, Any]
+    key: str,
+    name: str,
+    nodes: List[Dict[str, Any]],
+    connections: Dict[str, Any],
+    settings: Dict[str, Any] | None = None,
 ) -> str:
     """Create one disposable real n8n workflow and return its API id."""
-    wf = {"name": name, "settings": {}, "nodes": nodes, "connections": connections}
+    wf = {
+        "name": name,
+        "settings": settings or {},
+        "nodes": nodes,
+        "connections": connections,
+    }
     h = {"X-N8N-API-KEY": key}
     with httpx.Client(base_url=N8N_URL + "/api/v1", headers=h, timeout=30) as c:
         body = c.post("/workflows", json=wf).json()
@@ -116,6 +140,86 @@ def _run_failing_workflow(key: str) -> str:
     _trigger_webhook(path)
     time.sleep(2)
     return wid
+
+
+def _run_failing_workflow_with_invalid_error_route(key: str) -> Tuple[str, str]:
+    """Capture n8n silently skipping a configured target without Error Trigger."""
+    suffix = uuid.uuid4().hex[:8]
+    target_path = f"error-route-target-{suffix}"
+    source_path = f"error-route-source-{suffix}"
+    target = _create_active_webhook_workflow(
+        key,
+        target_path,
+        f"poll-{target_path}",
+        {
+            "id": "target-code",
+            "name": "Ordinary target node",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [220, 0],
+            "parameters": {"jsCode": "return [{ json: { target: true } }];"},
+        },
+    )
+    source = _create_active_workflow(
+        key,
+        f"poll-{source_path}",
+        [
+            _webhook_node(source_path),
+            {
+                "id": "source-boom",
+                "name": "Source failure",
+                "type": "n8n-nodes-base.code",
+                "typeVersion": 2,
+                "position": [220, 0],
+                "parameters": {
+                    "jsCode": "throw new Error('controlled invalid error route');"
+                },
+            },
+        ],
+        {
+            "Webhook": {
+                "main": [[{"node": "Source failure", "type": "main", "index": 0}]]
+            }
+        },
+        settings={"errorWorkflow": target},
+    )
+    response = _trigger_webhook(source_path)
+    assert response.status_code == 500, response.text
+    time.sleep(2)
+    return source, target
+
+
+def _run_failing_workflow_with_missing_error_target(key: str) -> str:
+    """Capture an accepted n8n error-workflow ID that no longer exists."""
+    suffix = uuid.uuid4().hex[:8]
+    source_path = f"error-route-missing-{suffix}"
+    source = _create_active_workflow(
+        key,
+        f"poll-{source_path}",
+        [
+            _webhook_node(source_path),
+            {
+                "id": "source-boom",
+                "name": "Source failure",
+                "type": "n8n-nodes-base.code",
+                "typeVersion": 2,
+                "position": [220, 0],
+                "parameters": {
+                    "jsCode": "throw new Error('controlled missing error route');"
+                },
+            },
+        ],
+        {
+            "Webhook": {
+                "main": [[{"node": "Source failure", "type": "main", "index": 0}]]
+            }
+        },
+        settings={"errorWorkflow": f"missing-{suffix}"},
+    )
+    response = _trigger_webhook(source_path)
+    assert response.status_code == 500, response.text
+    time.sleep(2)
+    return source
 
 
 def _run_timeout_workflow(key: str) -> str:
@@ -293,6 +397,74 @@ def test_poll_ingests_and_dedups(tmp_path, monkeypatch):
         assert r2.json()["new"] == 0
     finally:
         _delete_workflows(key, [wid])
+
+
+def test_poll_detects_real_invalid_error_workflow_route(tmp_path, monkeypatch):
+    """An actual failed execution reveals a configured target without Error Trigger.
+
+    n8n accepts the target but does not execute it. The detector must name that
+    configuration defect rather than treating every nonempty errorWorkflow id as safe.
+    """
+    key = _provision_key()
+    source_id, target_id = _run_failing_workflow_with_invalid_error_route(key)
+    try:
+        client, headers, _ = _polling_client(
+            tmp_path, monkeypatch, key, "broken-error-route.db"
+        )
+        sync = client.post("/api/v1/n8n/sync", headers=headers)
+        assert sync.status_code == 200, sync.text
+        detections = client.get("/api/v1/detections", headers=headers).json()
+        source_fired = _fired_for_workflow(detections, source_id)
+        assert (
+            "error_workflow",
+            "n8n_error_workflow_missing_trigger",
+        ) in source_fired
+        assert ("error_workflow", "n8n_missing_error_workflow") not in source_fired
+        assert not _execution_ids_for_workflow(detections, target_id)
+        route = next(
+            row
+            for row in detections
+            if row["workflow_id"] == source_id
+            and row["failure_mode"] == "n8n_error_workflow_missing_trigger"
+        )
+        assert route["evidence"] == {
+            "error_trigger_count": 0,
+            "error_workflow_id": target_id,
+            "failed_nodes": ["Source failure"],
+            "resolver_status": "available",
+            "source_execution_id": route["n8n_execution_id"],
+            "source_mode": "webhook",
+        }
+    finally:
+        _delete_workflows(key, [source_id, target_id])
+
+
+def test_poll_detects_real_missing_error_workflow_target(tmp_path, monkeypatch):
+    """n8n accepts a stale error-workflow ID and only exposes it at poll time."""
+    key = _provision_key()
+    source_id = _run_failing_workflow_with_missing_error_target(key)
+    try:
+        client, headers, _ = _polling_client(
+            tmp_path, monkeypatch, key, "missing-error-target.db"
+        )
+        sync = client.post("/api/v1/n8n/sync", headers=headers)
+        assert sync.status_code == 200, sync.text
+        detections = client.get("/api/v1/detections", headers=headers).json()
+        source_fired = _fired_for_workflow(detections, source_id)
+        assert (
+            "error_workflow",
+            "n8n_error_workflow_target_missing",
+        ) in source_fired
+        route = next(
+            row
+            for row in detections
+            if row["workflow_id"] == source_id
+            and row["failure_mode"] == "n8n_error_workflow_target_missing"
+        )
+        assert route["evidence"].get("resolver_status") == "missing"
+        assert route["evidence"].get("error_workflow_id", "").startswith("missing-")
+    finally:
+        _delete_workflows(key, [source_id])
 
 
 def test_poll_classifies_a_real_n8n_request_timeout(tmp_path, monkeypatch):

@@ -59,6 +59,18 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
     ),
     EvidenceTarget(
         "P2",
+        "Error workflow target missing",
+        "error_workflow",
+        "n8n_error_workflow_target_missing",
+    ),
+    EvidenceTarget(
+        "P2",
+        "Error workflow missing Error Trigger",
+        "error_workflow",
+        "n8n_error_workflow_missing_trigger",
+    ),
+    EvidenceTarget(
+        "P2",
         "Duplicate side-effect risk",
         "idempotency",
         "n8n_duplicate_side_effect_risk",
