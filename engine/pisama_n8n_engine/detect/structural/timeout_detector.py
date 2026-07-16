@@ -22,6 +22,7 @@ from pisama_n8n_engine.detect.base import (
     TurnAwareDetectionResult,
     TurnAwareSeverity,
 )
+from pisama_n8n_engine.detect.runtime import recorded_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class N8NTimeoutDetector(TurnAwareDetector):
     """
 
     name = "N8NTimeoutDetector"
-    version = "1.0"
+    version = "1.1"
     supported_failure_modes = ["F13"]
 
     def __init__(
@@ -179,7 +180,11 @@ class N8NTimeoutDetector(TurnAwareDetector):
                 node_type, self.node_timeout_thresholds["default"]
             )
 
-            if execution_time_ms > threshold:
+            configured_timeout = turn.turn_metadata.get("configured_timeout_ms")
+            is_recorded_timeout = recorded_timeout(turn)
+            if is_recorded_timeout:
+                threshold = int(configured_timeout)
+            if is_recorded_timeout or execution_time_ms > threshold:
                 timeout_nodes.append(
                     {
                         "turn": turn.turn_number,
@@ -187,6 +192,7 @@ class N8NTimeoutDetector(TurnAwareDetector):
                         "node_type": node_type,
                         "duration_ms": execution_time_ms,
                         "threshold_ms": threshold,
+                        "recorded_timeout": is_recorded_timeout,
                     }
                 )
 
@@ -413,14 +419,16 @@ class N8NTimeoutDetector(TurnAwareDetector):
             or wf_settings.get("maxExecutionTimeout") is not None
         )
         if not has_wf_timeout:
-            issues.append({
-                "detected": True,
-                "type": "missing_workflow_timeout",
-                "explanation": (
-                    "Workflow has no execution timeout setting -- a misbehaving node "
-                    "could cause the workflow to run indefinitely"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "missing_workflow_timeout",
+                    "explanation": (
+                        "Workflow has no execution timeout setting -- a misbehaving node "
+                        "could cause the workflow to run indefinitely"
+                    ),
+                }
+            )
 
         # --- 2: Webhook trigger nodes without response timeout ---
         webhook_no_timeout: List[Dict[str, Any]] = []
@@ -430,7 +438,10 @@ class N8NTimeoutDetector(TurnAwareDetector):
                 if "webhook" not in node_type.lower():
                     continue
                 # Only consider trigger / webhook nodes, not generic ones
-                if "trigger" not in node_type.lower() and node_type not in self._WEBHOOK_NODE_TYPES:
+                if (
+                    "trigger" not in node_type.lower()
+                    and node_type not in self._WEBHOOK_NODE_TYPES
+                ):
                     continue
 
             params = node.get("parameters", {}) or {}
@@ -442,21 +453,25 @@ class N8NTimeoutDetector(TurnAwareDetector):
                 or options.get("timeout") is not None
             )
             if not has_response_timeout:
-                webhook_no_timeout.append({
-                    "node_name": node.get("name", "unknown"),
-                    "node_type": node_type,
-                })
+                webhook_no_timeout.append(
+                    {
+                        "node_name": node.get("name", "unknown"),
+                        "node_type": node_type,
+                    }
+                )
 
         if webhook_no_timeout:
-            issues.append({
-                "detected": True,
-                "type": "webhook_no_response_timeout",
-                "nodes": webhook_no_timeout,
-                "explanation": (
-                    f"{len(webhook_no_timeout)} webhook trigger node(s) have no response "
-                    "timeout -- callers may wait indefinitely for a response"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "webhook_no_response_timeout",
+                    "nodes": webhook_no_timeout,
+                    "explanation": (
+                        f"{len(webhook_no_timeout)} webhook trigger node(s) have no response "
+                        "timeout -- callers may wait indefinitely for a response"
+                    ),
+                }
+            )
 
         # --- 3: HTTP request nodes without timeout ---
         http_no_timeout: List[Dict[str, Any]] = []
@@ -470,25 +485,28 @@ class N8NTimeoutDetector(TurnAwareDetector):
             params = node.get("parameters", {}) or {}
             options = params.get("options", {}) or {}
             has_timeout = (
-                params.get("timeout") is not None
-                or options.get("timeout") is not None
+                params.get("timeout") is not None or options.get("timeout") is not None
             )
             if not has_timeout:
-                http_no_timeout.append({
-                    "node_name": node.get("name", "unknown"),
-                    "node_type": node_type,
-                })
+                http_no_timeout.append(
+                    {
+                        "node_name": node.get("name", "unknown"),
+                        "node_type": node_type,
+                    }
+                )
 
         if http_no_timeout:
-            issues.append({
-                "detected": True,
-                "type": "http_no_timeout",
-                "nodes": http_no_timeout,
-                "explanation": (
-                    f"{len(http_no_timeout)} HTTP request node(s) have no timeout -- "
-                    "slow or unresponsive endpoints could stall the workflow"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "http_no_timeout",
+                    "nodes": http_no_timeout,
+                    "explanation": (
+                        f"{len(http_no_timeout)} HTTP request node(s) have no timeout -- "
+                        "slow or unresponsive endpoints could stall the workflow"
+                    ),
+                }
+            )
 
         # --- 4: AI nodes without timeout ---
         ai_no_timeout: List[Dict[str, Any]] = []
@@ -508,21 +526,25 @@ class N8NTimeoutDetector(TurnAwareDetector):
                 or options.get("requestTimeout") is not None
             )
             if not has_timeout:
-                ai_no_timeout.append({
-                    "node_name": node.get("name", "unknown"),
-                    "node_type": node_type,
-                })
+                ai_no_timeout.append(
+                    {
+                        "node_name": node.get("name", "unknown"),
+                        "node_type": node_type,
+                    }
+                )
 
         if ai_no_timeout:
-            issues.append({
-                "detected": True,
-                "type": "ai_no_timeout",
-                "nodes": ai_no_timeout,
-                "explanation": (
-                    f"{len(ai_no_timeout)} AI node(s) have no timeout configuration -- "
-                    "LLM API calls can take minutes and may hang on provider outages"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "ai_no_timeout",
+                    "nodes": ai_no_timeout,
+                    "explanation": (
+                        f"{len(ai_no_timeout)} AI node(s) have no timeout configuration -- "
+                        "LLM API calls can take minutes and may hang on provider outages"
+                    ),
+                }
+            )
 
         # --- 5: Merge / Wait nodes that could stall ---
         stall_risk_nodes: List[Dict[str, Any]] = []
@@ -554,22 +576,26 @@ class N8NTimeoutDetector(TurnAwareDetector):
                 or options.get("maxWaitTime") is not None
             )
             if not has_timeout:
-                stall_risk_nodes.append({
-                    "node_name": node.get("name", "unknown"),
-                    "node_type": node_type,
-                    "mode": mode or "wait",
-                })
+                stall_risk_nodes.append(
+                    {
+                        "node_name": node.get("name", "unknown"),
+                        "node_type": node_type,
+                        "mode": mode or "wait",
+                    }
+                )
 
         if stall_risk_nodes:
-            issues.append({
-                "detected": True,
-                "type": "merge_wait_stall_risk",
-                "nodes": stall_risk_nodes,
-                "explanation": (
-                    f"{len(stall_risk_nodes)} Merge/Wait node(s) could stall indefinitely -- "
-                    "they wait for all branches or external events without a timeout"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "merge_wait_stall_risk",
+                    "nodes": stall_risk_nodes,
+                    "explanation": (
+                        f"{len(stall_risk_nodes)} Merge/Wait node(s) could stall indefinitely -- "
+                        "they wait for all branches or external events without a timeout"
+                    ),
+                }
+            )
 
         # --- Build result ---
         if not issues:
@@ -618,9 +644,7 @@ class N8NTimeoutDetector(TurnAwareDetector):
                 "callers from waiting indefinitely"
             )
         if http_no_timeout:
-            fixes.append(
-                "Add timeout to HTTP request node options (e.g. 30000 ms)"
-            )
+            fixes.append("Add timeout to HTTP request node options (e.g. 30000 ms)")
         if ai_no_timeout:
             fixes.append(
                 "Configure timeout or requestTimeout on AI nodes to handle provider slowdowns"

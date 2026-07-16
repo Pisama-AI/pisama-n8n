@@ -105,7 +105,7 @@ def test_detections_are_persisted_and_listable(client):
     # Every new row retains the detector semantic contract and the image revision
     # that produced it. A local TestClient has no injected image revision.
     timeout = next(row for row in rows if row["detector"] == "timeout")
-    assert timeout["detector_version"] == "1.0"
+    assert timeout["detector_version"] == "1.1"
     assert timeout["build_revision"] == "unknown"
 
 

@@ -11,6 +11,7 @@ of index-referenced entries) or as partially-dereferenced variants of it; both e
 points normalize those to the plain shape first, so callers can feed any of the wild
 export formats transparently. See ``trace/flatted.py``.
 """
+
 from __future__ import annotations
 
 import json
@@ -52,7 +53,11 @@ def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
             first = main[1][0] if isinstance(main[1], list) and main[1] else None
             j = first.get("json") if isinstance(first, dict) else None
             msg = (j.get("error") or j.get("message")) if isinstance(j, dict) else None
-            return msg if isinstance(msg, str) and msg.strip() else "node routed items to its error output"
+            return (
+                msg
+                if isinstance(msg, str) and msg.strip()
+                else "node routed items to its error output"
+            )
         return None
 
     if on_error == "continueRegularOutput":
@@ -81,12 +86,17 @@ def _error_details(error: Any, swallowed: Any) -> Tuple[Optional[str], Optional[
         message = error or swallowed
         status = None
     try:
-        return (str(message) if message else None, int(status) if status is not None else None)
+        return (
+            str(message) if message else None,
+            int(status) if status is not None else None,
+        )
     except (TypeError, ValueError):
         return (str(message) if message else None, None)
 
 
-def _http_request_metadata(parameters: Dict[str, Any], node_type: str) -> Tuple[Optional[str], bool]:
+def _http_request_metadata(
+    parameters: Dict[str, Any], node_type: str
+) -> Tuple[Optional[str], bool]:
     """Return HTTP method and explicit idempotency-key presence from node config."""
     if "httprequest" not in node_type.lower():
         return None, False
@@ -95,14 +105,35 @@ def _http_request_metadata(parameters: Dict[str, Any], node_type: str) -> Tuple[
     return str(method).upper(), "idempotency-key" in encoded
 
 
+def _configured_request_timeout_ms(
+    parameters: Dict[str, Any], node_type: str
+) -> Optional[int]:
+    """Return a positive n8n HTTP-request timeout when the workflow set one."""
+    if "httprequest" not in node_type.lower():
+        return None
+    options = parameters.get("options")
+    value = parameters.get("timeout")
+    if value is None and isinstance(options, dict):
+        value = options.get("timeout")
+    try:
+        timeout_ms = int(value)
+    except (TypeError, ValueError):
+        return None
+    return timeout_ms if timeout_ms > 0 else None
+
+
 def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     """Build the per-node runtime turns from a captured execution's runData."""
     execution_data = _normalized(execution_data)
     turns: List[TurnSnapshot] = []
 
-    workflow = execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    workflow = (
+        execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    )
     wf_nodes = workflow.get("nodes", [])
-    node_defs = {n.get("name"): n for n in wf_nodes if isinstance(n, dict) and n.get("name")}
+    node_defs = {
+        n.get("name"): n for n in wf_nodes if isinstance(n, dict) and n.get("name")
+    }
 
     started_at = None
     started_at_str = execution_data.get("startedAt")
@@ -124,7 +155,10 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
         node_params = ndef.get("parameters", {})
         retry_on_fail = bool(ndef.get("retryOnFail"))
         retry_attempts = len(node_runs)
-        http_method, has_idempotency_key = _http_request_metadata(node_params, node_type)
+        http_method, has_idempotency_key = _http_request_metadata(
+            node_params, node_type
+        )
+        configured_timeout_ms = _configured_request_timeout_ms(node_params, node_type)
         is_ai = is_ai_node_type(node_type)
 
         # n8n stores continue-on-fail config at the NODE level (`onError`), not under
@@ -132,8 +166,10 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
         # top-level `continueOnFail` bool. Read all three so real polled data — where
         # `onError` is a sibling of `parameters` — is read faithfully.
         node_settings = ndef.get("settings") or {}
-        on_error = (ndef.get("onError") or node_params.get("onError") or "")
-        if not on_error and (node_settings.get("continueOnFail") or ndef.get("continueOnFail")):
+        on_error = ndef.get("onError") or node_params.get("onError") or ""
+        if not on_error and (
+            node_settings.get("continueOnFail") or ndef.get("continueOnFail")
+        ):
             # The legacy boolean behaves like continueRegularOutput: the errored item
             # flows through the regular output. Without this mapping, a swallowed
             # failure on a legacy-config node is invisible — found on a REAL community
@@ -169,10 +205,16 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
                 except (TypeError, ValueError):
                     content_parts.append(str(output_data))
             if error_info:
-                msg = error_info.get("message", "") if isinstance(error_info, dict) else str(error_info)
+                msg = (
+                    error_info.get("message", "")
+                    if isinstance(error_info, dict)
+                    else str(error_info)
+                )
                 content_parts.append(f"ERROR: {msg}")
             elif swallowed:
-                content_parts.append(f"ERROR (continue-on-fail, swallowed): {swallowed}")
+                content_parts.append(
+                    f"ERROR (continue-on-fail, swallowed): {swallowed}"
+                )
 
             start_time = run.get("startTime")
             if start_time:
@@ -183,33 +225,38 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
             else:
                 timestamp = base_time + timedelta(milliseconds=seq * 1000)
 
-            turns.append(TurnSnapshot(
-                turn_number=seq,
-                participant_type="node",
-                participant_id=node_name,
-                content="\n".join(content_parts),
-                turn_metadata={
-                    "node_type": node_type,
-                    "timestamp": timestamp.isoformat(),
-                    "execution_time_ms": execution_time_ms,
-                    "parameters": node_params,
-                    "status": execution_status,
-                    "has_error": error_info is not None or swallowed is not None,
-                    "error_message": error_message,
-                    "http_status": http_status,
-                    "continue_on_fail": continue_on_fail,
-                    "retry_on_fail": retry_on_fail,
-                    "attempt_count": retry_attempts,
-                    "http_method": http_method,
-                    "has_idempotency_key": has_idempotency_key,
-                    "is_ai_node": is_ai,
-                    "finish_reason": finish_reason,
-                    # Structured per-run output item count, so detectors don't have to
-                    # re-derive it from the rendered content string (which leads with a
-                    # "Node: ..." header and defeats naive JSON parsing).
-                    "items_out": len(output_data) if isinstance(output_data, list) else 0,
-                },
-            ))
+            turns.append(
+                TurnSnapshot(
+                    turn_number=seq,
+                    participant_type="node",
+                    participant_id=node_name,
+                    content="\n".join(content_parts),
+                    turn_metadata={
+                        "node_type": node_type,
+                        "timestamp": timestamp.isoformat(),
+                        "execution_time_ms": execution_time_ms,
+                        "parameters": node_params,
+                        "status": execution_status,
+                        "has_error": error_info is not None or swallowed is not None,
+                        "error_message": error_message,
+                        "http_status": http_status,
+                        "continue_on_fail": continue_on_fail,
+                        "retry_on_fail": retry_on_fail,
+                        "attempt_count": retry_attempts,
+                        "http_method": http_method,
+                        "has_idempotency_key": has_idempotency_key,
+                        "configured_timeout_ms": configured_timeout_ms,
+                        "is_ai_node": is_ai,
+                        "finish_reason": finish_reason,
+                        # Structured per-run output item count, so detectors don't have to
+                        # re-derive it from the rendered content string (which leads with a
+                        # "Node: ..." header and defeats naive JSON parsing).
+                        "items_out": len(output_data)
+                        if isinstance(output_data, list)
+                        else 0,
+                    },
+                )
+            )
             seq += 1
 
     return turns
@@ -221,7 +268,9 @@ def execution_to_turns_and_metadata(
     """Turns plus the workflow-level metadata the timeout detector reads."""
     execution_data = _normalized(execution_data)
     turns = execution_to_turns(execution_data)
-    workflow_json = execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    workflow_json = (
+        execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    )
     metadata = {
         "workflow_id": execution_data.get("workflowId"),
         "workflow_duration_ms": sum(
@@ -255,7 +304,9 @@ def _workflow_status(execution_data: Dict[str, Any]) -> str:
     status = execution_data.get("status")
     if status:
         return status
-    top_error = ((execution_data.get("data") or {}).get("resultData") or {}).get("error")
+    top_error = ((execution_data.get("data") or {}).get("resultData") or {}).get(
+        "error"
+    )
     if execution_data.get("finished") is False or top_error:
         return "error"
     return "success"

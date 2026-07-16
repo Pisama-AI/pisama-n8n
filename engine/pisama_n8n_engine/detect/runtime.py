@@ -3,6 +3,7 @@
 These detectors intentionally consume only facts n8n recorded for an execution or
 its workflow snapshot.  They do not infer an incident from a workflow's appearance.
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -40,6 +41,42 @@ _PROVIDER_MARKERS = (
     "bad gateway",
     "gateway timeout",
 )
+_N8N_ABORTED_CONNECTION = "connection was aborted"
+
+
+def recorded_timeout(turn: TurnSnapshot) -> bool:
+    """Recognize n8n's recorded HTTP-timeout shape without guessing from text.
+
+    n8n 1.91 recorded a configured HTTP timeout as ``connection was aborted`` rather
+    than the word ``timeout``. Require all three facts, a failed node, an explicit
+    request timeout, and elapsed time close to that limit, before classifying it.
+    """
+    metadata = turn.turn_metadata or {}
+    if not metadata.get("has_error"):
+        return False
+    timeout_ms = metadata.get("configured_timeout_ms")
+    execution_time_ms = metadata.get("execution_time_ms")
+    try:
+        timeout_ms = int(timeout_ms)
+        execution_time_ms = int(execution_time_ms)
+    except (TypeError, ValueError):
+        return False
+    message = str(metadata.get("error_message") or turn.content).lower()
+    return (
+        timeout_ms > 0
+        and execution_time_ms >= timeout_ms * 0.75
+        and _N8N_ABORTED_CONNECTION in message
+    )
+
+
+def _contains_marker(message: str, markers: Iterable[str]) -> bool:
+    return any(marker in message for marker in markers)
+
+
+def _is_provider_error(status_code: Any, message: str) -> bool:
+    return (isinstance(status_code, int) and status_code >= 500) or _contains_marker(
+        message, _PROVIDER_MARKERS
+    )
 
 
 def classify_error(turn: TurnSnapshot) -> str:
@@ -47,22 +84,31 @@ def classify_error(turn: TurnSnapshot) -> str:
     metadata = turn.turn_metadata or {}
     status_code = metadata.get("http_status")
     message = str(metadata.get("error_message") or turn.content).lower()
-    if status_code == 429 or "too many requests" in message or "rate limit" in message:
-        return "rate_limit"
-    if status_code in (401, 403) or any(
-        marker in message
-        for marker in ("unauthorized", "authentication", "invalid credential", "forbidden")
-    ):
-        return "credential"
-    if any(marker in message for marker in _EXPRESSION_MARKERS):
-        return "expression"
-    if isinstance(status_code, int) and status_code >= 500 or any(
-        marker in message for marker in _PROVIDER_MARKERS
-    ):
-        return "provider"
-    if any(marker in message for marker in ("timed out", "timeout", "etimedout", "deadline exceeded")):
-        return "timeout"
-    return "node_error"
+    checks = (
+        (
+            "rate_limit",
+            status_code == 429
+            or _contains_marker(message, ("too many requests", "rate limit")),
+        ),
+        (
+            "credential",
+            status_code in (401, 403)
+            or _contains_marker(
+                message,
+                ("unauthorized", "authentication", "invalid credential", "forbidden"),
+            ),
+        ),
+        ("expression", _contains_marker(message, _EXPRESSION_MARKERS)),
+        ("timeout", recorded_timeout(turn)),
+        ("provider", _is_provider_error(status_code, message)),
+        (
+            "timeout",
+            _contains_marker(
+                message, ("timed out", "timeout", "etimedout", "deadline exceeded")
+            ),
+        ),
+    )
+    return next((category for category, matches in checks if matches), "node_error")
 
 
 def remediation_for(category: str) -> str:
@@ -101,15 +147,20 @@ class N8NTruncationDetector(TurnAwareDetector):
     supported_failure_modes = ["F6"]
 
     def detect(
-        self, turns: List[TurnSnapshot], conversation_metadata: Optional[Dict[str, Any]] = None
+        self,
+        turns: List[TurnSnapshot],
+        conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
         truncated = [
-            turn for turn in turns
+            turn
+            for turn in turns
             if str((turn.turn_metadata or {}).get("finish_reason") or "").lower()
             in TRUNCATION_VALUES
         ]
         if not truncated:
-            return _clear(self.name, "No recorded AI-node output reached a token limit.")
+            return _clear(
+                self.name, "No recorded AI-node output reached a token limit."
+            )
         names = ", ".join(dict.fromkeys(turn.participant_id for turn in truncated))
         return TurnAwareDetectionResult(
             detected=True,
@@ -123,7 +174,10 @@ class N8NTruncationDetector(TurnAwareDetector):
             affected_turns=[turn.turn_number for turn in truncated],
             evidence={
                 "finish_reasons": [
-                    {"node": turn.participant_id, "reason": turn.turn_metadata["finish_reason"]}
+                    {
+                        "node": turn.participant_id,
+                        "reason": turn.turn_metadata["finish_reason"],
+                    }
                     for turn in truncated
                 ]
             },
@@ -141,24 +195,35 @@ class N8NRetryRecoveryDetector(TurnAwareDetector):
     supported_failure_modes = ["F14"]
 
     def detect(
-        self, turns: List[TurnSnapshot], conversation_metadata: Optional[Dict[str, Any]] = None
+        self,
+        turns: List[TurnSnapshot],
+        conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
         exhausted = [
-            turn for turn in _error_turns(turns)
+            turn
+            for turn in _error_turns(turns)
             if (turn.turn_metadata or {}).get("retry_on_fail")
         ]
         if not exhausted:
-            return _clear(self.name, "No recorded node failure exhausted a configured retry path.")
+            return _clear(
+                self.name, "No recorded node failure exhausted a configured retry path."
+            )
         names = ", ".join(dict.fromkeys(turn.participant_id for turn in exhausted))
-        attempts = max(int((turn.turn_metadata or {}).get("attempt_count") or 1) for turn in exhausted)
-        observed_retry = attempts > 1 or bool((conversation_metadata or {}).get("retry_of"))
-        failure_mode = "n8n_retry_exhausted" if observed_retry else "n8n_retry_not_observed"
+        attempts = max(
+            int((turn.turn_metadata or {}).get("attempt_count") or 1)
+            for turn in exhausted
+        )
+        observed_retry = attempts > 1 or bool(
+            (conversation_metadata or {}).get("retry_of")
+        )
+        failure_mode = (
+            "n8n_retry_exhausted" if observed_retry else "n8n_retry_not_observed"
+        )
         explanation = (
             f"Retry-enabled node(s) still failed after n8n recorded {attempts} attempt(s): {names}. "
             "Review the underlying incident, then set bounded backoff and a recovery or alert path."
             if observed_retry
-            else
-            f"Retry-enabled node(s) failed, but this n8n execution recorded no repeat attempt: {names}. "
+            else f"Retry-enabled node(s) failed, but this n8n execution recorded no repeat attempt: {names}. "
             "Verify retry support and settings for this node type before relying on recovery."
         )
         return TurnAwareDetectionResult(
@@ -168,7 +233,11 @@ class N8NRetryRecoveryDetector(TurnAwareDetector):
             failure_mode=failure_mode,
             explanation=explanation,
             affected_turns=[turn.turn_number for turn in exhausted],
-            evidence={"nodes": [turn.participant_id for turn in exhausted], "attempts": attempts, "observed_retry": observed_retry},
+            evidence={
+                "nodes": [turn.participant_id for turn in exhausted],
+                "attempts": attempts,
+                "observed_retry": observed_retry,
+            },
             suggested_fix="Use bounded exponential backoff only for transient errors and send exhausted retries to an error workflow.",
             detector_name=self.name,
             detector_version=self.version,
@@ -183,21 +252,36 @@ class N8NErrorWorkflowDetector(TurnAwareDetector):
     supported_failure_modes = ["F14"]
 
     def detect(
-        self, turns: List[TurnSnapshot], conversation_metadata: Optional[Dict[str, Any]] = None
+        self,
+        turns: List[TurnSnapshot],
+        conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
         metadata = conversation_metadata or {}
-        if str(metadata.get("workflow_status") or "").lower() not in {"error", "crashed", "failed"}:
-            return _clear(self.name, "No failed execution requires an error-workflow check.")
+        if str(metadata.get("workflow_status") or "").lower() not in {
+            "error",
+            "crashed",
+            "failed",
+        }:
+            return _clear(
+                self.name, "No failed execution requires an error-workflow check."
+            )
         if not metadata.get("workflow_available"):
-            return _clear(self.name, "The execution did not include workflow configuration for an error-workflow check.")
+            return _clear(
+                self.name,
+                "The execution did not include workflow configuration for an error-workflow check.",
+            )
         workflow = metadata.get("workflow_json") or {}
         settings = workflow.get("settings") or {}
         has_error_workflow = bool(settings.get("errorWorkflow"))
         if has_error_workflow:
-            return _clear(self.name, "The failed workflow has an error-workflow route configured.")
+            return _clear(
+                self.name, "The failed workflow has an error-workflow route configured."
+            )
         failed = _error_turns(turns)
         if not failed:
-            return _clear(self.name, "The execution failed without a node error to route.")
+            return _clear(
+                self.name, "The execution failed without a node error to route."
+            )
         return TurnAwareDetectionResult(
             detected=True,
             severity=TurnAwareSeverity.MODERATE,
@@ -223,17 +307,23 @@ class N8NIdempotencyDetector(TurnAwareDetector):
     supported_failure_modes = ["F14"]
 
     def detect(
-        self, turns: List[TurnSnapshot], conversation_metadata: Optional[Dict[str, Any]] = None
+        self,
+        turns: List[TurnSnapshot],
+        conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
         repeated = Counter(turn.participant_id for turn in turns)
         risky = [
-            turn for turn in turns
+            turn
+            for turn in turns
             if repeated[turn.participant_id] > 1
-            and str((turn.turn_metadata or {}).get("http_method") or "").upper() in _UNSAFE_HTTP_METHODS
+            and str((turn.turn_metadata or {}).get("http_method") or "").upper()
+            in _UNSAFE_HTTP_METHODS
             and not (turn.turn_metadata or {}).get("has_idempotency_key")
         ]
         if not risky:
-            return _clear(self.name, "No repeated unsafe HTTP action lacked an idempotency key.")
+            return _clear(
+                self.name, "No repeated unsafe HTTP action lacked an idempotency key."
+            )
         names = ", ".join(dict.fromkeys(turn.participant_id for turn in risky))
         return TurnAwareDetectionResult(
             detected=True,
@@ -245,7 +335,9 @@ class N8NIdempotencyDetector(TurnAwareDetector):
                 "A retry may have repeated an external side effect; add a stable idempotency key before enabling retries."
             ),
             affected_turns=sorted({turn.turn_number for turn in risky}),
-            evidence={"nodes": list(dict.fromkeys(turn.participant_id for turn in risky))},
+            evidence={
+                "nodes": list(dict.fromkeys(turn.participant_id for turn in risky))
+            },
             suggested_fix="Generate a stable Idempotency-Key from the business event and verify the provider honors it before retrying writes.",
             detector_name=self.name,
             detector_version=self.version,
@@ -260,21 +352,31 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
     supported_failure_modes = ["F6", "F14"]
 
     def detect(
-        self, turns: List[TurnSnapshot], conversation_metadata: Optional[Dict[str, Any]] = None
+        self,
+        turns: List[TurnSnapshot],
+        conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
-        agent_turns = [turn for turn in turns if (turn.turn_metadata or {}).get("is_ai_node")]
+        agent_turns = [
+            turn for turn in turns if (turn.turn_metadata or {}).get("is_ai_node")
+        ]
         if not agent_turns:
-            return _clear(self.name, "No AI-agent telemetry was recorded for this execution.")
+            return _clear(
+                self.name, "No AI-agent telemetry was recorded for this execution."
+            )
         tool_failures = [
-            turn for turn in _error_turns(turns)
+            turn
+            for turn in _error_turns(turns)
             if "tool" in str((turn.turn_metadata or {}).get("node_type") or "").lower()
         ]
         recovered_tools = [
-            failed for failed in tool_failures
+            failed
+            for failed in tool_failures
             if any(agent.turn_number > failed.turn_number for agent in agent_turns)
         ]
         if recovered_tools:
-            names = ", ".join(dict.fromkeys(turn.participant_id for turn in recovered_tools))
+            names = ", ".join(
+                dict.fromkeys(turn.participant_id for turn in recovered_tools)
+            )
             return TurnAwareDetectionResult(
                 detected=True,
                 severity=TurnAwareSeverity.MODERATE,
@@ -285,16 +387,23 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
                     "Review the agent's recovery path and validate that downstream actions did not use the failed tool result."
                 ),
                 affected_turns=[turn.turn_number for turn in recovered_tools],
-                evidence={"tool_nodes": [turn.participant_id for turn in recovered_tools]},
+                evidence={
+                    "tool_nodes": [turn.participant_id for turn in recovered_tools]
+                },
                 suggested_fix="Route failed tool calls through an explicit recovery and output-validation step.",
                 detector_name=self.name,
                 detector_version=self.version,
             )
         parser_errors = [
-            turn for turn in _error_turns(agent_turns)
-            if "output" in str((turn.turn_metadata or {}).get("error_message") or "").lower()
-            and any(marker in str((turn.turn_metadata or {}).get("error_message") or "").lower()
-                    for marker in ("parse", "schema", "json"))
+            turn
+            for turn in _error_turns(agent_turns)
+            if "output"
+            in str((turn.turn_metadata or {}).get("error_message") or "").lower()
+            and any(
+                marker
+                in str((turn.turn_metadata or {}).get("error_message") or "").lower()
+                for marker in ("parse", "schema", "json")
+            )
         ]
         if parser_errors:
             return TurnAwareDetectionResult(
@@ -312,4 +421,7 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
                 detector_name=self.name,
                 detector_version=self.version,
             )
-        return _clear(self.name, "No observed AI-agent tool or output-validation failure was recorded.")
+        return _clear(
+            self.name,
+            "No observed AI-agent tool or output-validation failure was recorded.",
+        )

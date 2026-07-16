@@ -61,9 +61,9 @@ class N8NErrorDetector(TurnAwareDetector):
     """
 
     name = "N8NErrorDetector"
-    # 1.1 emits a concrete n8n error category (for example n8n_rate_limit)
-    # instead of the broad F14 label used by earlier captured evidence.
-    version = "1.1"
+    # 1.2 emits concrete n8n categories and recognizes n8n's recorded
+    # configured-timeout shape instead of the broad F14 label used historically.
+    version = "1.2"
     supported_failure_modes = ["F14"]
 
     def __init__(
