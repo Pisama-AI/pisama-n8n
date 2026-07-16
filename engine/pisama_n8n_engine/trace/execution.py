@@ -98,5 +98,10 @@ def execution_to_turns_and_metadata(
             t.turn_metadata.get("execution_time_ms", 0) for t in turns
         ),
         "workflow_mode": execution_data.get("mode", "manual"),
+        # The error detector distinguishes a HIDDEN failure (workflow marked successful
+        # yet a node errored) from a visible failure. Without the real execution status
+        # it defaulted to "success" and flagged every visibly-failed workflow as a
+        # hidden "success-despite-failure" — a false positive on real error executions.
+        "workflow_status": execution_data.get("status", "success"),
     }
     return turns, metadata

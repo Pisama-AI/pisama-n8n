@@ -1,0 +1,68 @@
+{
+  "controlled": {
+    "title": "CONTROLLED corpus (constructed, both classes + adversarial)",
+    "n": 19,
+    "detectors": {
+      "timeout": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "tn": 16,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "error": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "tn": 16,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "resource": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "tn": 17,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  },
+  "adversarial_only": {
+    "title": "ADVERSARIAL near-misses only (should all be no-fire)",
+    "n": 8,
+    "detectors": {
+      "timeout": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 8,
+        "precision": null,
+        "recall": null,
+        "f1": null
+      },
+      "error": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 8,
+        "precision": null,
+        "recall": null,
+        "f1": null
+      },
+      "resource": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 8,
+        "precision": null,
+        "recall": null,
+        "f1": null
+      }
+    }
+  }
+}
