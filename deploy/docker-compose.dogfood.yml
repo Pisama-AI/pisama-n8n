@@ -38,9 +38,12 @@ services:
       - "${PISAMA_DOGFOOD_SERVER_PORT:-8401}:8400"
     environment:
       - PISAMA_API_KEY=${PISAMA_DOGFOOD_API_KEY:-dogfood-local-pisama-key}
-      - PISAMA_N8N_URL=http://n8n:5678
+      # Override for Cloud lanes; the default targets this Compose project's n8n.
+      - PISAMA_N8N_URL=${PISAMA_DOGFOOD_N8N_URL:-http://n8n:5678}
       # Replace the placeholder before exercising the API-polling lane.
       - PISAMA_N8N_API_KEY=${PISAMA_DOGFOOD_N8N_API_KEY:-not-configured}
+      # For Cloud lanes, constrain polling to a dedicated dogfood project.
+      - PISAMA_N8N_PROJECT_ID=${PISAMA_DOGFOOD_N8N_PROJECT_ID:-}
       - PISAMA_POLL_INTERVAL=${PISAMA_DOGFOOD_POLL_INTERVAL:-60}
       - DATABASE_URL=sqlite:////data/pisama-dogfood.db
     volumes:

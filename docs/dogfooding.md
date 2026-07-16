@@ -11,7 +11,7 @@ in this repository own disposable internal data only.
 | Docker SQLite | `deploy/docker-compose.dogfood.yml` | Default self-host n8n install, webhook execution, and API polling. |
 | Docker Postgres | Base compose plus `docker-compose.dogfood.postgres.yml` | n8n backed by Postgres, including restart and data persistence. |
 | Version sweep | Set `N8N_VERSION` before startup | Compatibility with each explicitly supported n8n release. |
-| n8n Cloud | A dedicated non-production Cloud workspace | API polling and webhook ingestion over the hosted API. This must be run by an operator with that workspace; do not use a customer workspace. |
+| n8n Cloud | A dedicated non-production Cloud project | API polling and webhook ingestion over the hosted API. Set `PISAMA_N8N_PROJECT_ID` so polling never reads another project. |
 
 Start a disposable SQLite n8n target:
 
@@ -31,6 +31,38 @@ docker compose -p pisama-n8n-dogfood -f deploy/docker-compose.dogfood.yml \
 For Postgres, add `-f deploy/docker-compose.dogfood.postgres.yml`. Use a distinct
 Compose project name for every lane so volumes, ports, and upgrade evidence cannot
 cross-contaminate.
+
+## Cloud lane
+
+Create a dedicated project first, then issue a time-bound API key with only the
+**Workflow and executions** scope group. Do not use an account's Personal project or
+an unscoped server for this lane: n8n API-key scopes control capabilities, not which
+project's executions may be read.
+
+Set all four values before starting the server, and verify the project query returns
+only the dedicated workflows before calling `/api/v1/n8n/sync`:
+
+```bash
+export PISAMA_N8N_URL='https://your-instance.app.n8n.cloud'
+export PISAMA_N8N_API_KEY='your-time-bound-dogfood-key'
+export PISAMA_N8N_PROJECT_ID='your-dedicated-project-id'
+export PISAMA_API_KEY='local-pisama-key'
+```
+
+With `PISAMA_N8N_PROJECT_ID` set, the poller lists that project's workflows and then
+fetches executions one workflow at a time. It never sends a broad executions request.
+
+To run the Compose server against Cloud rather than the local n8n service, map those
+values through the dogfood environment names and start only the server service:
+
+```bash
+export PISAMA_DOGFOOD_N8N_URL="$PISAMA_N8N_URL"
+export PISAMA_DOGFOOD_N8N_API_KEY="$PISAMA_N8N_API_KEY"
+export PISAMA_DOGFOOD_N8N_PROJECT_ID="$PISAMA_N8N_PROJECT_ID"
+export PISAMA_DOGFOOD_API_KEY="$PISAMA_API_KEY"
+docker compose -p pisama-n8n-cloud-dogfood -f deploy/docker-compose.dogfood.yml \
+  --profile server up -d --build --no-deps server
+```
 
 ## Evidence required from every run
 
@@ -78,3 +110,11 @@ incidents and repeated observed repair outcomes.
 - The poller now fetches the associated workflow for an execution before analysis because
   the n8n executions API omits that node context. The persistent Pisama dogfood database is
   the internal regression corpus; it contains only disposable internal executions.
+- An n8n Cloud project-scoped lane passed a real webhook failure and polling run: one
+  controlled execution was ingested, deduplication returned zero new executions on the
+  next sync, and the error detector fired `F14`. The local Cloud-lane database was reset
+  after an earlier unscoped startup, then verified to contain only the dedicated workflow.
+- Cloud apply and rollback mechanics were exercised against that controlled workflow. A
+  code-node repair applied and the workflow was restored; a deliberate post-apply human
+  edit was rejected as stale before rollback. The next Cloud execution could not be
+  observed because this Cloud instance reported its execution quota was exhausted.

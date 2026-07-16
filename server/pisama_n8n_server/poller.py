@@ -7,6 +7,7 @@ hasn't seen through the engine, deduping on the upstream n8n execution id.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict
 
 from pisama_n8n_server.processing import process_execution
@@ -27,8 +28,28 @@ async def _with_workflow_context(execution: Dict[str, Any], client: Any) -> Dict
 
 
 async def poll_once(client: Any, storage: Any, limit: int = 50) -> Dict[str, int]:
-    """Fetch recent executions, ingest the new ones, return a summary."""
-    executions = await client.list_executions(limit=limit, include_data=True)
+    """Fetch recent executions, ingest the new ones, return a summary.
+
+    ``PISAMA_N8N_PROJECT_ID`` makes polling project-scoped. In that mode Pisama first
+    resolves only that project's workflow IDs, then asks n8n for executions per
+    workflow. This is important for Cloud dogfooding because API-key scopes do not
+    themselves constrain the key to a project.
+    """
+    project_id = os.environ.get("PISAMA_N8N_PROJECT_ID")
+    if project_id:
+        workflows = await client.list_workflows(project_id=project_id)
+        workflow_ids = [
+            str(workflow["id"]) for workflow in workflows if workflow.get("id")
+        ]
+        executions = []
+        for workflow_id in workflow_ids:
+            executions.extend(
+                await client.list_executions(
+                    limit=limit, include_data=True, workflow_id=workflow_id
+                )
+            )
+    else:
+        executions = await client.list_executions(limit=limit, include_data=True)
     seen = storage.seen_source_ids()
 
     new = fired = 0

@@ -24,14 +24,30 @@ class N8nClient:
         r = await self._client.get("/workflows", params={"limit": 1})
         return r.status_code == 200
 
+    async def list_workflows(
+        self, project_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List workflows, optionally limited by n8n's project query parameter."""
+        params: Dict[str, Any] = {"limit": 250}
+        if project_id:
+            params["projectId"] = project_id
+        r = await self._client.get("/workflows", params=params)
+        r.raise_for_status()
+        return r.json().get("data", [])
+
     async def list_executions(
-        self, limit: int = 50, include_data: bool = True
+        self,
+        limit: int = 50,
+        include_data: bool = True,
+        workflow_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Most-recent executions first, with full runData by default (the detectors
         need it — without includeData the API omits runData and detection is blind)."""
         params: Dict[str, Any] = {"limit": limit}
         if include_data:
             params["includeData"] = "true"
+        if workflow_id:
+            params["workflowId"] = workflow_id
         r = await self._client.get("/executions", params=params)
         r.raise_for_status()
         return r.json().get("data", [])
