@@ -288,6 +288,12 @@ current release decision.
   second added zero. Its current-build `core` gate now misses only P0
   `truncation:n8n_truncation`; retry exhaustion is visible as withheld, and an explicit
   gate for it correctly exits nonzero rather than silently passing.
+- Current source revision `468ccdb` rebuilt the lane after withdrawing the unproven
+  duplicate-side-effect and AI-agent modes. It reran the retained controls plus a
+  two-iteration intentional POST loop to a controlled receiver. The first sync ingested
+  fourteen real executions and the second added zero. The current-build `core` gate
+  still misses only P0 truncation, while the four withheld fingerprints have zero
+  current-build detector rows and an explicit gate for them exits nonzero.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API
