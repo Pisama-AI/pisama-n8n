@@ -8,6 +8,9 @@ const BASE = `http://localhost:${PORT}`
 // forge a session + mock the BFF, so no Google auth or cloud backend is required.
 export default defineConfig({
   testDir: './tests',
+  // Only the SaaS specs — the OSS-mode specs run under playwright.oss.config.ts
+  // in a separate invocation (Next 16 allows one `next dev` per project dir).
+  testMatch: /settings\.saas\.spec\.ts/,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
