@@ -252,13 +252,25 @@ def required_fingerprints(
     return sorted(selected)
 
 
-def apply_gate(report: Dict[str, Any], required: Sequence[str]) -> bool:
+def apply_gate(
+    report: Dict[str, Any],
+    required: Sequence[str],
+    build_revision: Optional[str] = None,
+) -> bool:
     """Attach an explicit, reproducible pass/fail result to the aggregate report."""
-    present = {entry["fingerprint"] for entry in report["fired_fingerprints"]}
+    observations = report["fired_fingerprints"]
+    if build_revision:
+        observations = [
+            entry
+            for entry in observations
+            if build_revision in entry["build_revisions"]
+        ]
+    present = {entry["fingerprint"] for entry in observations}
     missing = [entry for entry in required if entry not in present]
     report["gate"] = {
         "required_fingerprints": list(required),
         "missing_fingerprints": missing,
+        "required_build_revision": build_revision,
         "passed": not missing,
     }
     return not missing
@@ -290,6 +302,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Gate on P0/P1 (core) or the entire source-controlled catalog (full).",
     )
     parser.add_argument(
+        "--require-current-build",
+        action="store_true",
+        help="Require each requested fingerprint to have been observed on /healthz's build revision.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write the aggregate-only JSON report to this path as well as stdout.",
@@ -311,7 +328,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Dogfood corpus audit failed: {exc}", file=sys.stderr)
         return 2
     required = required_fingerprints(args.require, args.require_profile)
-    passed = apply_gate(report, required)
+    health = report.get("health")
+    current_build = health.get("build_revision") if isinstance(health, dict) else None
+    if args.require_current_build and (
+        not isinstance(current_build, str)
+        or not current_build
+        or current_build == "unknown"
+    ):
+        print(
+            "Current-build gating requires /healthz to report a non-unknown build_revision.",
+            file=sys.stderr,
+        )
+        return 2
+    passed = apply_gate(
+        report,
+        required,
+        current_build if args.require_current_build else None,
+    )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")

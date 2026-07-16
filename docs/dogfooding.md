@@ -127,6 +127,17 @@ nonzero and lists its missing fingerprints. A fresh or recreated dogfood volume 
 legitimately fail even if a historical exercise passed, so do not substitute prose or a
 past CI result for this check.
 
+For a release build, make provenance part of the gate rather than allowing an earlier
+image's retained rows to satisfy it:
+
+```bash
+python scripts/audit_dogfood_corpus.py --require-profile core --require-current-build
+```
+
+This reads the running server's `/healthz` revision and requires every selected
+fingerprint to have at least one observation from that revision. A server reporting
+`unknown` cannot pass this form of the gate.
+
 The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
 The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so
 it must never be presented as proof of observed runtime-loop coverage.
@@ -238,6 +249,11 @@ current release decision.
   `n8n_error_workflow_missing_trigger`. The first poll ingested both real executions;
   the second added zero. Both detections retain their resolver facts and are visible in
   the authenticated detection detail without exposing raw execution payloads.
+- The same current-source lane then reran the retained provider, credential, rate-limit,
+  expression/data-contract, retry, timeout, and payload workflows. It ingested nine new
+  real executions, and the second poll added zero. The current-build core gate now fails
+  only for `truncation:n8n_truncation` and `retry_recovery:n8n_retry_exhausted`; neither
+  absence is relabeled as a passing result.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API
