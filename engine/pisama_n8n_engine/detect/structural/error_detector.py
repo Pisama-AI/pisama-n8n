@@ -30,10 +30,10 @@ logger = logging.getLogger(__name__)
 # Indicators of null/invalid data — require structural context to avoid FPs
 # These are checked with word boundaries or structural patterns
 NULL_DATA_INDICATORS: Set[str] = {
-    '"null"',           # JSON null value
-    ": null",           # YAML/JSON null
+    '"null"',  # JSON null value
+    ": null",  # YAML/JSON null
     "undefined",
-    "\"none\"",         # JSON "none" string
+    '"none"',  # JSON "none" string
     ": none",
     "cannot read property",
     "typeerror:",
@@ -41,7 +41,9 @@ NULL_DATA_INDICATORS: Set[str] = {
 }
 
 # Maximum acceptable error rate (% of nodes that can fail)
-DEFAULT_MAX_ERROR_RATE = 0.15  # 15% of nodes (raised from 10% — transactional workflows have ~5-8%)
+DEFAULT_MAX_ERROR_RATE = (
+    0.15  # 15% of nodes (raised from 10% — transactional workflows have ~5-8%)
+)
 
 
 class N8NErrorDetector(TurnAwareDetector):
@@ -59,7 +61,9 @@ class N8NErrorDetector(TurnAwareDetector):
     """
 
     name = "N8NErrorDetector"
-    version = "1.0"
+    # 1.1 emits a concrete n8n error category (for example n8n_rate_limit)
+    # instead of the broad F14 label used by earlier captured evidence.
+    version = "1.1"
     supported_failure_modes = ["F14"]
 
     def __init__(
@@ -100,14 +104,14 @@ class N8NErrorDetector(TurnAwareDetector):
             return True
 
         # JSON error objects
-        if '"error"' in content_lower and ('"message"' in content_lower or '"stack"' in content_lower):
+        if '"error"' in content_lower and (
+            '"message"' in content_lower or '"stack"' in content_lower
+        ):
             return True
 
         return False
 
-    def _is_workflow_successful(
-        self, metadata: Optional[Dict[str, Any]]
-    ) -> bool:
+    def _is_workflow_successful(self, metadata: Optional[Dict[str, Any]]) -> bool:
         """Check if workflow was marked as successful."""
         if not metadata:
             return True  # Assume success if no metadata
@@ -148,9 +152,7 @@ class N8NErrorDetector(TurnAwareDetector):
                 "detected": True,
                 "type": "hidden_failure",
                 "failures": hidden_failures,
-                "workflow_status": (
-                    "success" if workflow_successful else "failed"
-                ),
+                "workflow_status": ("success" if workflow_successful else "failed"),
                 "explanation": f"{len(hidden_failures)} node(s) failed but continued execution (continueOnFail=true)",
                 "turns": [f["turn"] for f in hidden_failures],
             }
@@ -188,9 +190,7 @@ class N8NErrorDetector(TurnAwareDetector):
                 "type": "invalid_data_propagation",
                 "issues": invalid_data_issues,
                 "explanation": f"{len(invalid_data_issues)} downstream node(s) received invalid data from failed nodes",
-                "turns": [
-                    issue["affected_node_turn"] for issue in invalid_data_issues
-                ],
+                "turns": [issue["affected_node_turn"] for issue in invalid_data_issues],
             }
 
         return None
@@ -214,9 +214,7 @@ class N8NErrorDetector(TurnAwareDetector):
                 "error_rate": error_rate,
                 "threshold": self.max_error_rate,
                 "explanation": f"Error rate {error_rate:.1%} exceeds threshold {self.max_error_rate:.1%} ({error_count}/{len(turns)} nodes failed)",
-                "turns": [
-                    i for i, turn in enumerate(turns) if self._has_error(turn)
-                ],
+                "turns": [i for i, turn in enumerate(turns) if self._has_error(turn)],
             }
 
         return None
@@ -368,7 +366,9 @@ class N8NErrorDetector(TurnAwareDetector):
 
         failed_turns = [turn for turn in turns if self._has_error(turn)]
         categories = [classify_error(turn) for turn in failed_turns]
-        category = next((item for item in categories if item != "node_error"), "node_error")
+        category = next(
+            (item for item in categories if item != "node_error"), "node_error"
+        )
 
         # Build explanation
         explanations = [issue["explanation"] for issue in issues]
@@ -408,7 +408,9 @@ class N8NErrorDetector(TurnAwareDetector):
             explanation=full_explanation,
             affected_turns=sorted(set(affected_turns)),
             evidence={"issues": issues, "categories": categories},
-            suggested_fix=remediation_for(category) if category != "node_error" else suggested_fix,
+            suggested_fix=remediation_for(category)
+            if category != "node_error"
+            else suggested_fix,
             detector_name=self.name,
             detector_version=self.version,
         )
@@ -416,7 +418,15 @@ class N8NErrorDetector(TurnAwareDetector):
     # ---- Workflow JSON analysis (static / pre-execution) ----
 
     # Node types considered AI / high-risk
-    _AI_NODE_KEYWORDS = {"langchain", "openai", "anthropic", "llm", "agent", "chain", "chat"}
+    _AI_NODE_KEYWORDS = {
+        "langchain",
+        "openai",
+        "anthropic",
+        "llm",
+        "agent",
+        "chain",
+        "chat",
+    }
 
     # Node types that are error-handling infrastructure (don't need their own
     # error handling and should not be counted as "unprotected").
@@ -482,16 +492,15 @@ class N8NErrorDetector(TurnAwareDetector):
             )
 
         connection_map = build_connection_map(workflow_json)
-        node_by_name: Dict[str, Dict[str, Any]] = {
-            n.get("name", ""): n for n in nodes
-        }
+        node_by_name: Dict[str, Dict[str, Any]] = {n.get("name", ""): n for n in nodes}
 
         issues: List[Dict[str, Any]] = []
 
         # --- Build set of nodes reachable from errorTrigger (error handler chain) ---
         error_chain_nodes: Set[str] = set()
         error_trigger_names = [
-            n.get("name", "") for n in nodes
+            n.get("name", "")
+            for n in nodes
             if n.get("type", "") in self._ERROR_INFRA_TYPES
         ]
         # BFS from error trigger nodes
@@ -514,7 +523,10 @@ class N8NErrorDetector(TurnAwareDetector):
             node_name = node.get("name", "")
             # Skip error-handling infrastructure and terminal utility nodes —
             # they don't need their own error handling.
-            if node_type in self._ERROR_INFRA_TYPES or node_type in self._TERMINAL_UTILITY_TYPES:
+            if (
+                node_type in self._ERROR_INFRA_TYPES
+                or node_type in self._TERMINAL_UTILITY_TYPES
+            ):
                 continue
             # Skip nodes that are part of error handler chains
             if node_name in error_chain_nodes:
@@ -529,54 +541,64 @@ class N8NErrorDetector(TurnAwareDetector):
                     unprotected_ai_nodes.append(entry)
 
         if unprotected_ai_nodes:
-            issues.append({
-                "detected": True,
-                "type": "unprotected_ai_nodes",
-                "nodes": unprotected_ai_nodes,
-                "explanation": (
-                    f"{len(unprotected_ai_nodes)} AI node(s) have no error handling -- "
-                    "these are highest risk because LLM calls are inherently unreliable"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "unprotected_ai_nodes",
+                    "nodes": unprotected_ai_nodes,
+                    "explanation": (
+                        f"{len(unprotected_ai_nodes)} AI node(s) have no error handling -- "
+                        "these are highest risk because LLM calls are inherently unreliable"
+                    ),
+                }
+            )
 
         # Only flag unprotected_nodes for workflows with >= 8 nodes.
         # Small workflows don't need error handling on every node.
         if unprotected_nodes and len(nodes) >= 8:
-            issues.append({
-                "detected": True,
-                "type": "unprotected_nodes",
-                "count": len(unprotected_nodes),
-                "total_nodes": len(nodes),
-                "nodes": unprotected_nodes,
-                "explanation": (
-                    f"{len(unprotected_nodes)}/{len(nodes)} node(s) lack error handling "
-                    "(no continueOnFail and no onError handler)"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "unprotected_nodes",
+                    "count": len(unprotected_nodes),
+                    "total_nodes": len(nodes),
+                    "nodes": unprotected_nodes,
+                    "explanation": (
+                        f"{len(unprotected_nodes)}/{len(nodes)} node(s) lack error handling "
+                        "(no continueOnFail and no onError handler)"
+                    ),
+                }
+            )
 
         # --- 3: Missing error trigger node ---
         # v1.1: Only flag if workflow has NO error handling at all.
         # If most nodes use continueOnFail or onError, that's sufficient.
         has_error_trigger = any(
-            node.get("type", "") == "n8n-nodes-base.errorTrigger"
-            for node in nodes
+            node.get("type", "") == "n8n-nodes-base.errorTrigger" for node in nodes
         )
         # Count nodes with explicit error handling
         nodes_with_error_handling = sum(
-            1 for n in nodes
-            if n.get("continueOnFail") or n.get("onError") or n.get("settings", {}).get("continueOnFail")
+            1
+            for n in nodes
+            if n.get("continueOnFail")
+            or n.get("onError")
+            or n.get("settings", {}).get("continueOnFail")
         )
         # Only flag missing trigger if < 30% of nodes have error handling
         # (a workflow with extensive node-level handling doesn't need a global trigger)
-        if not has_error_trigger and nodes_with_error_handling < max(1, len(nodes) * 0.30):
-            issues.append({
-                "detected": True,
-                "type": "missing_error_trigger",
-                "explanation": (
-                    "Workflow has no errorTrigger node -- workflow-level errors "
-                    "will go unhandled and unnotified"
-                ),
-            })
+        if not has_error_trigger and nodes_with_error_handling < max(
+            1, len(nodes) * 0.30
+        ):
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "missing_error_trigger",
+                    "explanation": (
+                        "Workflow has no errorTrigger node -- workflow-level errors "
+                        "will go unhandled and unnotified"
+                    ),
+                }
+            )
 
         # --- 4: continueOnFail nodes feeding critical downstream nodes ---
         # Only flag when the source is itself an AI/critical node (high risk
@@ -621,23 +643,27 @@ class N8NErrorDetector(TurnAwareDetector):
                     or "webhook" in ds_type
                 )
                 if is_critical:
-                    continue_on_fail_risk.append({
-                        "source_node": node_name,
-                        "source_type": node.get("type", "unknown"),
-                        "downstream_node": ds_name,
-                        "downstream_type": ds_node.get("type", "unknown"),
-                    })
+                    continue_on_fail_risk.append(
+                        {
+                            "source_node": node_name,
+                            "source_type": node.get("type", "unknown"),
+                            "downstream_node": ds_name,
+                            "downstream_type": ds_node.get("type", "unknown"),
+                        }
+                    )
 
         if continue_on_fail_risk:
-            issues.append({
-                "detected": True,
-                "type": "continue_on_fail_data_integrity_risk",
-                "pairs": continue_on_fail_risk,
-                "explanation": (
-                    f"{len(continue_on_fail_risk)} node(s) with continueOnFail=true feed into "
-                    "critical downstream nodes, risking null/invalid data propagation"
-                ),
-            })
+            issues.append(
+                {
+                    "detected": True,
+                    "type": "continue_on_fail_data_integrity_risk",
+                    "pairs": continue_on_fail_risk,
+                    "explanation": (
+                        f"{len(continue_on_fail_risk)} node(s) with continueOnFail=true feed into "
+                        "critical downstream nodes, risking null/invalid data propagation"
+                    ),
+                }
+            )
 
         # --- Build result ---
         if not issues:

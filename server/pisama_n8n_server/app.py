@@ -34,7 +34,7 @@ from pisama_n8n_server.events import broadcaster, fired_event
 from pisama_n8n_server.n8n_client import client_from_env
 from pisama_n8n_server.poller import poll_once
 from pisama_n8n_server.processing import process_execution
-from pisama_n8n_server.storage import Storage
+from pisama_n8n_server.storage import Storage, build_revision
 
 logger = logging.getLogger("pisama_n8n_server")
 
@@ -172,7 +172,7 @@ def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
 
 @app.get("/healthz")
 async def healthz() -> Dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "build_revision": build_revision()}
 
 
 @app.post("/api/v1/n8n/webhook", dependencies=[Depends(require_auth)])
@@ -299,7 +299,9 @@ async def operations_summary(storage: Storage = Depends(get_storage)) -> Dict[st
 
 
 @app.get("/api/v1/reliability/metrics", dependencies=[Depends(require_read_auth)])
-async def reliability_metrics(storage: Storage = Depends(get_storage)) -> Dict[str, Any]:
+async def reliability_metrics(
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
     """Evidence scorecard for this tenant. No cross-tenant or raw trace data."""
     return storage.operational_summary()["reliability_metrics"]
 
@@ -336,9 +338,13 @@ async def conclude_reliability_case(
     outcome = body.get("outcome")
     note = body.get("note")
     if outcome not in {"prevented", "inconclusive"}:
-        raise HTTPException(status_code=422, detail="outcome must be prevented or inconclusive.")
+        raise HTTPException(
+            status_code=422, detail="outcome must be prevented or inconclusive."
+        )
     if note is not None and not isinstance(note, str):
-        raise HTTPException(status_code=422, detail="note must be a string when provided.")
+        raise HTTPException(
+            status_code=422, detail="note must be a string when provided."
+        )
     try:
         case = storage.conclude_reliability_case(case_id, outcome, note)
     except ValueError as exc:

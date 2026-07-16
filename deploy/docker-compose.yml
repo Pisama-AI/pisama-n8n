@@ -10,6 +10,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        PISAMA_BUILD_REVISION: ${PISAMA_BUILD_REVISION:-unknown}
     image: pisama-n8n-server
     ports:
       - "${PISAMA_SERVER_PORT:-8400}:8400"

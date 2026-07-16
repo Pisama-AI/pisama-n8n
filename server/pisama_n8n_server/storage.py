@@ -10,6 +10,7 @@ Single-tenant, SQLAlchemy 2.x. Defaults to a local SQLite file; override with
 No mocks: this is real SQLite via a real SQLAlchemy engine. Tests point
 ``DATABASE_URL`` at a temp file / ``sqlite:///:memory:`` — still real SQLite.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,7 +59,12 @@ class Execution(Base):
     raw: Mapped[str] = mapped_column(Text, nullable=False)
     # The upstream n8n execution id, when this row came from API polling — used to
     # dedup so re-polling doesn't re-ingest the same execution. Null for webhook pushes.
-    source_execution_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    source_execution_id: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, index=True
+    )
+    # Build revision that analyzed this execution. It distinguishes current detector
+    # evidence from rows retained from an earlier server image.
+    build_revision: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     detections: Mapped[List["DetectionRow"]] = relationship(
         back_populates="execution", cascade="all, delete-orphan"
@@ -69,12 +75,15 @@ class DetectionRow(Base):
     __tablename__ = "detections"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    execution_id: Mapped[int] = mapped_column(ForeignKey("executions.id"), nullable=False)
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("executions.id"), nullable=False
+    )
     detector: Mapped[str] = mapped_column(String, nullable=False)
     detected: Mapped[bool] = mapped_column(nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     explanation: Mapped[str] = mapped_column(Text, default="")
+    detector_version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     execution: Mapped["Execution"] = relationship(back_populates="detections")
 
@@ -87,6 +96,7 @@ class DetectionRow(Base):
             "confidence": self.confidence,
             "failure_mode": self.failure_mode,
             "explanation": self.explanation,
+            "detector_version": self.detector_version,
         }
 
 
@@ -101,13 +111,17 @@ class RepairAttempt(Base):
     __tablename__ = "repair_attempts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    detection_id: Mapped[int] = mapped_column(ForeignKey("detections.id"), nullable=False, index=True)
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, index=True
+    )
     workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     baseline_workflow: Mapped[str] = mapped_column(Text, nullable=False)
     proposed_workflow: Mapped[str] = mapped_column(Text, nullable=False)
     patch_ops: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     explanation: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    status: Mapped[str] = mapped_column(String, default="proposed", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String, default="proposed", nullable=False, index=True
+    )
     snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     applied_workflow: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -153,7 +167,9 @@ class DetectionFeedback(Base):
     __tablename__ = "detection_feedback"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    detection_id: Mapped[int] = mapped_column(ForeignKey("detections.id"), nullable=False, index=True)
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, index=True
+    )
     verdict: Mapped[str] = mapped_column(String, nullable=False, index=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -188,7 +204,9 @@ class ReliabilityCase(Base):
     workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     detector: Mapped[str] = mapped_column(String, nullable=False)
     failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="observing", index=True)
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="observing", index=True
+    )
     # The verified or reviewed conclusion survives a later rollback. ``status``
     # is the current lifecycle state; outcome is the historical result.
     outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
@@ -237,8 +255,12 @@ class ReliabilityCase(Base):
             "post_repair_failure_count": self.post_repair_failure_count,
             "comparison_minimum_executions": comparison_minimum,
             "comparison_ready": comparison_ready,
-            "baseline_failure_rate": round(baseline_rate, 4) if baseline_rate is not None else None,
-            "post_repair_failure_rate": round(post_rate, 4) if post_rate is not None else None,
+            "baseline_failure_rate": round(baseline_rate, 4)
+            if baseline_rate is not None
+            else None,
+            "post_repair_failure_rate": round(post_rate, 4)
+            if post_rate is not None
+            else None,
             "recurrence_reduction": (
                 round(1 - (post_rate / baseline_rate), 4) if comparison_ready else None
             ),
@@ -343,31 +365,50 @@ def parse_trace(raw: Dict[str, Any]) -> Dict[str, Any]:
         for n in (block.get("nodes") or [])
         if isinstance(n, dict)
     }
-    order_names = [n.get("name") for n in (block.get("nodes") or []) if isinstance(n, dict)]
+    order_names = [
+        n.get("name") for n in (block.get("nodes") or []) if isinstance(n, dict)
+    ]
 
     data = raw.get("data")
     result = data.get("resultData") if isinstance(data, dict) else None
     result = result if isinstance(result, dict) else {}
     run_data = result.get("runData")
 
-    top_error = result.get("error", {}).get("message") if isinstance(result.get("error"), dict) else None
-    started, stopped = _parse_iso(raw.get("startedAt")), _parse_iso(raw.get("stoppedAt"))
-    duration_ms = int((stopped - started).total_seconds() * 1000) if started and stopped else None
+    top_error = (
+        result.get("error", {}).get("message")
+        if isinstance(result.get("error"), dict)
+        else None
+    )
+    started, stopped = (
+        _parse_iso(raw.get("startedAt")),
+        _parse_iso(raw.get("stoppedAt")),
+    )
+    duration_ms = (
+        int((stopped - started).total_seconds() * 1000) if started and stopped else None
+    )
 
     if isinstance(run_data, dict) and run_data:
         nodes: List[Dict[str, Any]] = []
         for name, runs in run_data.items():
             if not isinstance(runs, list):
                 continue
-            total_time, total_items, status, node_err, order = 0, 0, "success", None, None
+            total_time, total_items, status, node_err, order = (
+                0,
+                0,
+                "success",
+                None,
+                None,
+            )
             for run in runs:
                 if not isinstance(run, dict):
                     continue
                 total_time += int(run.get("executionTime") or 0)
-                for branch in ((run.get("data") or {}).get("main") or []):
+                for branch in (run.get("data") or {}).get("main") or []:
                     if isinstance(branch, list):
                         total_items += len(branch)
-                errored = run.get("executionStatus") == "error" or bool(run.get("error"))
+                errored = run.get("executionStatus") == "error" or bool(
+                    run.get("error")
+                )
                 if errored:
                     status = "error"
                     if node_err is None and isinstance(run.get("error"), dict):
@@ -390,8 +431,10 @@ def parse_trace(raw: Dict[str, Any]) -> Dict[str, Any]:
         nodes.sort(key=lambda n: n["_order"])
         for n in nodes:
             n.pop("_order", None)
-        overall = "error" if (top_error or any(n["status"] == "error" for n in nodes)) else (
-            "success" if raw.get("finished") else "unknown"
+        overall = (
+            "error"
+            if (top_error or any(n["status"] == "error" for n in nodes))
+            else ("success" if raw.get("finished") else "unknown")
         )
         return {
             "available": True,
@@ -465,6 +508,15 @@ def baseline_window_limit() -> int:
         return 50
 
 
+def build_revision() -> str:
+    """Return the image revision that produced a retained execution row.
+
+    A deployment can omit the build argument, in which case ``unknown`` is more
+    honest than attributing historical detector evidence to the current checkout.
+    """
+    return os.environ.get("PISAMA_BUILD_REVISION", "").strip() or "unknown"
+
+
 # Columns added after the first (id, workflow_id, received_at, raw) release, keyed by
 # table. create_all() only creates missing TABLES, not missing columns, so an existing
 # self-host DB needs these added in place. ALTER TABLE ADD COLUMN is supported by both
@@ -475,6 +527,10 @@ _ADDED_COLUMNS = {
     "executions": {
         "source_execution_id": "VARCHAR",
         "workflow_name": "VARCHAR",
+        "build_revision": "VARCHAR",
+    },
+    "detections": {
+        "detector_version": "VARCHAR",
     },
     "reliability_cases": {
         "outcome": "VARCHAR",
@@ -497,7 +553,9 @@ def _ensure_columns(engine) -> None:
             present = {c["name"] for c in inspector.get_columns(table)}
             for name, ddl_type in columns.items():
                 if name not in present:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}")
+                    )
 
 
 def make_engine(url: Optional[str] = None):
@@ -516,7 +574,9 @@ class Storage:
 
     def __init__(self, url: Optional[str] = None) -> None:
         self.engine = make_engine(url)
-        self._Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
+        self._Session = sessionmaker(
+            bind=self.engine, expire_on_commit=False, future=True
+        )
 
     def save_report(
         self,
@@ -541,6 +601,7 @@ class Storage:
                 received_at=received_at,
                 raw=raw,
                 source_execution_id=source_execution_id,
+                build_revision=build_revision(),
             )
             for d in report.detections:
                 execution.detections.append(
@@ -550,6 +611,7 @@ class Storage:
                         confidence=float(d.confidence),
                         failure_mode=d.failure_mode,
                         explanation=d.explanation or "",
+                        detector_version=getattr(d, "detector_version", None),
                     )
                 )
             session.add(execution)
@@ -605,7 +667,9 @@ class Storage:
         """Persist a cloud suggestion before a browser can see or apply it."""
         proposed = suggestion.get("mutated_workflow")
         if not isinstance(proposed, dict):
-            raise ValueError("Cloud fix response did not include a mutated_workflow object.")
+            raise ValueError(
+                "Cloud fix response did not include a mutated_workflow object."
+            )
         now = datetime.now(timezone.utc).isoformat()
         with self._Session() as session:
             row = RepairAttempt(
@@ -622,12 +686,16 @@ class Storage:
             session.commit()
             return row.to_dict()
 
-    def get_repair(self, repair_id: int, include_workflows: bool = False) -> Optional[Dict[str, Any]]:
+    def get_repair(
+        self, repair_id: int, include_workflows: bool = False
+    ) -> Optional[Dict[str, Any]]:
         with self._Session() as session:
             row = session.get(RepairAttempt, repair_id)
             return row.to_dict(include_workflows=include_workflows) if row else None
 
-    def record_operational_event(self, event_type: str, details: Dict[str, Any]) -> None:
+    def record_operational_event(
+        self, event_type: str, details: Dict[str, Any]
+    ) -> None:
         """Persist a minimal local health event. Workflow payloads never belong here."""
         with self._Session() as session:
             session.add(
@@ -670,9 +738,14 @@ class Storage:
         """Local operational signals for an operator, derived from real persisted state."""
         with self._Session() as session:
             executions = session.scalar(select(func.count(Execution.id))) or 0
-            fired = session.scalar(
-                select(func.count(DetectionRow.id)).where(DetectionRow.detected.is_(True))
-            ) or 0
+            fired = (
+                session.scalar(
+                    select(func.count(DetectionRow.id)).where(
+                        DetectionRow.detected.is_(True)
+                    )
+                )
+                or 0
+            )
             latest_execution = session.scalar(select(func.max(Execution.received_at)))
             detector_rows = session.execute(
                 select(DetectionRow.detector, func.count(DetectionRow.id))
@@ -681,21 +754,22 @@ class Storage:
                 .order_by(desc(func.count(DetectionRow.id)))
             ).all()
             repair_rows = session.execute(
-                select(RepairAttempt.status, func.count(RepairAttempt.id))
-                .group_by(RepairAttempt.status)
+                select(RepairAttempt.status, func.count(RepairAttempt.id)).group_by(
+                    RepairAttempt.status
+                )
             ).all()
             feedback_rows = session.execute(
-                select(DetectionFeedback.verdict, func.count(DetectionFeedback.id))
-                .group_by(DetectionFeedback.verdict)
+                select(
+                    DetectionFeedback.verdict, func.count(DetectionFeedback.id)
+                ).group_by(DetectionFeedback.verdict)
             ).all()
             case_rows = session.execute(
-                select(ReliabilityCase.status, func.count(ReliabilityCase.id))
-                .group_by(ReliabilityCase.status)
+                select(ReliabilityCase.status, func.count(ReliabilityCase.id)).group_by(
+                    ReliabilityCase.status
+                )
             ).all()
             events = session.execute(
-                select(OperationalEvent)
-                .order_by(desc(OperationalEvent.id))
-                .limit(100)
+                select(OperationalEvent).order_by(desc(OperationalEvent.id)).limit(100)
             ).scalars()
             latest_events: Dict[str, Dict[str, Any]] = {}
             for event in events:
@@ -732,8 +806,9 @@ class Storage:
     @staticmethod
     def _diagnosis_metrics(session: Any) -> Dict[str, Any]:
         feedback_rows = session.execute(
-            select(DetectionFeedback)
-            .order_by(DetectionFeedback.detection_id, desc(DetectionFeedback.id))
+            select(DetectionFeedback).order_by(
+                DetectionFeedback.detection_id, desc(DetectionFeedback.id)
+            )
         ).scalars()
         latest_feedback: Dict[int, str] = {}
         for feedback in feedback_rows:
@@ -742,9 +817,7 @@ class Storage:
             verdict in {"useful", "fixed_manually"}
             for verdict in latest_feedback.values()
         )
-        rejected = sum(
-            verdict == "not_useful" for verdict in latest_feedback.values()
-        )
+        rejected = sum(verdict == "not_useful" for verdict in latest_feedback.values())
         reviewed = accepted + rejected
         return {
             "accepted": accepted,
@@ -777,14 +850,18 @@ class Storage:
     @staticmethod
     def _comparison_metrics(session: Any) -> Dict[str, Any]:
         minimum = comparison_minimum_execution_count()
-        cases = session.execute(
-            select(ReliabilityCase).where(
-                ReliabilityCase.baseline_execution_count >= minimum,
-                ReliabilityCase.post_repair_execution_count
-                >= ReliabilityCase.baseline_execution_count,
-                ReliabilityCase.baseline_failure_count > 0,
+        cases = (
+            session.execute(
+                select(ReliabilityCase).where(
+                    ReliabilityCase.baseline_execution_count >= minimum,
+                    ReliabilityCase.post_repair_execution_count
+                    >= ReliabilityCase.baseline_execution_count,
+                    ReliabilityCase.baseline_failure_count > 0,
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return Storage._comparison_result(
             len(cases),
             minimum,
@@ -803,7 +880,9 @@ class Storage:
         post_executions: int,
         post_failures: int,
     ) -> Dict[str, Any]:
-        baseline_rate = baseline_failures / baseline_executions if baseline_executions else None
+        baseline_rate = (
+            baseline_failures / baseline_executions if baseline_executions else None
+        )
         post_rate = post_failures / post_executions if post_executions else None
         reduction = (
             round(1 - (post_rate / baseline_rate), 4)
@@ -817,8 +896,12 @@ class Storage:
         )
         return {
             "comparison_cases": case_count,
-            "baseline_failure_rate": round(baseline_rate, 4) if baseline_rate is not None else None,
-            "post_repair_failure_rate": round(post_rate, 4) if post_rate is not None else None,
+            "baseline_failure_rate": round(baseline_rate, 4)
+            if baseline_rate is not None
+            else None,
+            "post_repair_failure_rate": round(post_rate, 4)
+            if post_rate is not None
+            else None,
             "recurrence_reduction": reduction,
             "recurrence_reduction_note": note,
         }
@@ -843,21 +926,30 @@ class Storage:
 
     @staticmethod
     def _durable_control_metrics(session: Any) -> Dict[str, Any]:
-        applied = session.scalar(
-            select(func.count(RepairAttempt.id)).where(RepairAttempt.applied_at.is_not(None))
-        ) or 0
+        applied = (
+            session.scalar(
+                select(func.count(RepairAttempt.id)).where(
+                    RepairAttempt.applied_at.is_not(None)
+                )
+            )
+            or 0
+        )
         return {
             "applied_workflow_controls": applied,
             "share": None,
             "share_note": "n8n workflow controls are the only control type recorded in this release.",
         }
 
-    def _claim_repair(self, repair_id: int, from_status: str, to_status: str) -> Optional[Dict[str, Any]]:
+    def _claim_repair(
+        self, repair_id: int, from_status: str, to_status: str
+    ) -> Optional[Dict[str, Any]]:
         """Atomically own a repair transition, preventing double-click races."""
         with self._Session() as session:
             claimed = session.execute(
                 update(RepairAttempt)
-                .where(RepairAttempt.id == repair_id, RepairAttempt.status == from_status)
+                .where(
+                    RepairAttempt.id == repair_id, RepairAttempt.status == from_status
+                )
                 .values(status=to_status, failure_reason=None)
             ).rowcount
             if claimed != 1:
@@ -933,7 +1025,9 @@ class Storage:
         with self._Session() as session:
             changed = session.execute(
                 update(RepairAttempt)
-                .where(RepairAttempt.id == repair_id, RepairAttempt.status == from_status)
+                .where(
+                    RepairAttempt.id == repair_id, RepairAttempt.status == from_status
+                )
                 .values(status=to_status, **values)
             ).rowcount
             if changed != 1:
@@ -981,7 +1075,9 @@ class Storage:
                 )
             )
             session.commit()
-        self.record_operational_event("reliability_case_opened", {"repair_id": repair_id})
+        self.record_operational_event(
+            "reliability_case_opened", {"repair_id": repair_id}
+        )
 
     @staticmethod
     def _is_runtime_execution(raw: Dict[str, Any]) -> bool:
@@ -1058,14 +1154,20 @@ class Storage:
                     )
                 ).scalars()
             }
-            cases = session.execute(
-                select(ReliabilityCase).where(
-                    ReliabilityCase.workflow_id == execution.workflow_id,
-                    ReliabilityCase.status.in_(("observing", "recurred")),
+            cases = (
+                session.execute(
+                    select(ReliabilityCase).where(
+                        ReliabilityCase.workflow_id == execution.workflow_id,
+                        ReliabilityCase.status.in_(("observing", "recurred")),
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             trace = parse_trace(raw)
-            runtime_execution = trace.get("available") and trace.get("kind") == "runtime"
+            runtime_execution = (
+                trace.get("available") and trace.get("kind") == "runtime"
+            )
             successful_runtime = runtime_execution and trace.get("status") == "success"
             changed = False
             for case in cases:
@@ -1123,12 +1225,16 @@ class Storage:
         case.status = "recurred"
         case.outcome = "recurred"
         case.recurrence_count += 1
-        case.first_recurrence_execution_id = case.first_recurrence_execution_id or execution_id
+        case.first_recurrence_execution_id = (
+            case.first_recurrence_execution_id or execution_id
+        )
 
     @staticmethod
     def _record_success(case: ReliabilityCase, execution_id: int) -> None:
         case.successful_execution_count += 1
-        case.first_success_execution_id = case.first_success_execution_id or execution_id
+        case.first_success_execution_id = (
+            case.first_success_execution_id or execution_id
+        )
 
     @staticmethod
     def _record_comparison_execution(
@@ -1180,7 +1286,9 @@ class Storage:
                         "recording prevention."
                     )
                 if case.recurrence_count:
-                    raise ValueError("A recurring case cannot be recorded as prevented.")
+                    raise ValueError(
+                        "A recurring case cannot be recorded as prevented."
+                    )
             now = datetime.now(timezone.utc).isoformat()
             case.status = outcome
             case.outcome = outcome
@@ -1200,10 +1308,18 @@ class Storage:
         Execution.workflow_id,
         Execution.workflow_name,
         Execution.source_execution_id,
+        Execution.build_revision,
     )
 
     @staticmethod
-    def _enrich(det: DetectionRow, received_at, workflow_id, workflow_name, source_id) -> Dict[str, Any]:
+    def _enrich(
+        det: DetectionRow,
+        received_at,
+        workflow_id,
+        workflow_name,
+        source_id,
+        build_revision,
+    ) -> Dict[str, Any]:
         return {
             **det.to_dict(),
             "received_at": received_at,
@@ -1212,6 +1328,7 @@ class Storage:
             # The upstream n8n execution id (poll-ingested rows only); lets the
             # dashboard deep-link to the exact execution in the user's n8n.
             "n8n_execution_id": source_id,
+            "build_revision": build_revision,
         }
 
     def list_detections(self) -> List[Dict[str, Any]]:

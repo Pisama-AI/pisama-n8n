@@ -24,8 +24,9 @@ Create an owner and an API key in that instance, then start the Pisama server la
 ```bash
 export PISAMA_DOGFOOD_N8N_API_KEY='your-disposable-n8n-key'
 export PISAMA_DOGFOOD_API_KEY='local-pisama-key'
+export PISAMA_BUILD_REVISION="$(git rev-parse --short HEAD)"
 docker compose -p pisama-n8n-dogfood -f deploy/docker-compose.dogfood.yml \
-  --profile server up -d
+  --profile server up -d --build
 ```
 
 For Postgres, add `-f deploy/docker-compose.dogfood.postgres.yml`. Use a distinct
@@ -109,6 +110,11 @@ fired `detector:failure_mode`, the first and latest retained observation, and th
 source-controlled coverage catalog. An uncatalogued fingerprint is a signal to inspect
 the running image or detector contract, not evidence to silently relabel.
 
+Build each server image with `PISAMA_BUILD_REVISION` set as above. New execution and
+detection rows retain that build revision and the detector semantic version. Historical
+unversioned rows remain visible as `unknown`; they cannot be attributed to the current
+source tree.
+
 Use an explicit gate only when its required captures are expected to be present:
 
 ```bash
@@ -119,6 +125,10 @@ python scripts/audit_dogfood_corpus.py --require-profile core
 nonzero and lists its missing fingerprints. A fresh or recreated dogfood volume can
 legitimately fail even if a historical exercise passed, so do not substitute prose or a
 past CI result for this check.
+
+The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
+The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so
+it must never be presented as proof of observed runtime-loop coverage.
 
 ## Reliability evidence definitions
 

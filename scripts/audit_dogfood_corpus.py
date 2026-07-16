@@ -62,6 +62,11 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
         "idempotency",
         "n8n_duplicate_side_effect_risk",
     ),
+    EvidenceTarget("P2", "Runtime payload growth", "resource", "F6"),
+    EvidenceTarget("P2", "Oversized resource pressure", "resource", "F3"),
+    # The current n8n orchestrator runs cycle analysis against workflow structure.
+    # This target must not be read as evidence for a runtime loop detector.
+    EvidenceTarget("P3", "Workflow cycle configuration (static)", "cycle", "F11"),
     EvidenceTarget(
         "P3", "Agent tool recovery", "agent_diagnostics", "n8n_agent_tool_recovery"
     ),
@@ -111,35 +116,59 @@ def fingerprint(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     return detector, failure_mode
 
 
+def provenance_value(row: Dict[str, Any], field: str) -> str:
+    """Return a non-empty provenance value without treating absent data as current."""
+    value = row.get(field)
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def record_observation(
+    aggregate: Dict[Tuple[str, str], Dict[str, Any]], row: Dict[str, Any]
+) -> None:
+    """Add one metadata-only fired observation to the aggregate report."""
+    key = fingerprint(row)
+    if key is None:
+        return
+    observation = aggregate[key]
+    observation["count"] += 1
+    observation["detector_versions"].add(provenance_value(row, "detector_version"))
+    observation["build_revisions"].add(provenance_value(row, "build_revision"))
+    received_at = row.get("received_at")
+    if not isinstance(received_at, str) or not received_at:
+        return
+    if observation["first_seen"] is None or received_at < observation["first_seen"]:
+        observation["first_seen"] = received_at
+    if observation["last_seen"] is None or received_at > observation["last_seen"]:
+        observation["last_seen"] = received_at
+
+
 def observed_fingerprints(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Aggregate fired rows by fingerprint while retaining no execution identifiers."""
     aggregate: Dict[Tuple[str, str], Dict[str, Any]] = defaultdict(
-        lambda: {"count": 0, "first_seen": None, "last_seen": None}
+        lambda: {
+            "count": 0,
+            "first_seen": None,
+            "last_seen": None,
+            "detector_versions": set(),
+            "build_revisions": set(),
+        }
     )
     for row in rows:
-        key = fingerprint(row)
-        if key is None:
-            continue
-        observation = aggregate[key]
-        observation["count"] += 1
-        received_at = row.get("received_at")
-        if isinstance(received_at, str) and received_at:
-            if (
-                observation["first_seen"] is None
-                or received_at < observation["first_seen"]
-            ):
-                observation["first_seen"] = received_at
-            if (
-                observation["last_seen"] is None
-                or received_at > observation["last_seen"]
-            ):
-                observation["last_seen"] = received_at
+        record_observation(aggregate, row)
     return [
         {
             "fingerprint": f"{detector}:{failure_mode}",
             "detector": detector,
             "failure_mode": failure_mode,
-            **aggregate[(detector, failure_mode)],
+            "count": aggregate[(detector, failure_mode)]["count"],
+            "first_seen": aggregate[(detector, failure_mode)]["first_seen"],
+            "last_seen": aggregate[(detector, failure_mode)]["last_seen"],
+            "detector_versions": sorted(
+                aggregate[(detector, failure_mode)]["detector_versions"]
+            ),
+            "build_revisions": sorted(
+                aggregate[(detector, failure_mode)]["build_revisions"]
+            ),
         }
         for detector, failure_mode in sorted(aggregate)
     ]

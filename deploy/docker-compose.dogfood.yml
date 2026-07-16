@@ -34,6 +34,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        PISAMA_BUILD_REVISION: ${PISAMA_BUILD_REVISION:-unknown}
     ports:
       - "${PISAMA_DOGFOOD_SERVER_PORT:-8401}:8400"
     environment:

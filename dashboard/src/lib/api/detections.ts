@@ -9,6 +9,7 @@ export interface ServerDetection {
   confidence: number
   failure_mode: string | null
   explanation: string
+  detector_version?: string | null
   // Added by the server (join on executions.received_at); may be absent on
   // older rows, so the adapter falls back.
   received_at?: string
@@ -17,6 +18,7 @@ export interface ServerDetection {
   workflow_id?: string | null
   workflow_name?: string | null
   n8n_execution_id?: string | null
+  build_revision?: string | null
   feedback?: DetectionFeedback | null
   reliability_case?: ReliabilityCase | null
 }
@@ -36,9 +38,11 @@ export interface Detection {
   created_at: string
   detected: boolean
   failure_mode: string | null
+  detector_version?: string | null
   workflow_id?: string | null
   workflow_name?: string | null
   n8n_execution_id?: string | null
+  build_revision?: string | null
   details?: {
     severity?: string
     affected_agents?: number
@@ -107,9 +111,11 @@ export function adaptDetection(row: ServerDetection): Detection {
     created_at: row.received_at ?? new Date().toISOString(),
     detected: row.detected,
     failure_mode: row.failure_mode,
+    detector_version: row.detector_version ?? null,
     workflow_id: row.workflow_id ?? null,
     workflow_name: row.workflow_name ?? null,
     n8n_execution_id: row.n8n_execution_id ?? null,
+    build_revision: row.build_revision ?? null,
     feedback: row.feedback ?? null,
     reliability_case: row.reliability_case ?? null,
     details: {

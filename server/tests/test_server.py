@@ -4,6 +4,7 @@ Real engine, real SQLite (temp file per test), FastAPI TestClient. The fixtures
 are the REAL captured executions / complexity workflows committed in the monorepo
 worktree — read by absolute path, never copied here.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ def _load(rel: str) -> dict:
 def client(tmp_path, monkeypatch):
     """A TestClient backed by a fresh temp-file SQLite Storage. Auth off by default."""
     monkeypatch.delenv("PISAMA_API_KEY", raising=False)
+    monkeypatch.delenv("PISAMA_BUILD_REVISION", raising=False)
     db_path = tmp_path / "test.db"
     storage = Storage(url=f"sqlite:///{db_path}")
     app.dependency_overrides[get_storage] = lambda: storage
@@ -38,12 +40,12 @@ def client(tmp_path, monkeypatch):
 
 def _fired(response_json: dict, detector: str) -> bool:
     return any(
-        d["detector"] == detector and d["detected"]
-        for d in response_json["detections"]
+        d["detector"] == detector and d["detected"] for d in response_json["detections"]
     )
 
 
 # 1. Runtime lane: each failure fixture fires its matching detection; healthy fires none.
+
 
 @pytest.mark.parametrize(
     "rel, detector",
@@ -73,6 +75,7 @@ def test_healthy_fixture_fires_no_failure_detection(client):
 # 2. Structural lane: a complexity workflow yields a complexity verdict. Runtime
 # data-contract analysis deliberately does not run without an execution.
 
+
 def test_complexity_workflow_yields_structural_detection(client):
     payload = _load("complexity/01-COMPLEXITY-high-node-count.json")
     resp = client.post("/api/v1/n8n/webhook", json=payload)
@@ -86,6 +89,7 @@ def test_complexity_workflow_yields_structural_detection(client):
 
 # 3. Persistence: stored detections are readable back, not just echoed.
 
+
 def test_detections_are_persisted_and_listable(client):
     payload = _load("executions/timeout/TIMEOUT-01.json")
     post = client.post("/api/v1/n8n/webhook", json=payload)
@@ -98,9 +102,15 @@ def test_detections_are_persisted_and_listable(client):
     assert any(r["detector"] == "timeout" and r["detected"] for r in rows), rows
     # Persisted, not echoed: rows carry a DB id + execution_id FK.
     assert all("id" in r and "execution_id" in r for r in rows), rows
+    # Every new row retains the detector semantic contract and the image revision
+    # that produced it. A local TestClient has no injected image revision.
+    timeout = next(row for row in rows if row["detector"] == "timeout")
+    assert timeout["detector_version"] == "1.0"
+    assert timeout["build_revision"] == "unknown"
 
 
 # 4. Auth: with PISAMA_API_KEY set, missing bearer → 401; correct bearer → 200.
+
 
 def test_auth_required_when_key_set(client, monkeypatch):
     monkeypatch.setenv("PISAMA_API_KEY", "s3cret")
@@ -119,13 +129,28 @@ def test_auth_required_when_key_set(client, monkeypatch):
 
 # 5. Health.
 
+
 def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {"status": "ok", "build_revision": "unknown"}
+
+
+def test_detection_retains_configured_build_revision(client, monkeypatch):
+    """A deployment-supplied revision is attached at ingestion, not inferred later."""
+    monkeypatch.setenv("PISAMA_BUILD_REVISION", "dogfood-current-source")
+    payload = _load("executions/timeout/TIMEOUT-01.json")
+    assert client.post("/api/v1/n8n/webhook", json=payload).status_code == 200
+
+    rows = client.get("/api/v1/detections").json()
+    assert rows and {row["build_revision"] for row in rows} == {
+        "dogfood-current-source"
+    }
+    assert client.get("/healthz").json()["build_revision"] == "dogfood-current-source"
 
 
 # 6. Enriched detection rows: workflow name/id + n8n execution id are surfaced.
+
 
 def test_detections_carry_workflow_context(client):
     payload = _load("executions/timeout/TIMEOUT-01.json")
@@ -145,6 +170,7 @@ def test_detections_carry_workflow_context(client):
 
 # 7. Fetch a single detection by id; unknown id → 404.
 
+
 def test_get_detection_by_id(client):
     payload = _load("executions/timeout/TIMEOUT-01.json")
     assert client.post("/api/v1/n8n/webhook", json=payload).status_code == 200
@@ -163,12 +189,18 @@ def test_get_detection_by_id(client):
 
 # 8. Execution trace: per-node timing/status/errors behind a detection.
 
+
 def _first_detection_id(client) -> int:
     return client.get("/api/v1/detections").json()[0]["id"]
 
 
 def test_trace_runtime_surfaces_slow_node(client):
-    assert client.post("/api/v1/n8n/webhook", json=_load("executions/timeout/TIMEOUT-01.json")).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/n8n/webhook", json=_load("executions/timeout/TIMEOUT-01.json")
+        ).status_code
+        == 200
+    )
     trace = client.get(f"/api/v1/detections/{_first_detection_id(client)}/trace").json()
 
     assert trace["available"] and trace["kind"] == "runtime", trace
@@ -180,7 +212,12 @@ def test_trace_runtime_surfaces_slow_node(client):
 
 
 def test_trace_runtime_marks_error_node(client):
-    assert client.post("/api/v1/n8n/webhook", json=_load("executions/error/ERROR-01-throw.json")).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/n8n/webhook", json=_load("executions/error/ERROR-01-throw.json")
+        ).status_code
+        == 200
+    )
     trace = client.get(f"/api/v1/detections/{_first_detection_id(client)}/trace").json()
 
     assert trace["status"] == "error", trace
@@ -190,11 +227,19 @@ def test_trace_runtime_marks_error_node(client):
 
 
 def test_trace_static_for_bare_workflow(client):
-    assert client.post("/api/v1/n8n/webhook", json=_load("complexity/01-COMPLEXITY-high-node-count.json")).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/n8n/webhook",
+            json=_load("complexity/01-COMPLEXITY-high-node-count.json"),
+        ).status_code
+        == 200
+    )
     trace = client.get(f"/api/v1/detections/{_first_detection_id(client)}/trace").json()
 
     assert trace["available"] and trace["kind"] == "static", trace
-    assert trace["node_count"] > 0 and all(n["ran"] is False for n in trace["nodes"]), trace
+    assert trace["node_count"] > 0 and all(n["ran"] is False for n in trace["nodes"]), (
+        trace
+    )
 
 
 def test_trace_unknown_id_404(client):
@@ -203,8 +248,11 @@ def test_trace_unknown_id_404(client):
 
 # 9. Operator feedback + local operational health are persisted with real execution data.
 
+
 def test_feedback_and_operations_summary_use_persisted_execution_data(client):
-    posted = client.post("/api/v1/n8n/webhook", json=_load("executions/error/ERROR-01-throw.json"))
+    posted = client.post(
+        "/api/v1/n8n/webhook", json=_load("executions/error/ERROR-01-throw.json")
+    )
     assert posted.status_code == 200, posted.text
     detection_id = client.get("/api/v1/detections").json()[0]["id"]
 
@@ -235,17 +283,24 @@ def test_feedback_and_operations_summary_use_persisted_execution_data(client):
 
 
 def test_feedback_rejects_unknown_verdict_and_detection(client):
-    assert client.post(
-        "/api/v1/detections/999999/feedback", json={"verdict": "useful"}
-    ).status_code == 404
-    assert client.post(
-        "/api/v1/detections/1/feedback", json={"verdict": "maybe"}
-    ).status_code == 422
+    assert (
+        client.post(
+            "/api/v1/detections/999999/feedback", json={"verdict": "useful"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/v1/detections/1/feedback", json={"verdict": "maybe"}
+        ).status_code
+        == 422
+    )
 
 
 # 10. Flatted DB wire format: a dumped execution_data column POSTs and detects.
 #    FLATTED-01-error.json is ERROR-01-throw.json's data column re-encoded in the
 #    `flatted` npm wire format (what n8n stores in the DB) — synthetic, no wild data.
+
 
 def test_flatted_array_execution_detects_and_persists(client):
     payload = _load("executions/flatted/FLATTED-01-error.json")
@@ -298,3 +353,37 @@ def test_existing_reliability_case_table_receives_outcome_column_on_upgrade(tmp_
         "post_repair_execution_count",
         "post_repair_failure_count",
     } <= columns
+
+
+def test_existing_execution_and_detection_tables_receive_provenance_columns(tmp_path):
+    """An upgraded self-host database keeps old evidence but labels it unversioned."""
+    db_path = tmp_path / "prior-detection-release.db"
+    url = f"sqlite:///{db_path}"
+    old_engine = create_engine(url)
+    with old_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE executions ("
+                "id INTEGER PRIMARY KEY, workflow_id VARCHAR, received_at VARCHAR NOT NULL, "
+                "raw TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE detections ("
+                "id INTEGER PRIMARY KEY, execution_id INTEGER NOT NULL, detector VARCHAR NOT NULL, "
+                "detected BOOLEAN NOT NULL, confidence FLOAT NOT NULL, failure_mode VARCHAR, "
+                "explanation TEXT)"
+            )
+        )
+    old_engine.dispose()
+
+    upgraded = Storage(url=url)
+    execution_columns = {
+        column["name"] for column in inspect(upgraded.engine).get_columns("executions")
+    }
+    detection_columns = {
+        column["name"] for column in inspect(upgraded.engine).get_columns("detections")
+    }
+    assert "build_revision" in execution_columns
+    assert "detector_version" in detection_columns
