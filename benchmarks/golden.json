@@ -1,0 +1,19 @@
+{
+  "executions/error.json": [
+    "error"
+  ],
+  "executions/healthy.json": [],
+  "executions/resource.json": [
+    "resource"
+  ],
+  "executions/timeout.json": [
+    "timeout"
+  ],
+  "structural/clean-linear.json": [],
+  "structural/complexity-spaghetti.json": [
+    "complexity"
+  ],
+  "structural/cycle-unbounded.json": [
+    "cycle"
+  ]
+}

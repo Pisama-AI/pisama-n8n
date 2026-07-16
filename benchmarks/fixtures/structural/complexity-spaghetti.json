@@ -1,0 +1,40 @@
+{
+  "name": "COMPLEXITY-007: Spaghetti workflow with cross-connections",
+  "nodes": [
+    {"id": "n1", "name": "Start", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0]},
+    {"id": "n2", "name": "A", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [200, 0]},
+    {"id": "n3", "name": "B", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, -150]},
+    {"id": "n4", "name": "C", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [400, 150]},
+    {"id": "n5", "name": "D", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, -250]},
+    {"id": "n6", "name": "E", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, -100]},
+    {"id": "n7", "name": "F", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 100]},
+    {"id": "n8", "name": "G", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [600, 250]},
+    {"id": "n9", "name": "H", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [800, -200]},
+    {"id": "n10", "name": "I", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [800, 0]},
+    {"id": "n11", "name": "J", "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.6, "position": [800, 200]},
+    {"id": "n12", "name": "K", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [1000, -100]},
+    {"id": "n13", "name": "L", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [1000, 100]},
+    {"id": "n14", "name": "M", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1200, 0]},
+    {"id": "n15", "name": "N", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [1400, -50]},
+    {"id": "n16", "name": "O", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [1400, 50]},
+    {"id": "n17", "name": "End", "type": "n8n-nodes-base.merge", "typeVersion": 3, "position": [1600, 0]}
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "A", "type": "main", "index": 0}]]},
+    "A": {"main": [[{"node": "B", "type": "main", "index": 0}], [{"node": "C", "type": "main", "index": 0}]]},
+    "B": {"main": [[{"node": "D", "type": "main", "index": 0}], [{"node": "E", "type": "main", "index": 0}]]},
+    "C": {"main": [[{"node": "F", "type": "main", "index": 0}], [{"node": "G", "type": "main", "index": 0}]]},
+    "D": {"main": [[{"node": "H", "type": "main", "index": 0}], [{"node": "I", "type": "main", "index": 0}]]},
+    "E": {"main": [[{"node": "I", "type": "main", "index": 0}], [{"node": "K", "type": "main", "index": 0}]]},
+    "F": {"main": [[{"node": "I", "type": "main", "index": 0}], [{"node": "J", "type": "main", "index": 0}]]},
+    "G": {"main": [[{"node": "J", "type": "main", "index": 0}], [{"node": "L", "type": "main", "index": 0}]]},
+    "H": {"main": [[{"node": "K", "type": "main", "index": 0}]]},
+    "I": {"main": [[{"node": "K", "type": "main", "index": 1}], [{"node": "L", "type": "main", "index": 0}]]},
+    "J": {"main": [[{"node": "L", "type": "main", "index": 1}]]},
+    "K": {"main": [[{"node": "M", "type": "main", "index": 0}]]},
+    "L": {"main": [[{"node": "M", "type": "main", "index": 0}]]},
+    "M": {"main": [[{"node": "N", "type": "main", "index": 0}], [{"node": "O", "type": "main", "index": 0}]]},
+    "N": {"main": [[{"node": "End", "type": "main", "index": 0}]]},
+    "O": {"main": [[{"node": "End", "type": "main", "index": 1}]]}
+  }
+}

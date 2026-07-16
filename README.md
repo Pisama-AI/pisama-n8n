@@ -1,5 +1,7 @@
 # Pisama for n8n
 
+[![CI](https://github.com/Pisama-AI/pisama-n8n/actions/workflows/ci.yml/badge.svg)](https://github.com/Pisama-AI/pisama-n8n/actions/workflows/ci.yml)
+
 Failure detection for n8n workflows. Fair-code and self-hostable; the paid tier (fix
 suggestions and auto-fixing) runs in the Pisama cloud.
 
@@ -24,8 +26,8 @@ server/     FastAPI self-host server: single-tenant, SQLite default, HMAC webhoo
 dashboard/  Next.js dashboard (overview, detections list + detail, settings). Working;
             typechecks, builds, Playwright-smoked.
 deploy/     docker-compose + Dockerfile for `docker compose up` self-host.
-benchmarks/ parity_check.py: manual parity check of the extracted engine vs a monorepo
-            checkout (this repo has no CI).
+benchmarks/ parity_check.py + fixtures/ + golden.json: the engine regression gate CI runs
+            (engine verdicts vs a committed golden corpus; no monorepo needed).
 scripts/    extract_from_monorepo.py: the detector vendoring/sync tool.
 ```
 
@@ -61,10 +63,12 @@ execution-lane detectors (timeout/error/resource) also run on parsed runtime dat
 ## Single source of truth
 
 The detectors live in the Pisama monorepo (where the golden data, judges, and calibration
-harness are). This repo VENDORS them via `scripts/extract_from_monorepo.py`;
-`benchmarks/parity_check.py` compares the vendored copy against a monorepo checkout (run
-by hand, since this repo has no CI). Detector fixes land in the monorepo and are
-re-extracted here, not edited in place.
+harness are). This repo VENDORS them via `scripts/extract_from_monorepo.py`. CI runs
+`benchmarks/parity_check.py`, which freezes the vendored engine's verdicts on a committed
+corpus (`benchmarks/fixtures/` vs `benchmarks/golden.json`), so a regression or a botched
+re-extraction fails the build. Maintainers additionally run `parity_check.py --monorepo
+<path>` at re-extraction time to confirm the golden still matches the monorepo source of
+truth. Detector fixes land in the monorepo and are re-extracted here, not edited in place.
 
 ## Roadmap
 

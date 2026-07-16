@@ -20,8 +20,18 @@ dependencies = [
     "httpx",
 ]
 
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio"]
+
 [project.urls]
 Homepage = "https://github.com/Pisama-AI/pisama-n8n"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pisama_n8n_server"]
+
+[tool.pytest.ini_options]
+# The server has async unit tests (SSE broadcaster, poller). "auto" runs every
+# `async def test_*` on the event loop without a per-test marker or an external
+# anyio/pytest-asyncio incantation, so the suite is self-contained.
+asyncio_mode = "auto"
+testpaths = ["tests"]

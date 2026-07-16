@@ -1,0 +1,56 @@
+name: CI
+
+# Quality gates for the fair-code pisama-n8n stack. Test-only: this workflow never
+# deploys (the dashboard deploys via Vercel's own git integration; the server/engine
+# are released manually). Safe to run on every push and PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  engine-server:
+    name: engine parity + server tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install engine + server (with test deps)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e engine
+          pip install -e "server[test]"
+      - name: Parity / regression gate (engine vs golden corpus)
+        run: python benchmarks/parity_check.py
+      - name: Server tests
+        working-directory: server
+        run: python -m pytest -q
+
+  dashboard:
+    name: dashboard typecheck + build + e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install
+        working-directory: dashboard
+        run: npm ci
+      - name: Typecheck
+        working-directory: dashboard
+        run: npx tsc --noEmit
+      - name: Build (OSS mode)
+        working-directory: dashboard
+        run: npm run build
+      - name: Install Playwright browser
+        working-directory: dashboard
+        run: npx playwright install --with-deps chromium
+      - name: E2E (SaaS settings smoke)
+        working-directory: dashboard
+        run: npm run test:e2e

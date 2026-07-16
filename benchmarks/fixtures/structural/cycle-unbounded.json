@@ -1,0 +1,15 @@
+{
+  "name": "cycle-unbounded",
+  "nodes": [
+    { "name": "Start", "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [0, 0], "parameters": {} },
+    { "name": "A", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "parameters": {} },
+    { "name": "B", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [440, 0], "parameters": {} },
+    { "name": "C", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [660, 0], "parameters": {} }
+  ],
+  "connections": {
+    "Start": { "main": [[{ "node": "A", "type": "main", "index": 0 }]] },
+    "A": { "main": [[{ "node": "B", "type": "main", "index": 0 }]] },
+    "B": { "main": [[{ "node": "C", "type": "main", "index": 0 }]] },
+    "C": { "main": [[{ "node": "A", "type": "main", "index": 0 }]] }
+  }
+}
