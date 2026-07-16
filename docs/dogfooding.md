@@ -269,6 +269,12 @@ current release decision.
 - An isolated n8n `1.70.0` lane reproduced the retry-export limitation: a retry-enabled
   POST made two real sink executions, while the caller exported one node run and no
   retry linkage. This matches `1.91.3` and is why `n8n_retry_exhausted` is withheld.
+- Current source revision `768b4ef` rebuilt the retained isolated server, then reran the
+  credential, expression/data-contract, rate-limit, provider, retry, timeout, payload,
+  and both error-route workflows. The first sync ingested eleven real executions and the
+  second added zero. Its current-build `core` gate now misses only P0
+  `truncation:n8n_truncation`; retry exhaustion is visible as withheld, and an explicit
+  gate for it correctly exits nonzero rather than silently passing.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API
