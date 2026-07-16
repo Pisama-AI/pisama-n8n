@@ -105,8 +105,10 @@ copy. Its fields have fixed meanings:
 - **Time to applied workflow control** runs from Pisama receiving the source execution
   to a stale-guarded workflow change being applied. It does not claim that the change
   solved the issue.
-- **Recurrence reduction** is intentionally unavailable until we record comparable
-  baseline and post-change execution windows for each failure class.
+- **Recurrence reduction** compares equal-sized baseline and post-change runtime windows
+  for the same workflow and failure fingerprint. It remains unavailable until a case has
+  at least ten real baseline executions and an equal post-change window (configurable for
+  internal harness testing). It is reported as a pooled rate change across complete cases.
 
 An outcome is retained when a repair is later rolled back. The repair's current lifecycle
 state may be `rolled_back`, while its previous `prevented`, `recurred`, or `inconclusive`

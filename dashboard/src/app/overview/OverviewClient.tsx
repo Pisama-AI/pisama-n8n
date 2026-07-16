@@ -290,8 +290,11 @@ function ReliabilityLearning({ metrics }: { metrics?: ReliabilityMetrics }) {
           </div>
         </div>
         <div>
-          <div className="text-ink-3">Observed recurrences</div>
-          <div className="mt-1 text-ink-2">{remediation.recurred}</div>
+          <div className="text-ink-3">Failure-rate change</div>
+          <div className="mt-1 text-ink-2">
+            {percent(remediation.recurrence_reduction)}{' '}
+            <span className="text-ink-4">({remediation.comparison_cases} windows)</span>
+          </div>
         </div>
       </div>
       <p className="mt-5 border-t border-rule pt-4 text-xs leading-relaxed text-ink-3">

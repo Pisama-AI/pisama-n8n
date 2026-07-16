@@ -66,6 +66,15 @@ export interface ReliabilityCase {
   failure_mode: string | null
   status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back'
   outcome: ReliabilityOutcome | 'recurred' | null
+  baseline_execution_count: number
+  baseline_failure_count: number
+  post_repair_execution_count: number
+  post_repair_failure_count: number
+  comparison_minimum_executions: number
+  comparison_ready: boolean
+  baseline_failure_rate: number | null
+  post_repair_failure_rate: number | null
+  recurrence_reduction: number | null
   successful_execution_count: number
   recurrence_count: number
   first_success_execution_id: number | null

@@ -55,6 +55,12 @@ export function RepairVerificationPanel({
     100,
     Math.round((caseRecord.successful_execution_count / caseRecord.required_successful_executions) * 100),
   )
+  const comparisonProgress = Math.min(
+    100,
+    Math.round(
+      (caseRecord.post_repair_execution_count / Math.max(1, caseRecord.baseline_execution_count)) * 100,
+    ),
+  )
 
   async function record(outcome: ReliabilityOutcome) {
     setSaving(true)
@@ -117,6 +123,25 @@ export function RepairVerificationPanel({
           </span>
         </div>
       </div>
+
+      {caseRecord.baseline_execution_count > 0 && (
+        <div className="mt-4">
+          <div className="flex items-baseline justify-between gap-4">
+            <span className="text-xs uppercase tracking-wide text-ink-3">Comparable failure-rate window</span>
+            <span className="font-mono text-xs text-ink-2">
+              {caseRecord.post_repair_execution_count} / {caseRecord.baseline_execution_count} post-repair
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-paper-3">
+            <div className="h-full rounded-full bg-ink-3/50" style={{ width: `${comparisonProgress}%` }} />
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-ink-3">
+            {caseRecord.comparison_ready && caseRecord.recurrence_reduction !== null
+              ? `Observed failure-rate change: ${Math.round(caseRecord.recurrence_reduction * 100)}%.`
+              : `Needs ${caseRecord.comparison_minimum_executions} baseline executions and an equal post-repair window before Pisama calculates a rate change.`}
+          </p>
+        </div>
+      )}
 
       {caseRecord.status === 'observing' && (
         <div className="mt-5 space-y-3">

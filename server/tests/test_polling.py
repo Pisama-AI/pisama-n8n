@@ -104,6 +104,7 @@ def test_repair_verification_observes_a_real_post_apply_execution(tmp_path, monk
         monkeypatch.setenv("PISAMA_N8N_URL", N8N_URL)
         monkeypatch.setenv("PISAMA_N8N_API_KEY", key)
         monkeypatch.setenv("PISAMA_API_KEY", "srv-key")
+        monkeypatch.setenv("PISAMA_COMPARISON_MIN_EXECUTIONS", "1")
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'verification.db'}")
         import pisama_n8n_server.app as appmod
         from pisama_n8n_server.fixes import apply_fix, rollback
@@ -206,6 +207,13 @@ def test_repair_verification_observes_a_real_post_apply_execution(tmp_path, monk
                 case["successful_execution_count"] >= 1 for case in cases.values()
             )
             assert all(case["recurrence_count"] == 0 for case in cases.values())
+            assert all(case["comparison_ready"] for case in cases.values())
+            assert all(
+                case["recurrence_reduction"] == 1.0 for case in cases.values()
+            )
+            metrics = client.get("/api/v1/reliability/metrics", headers=headers)
+            assert metrics.status_code == 200, metrics.text
+            assert metrics.json()["remediation"]["recurrence_reduction"] == 1.0
             # One execution is useful exposure evidence, never enough to assert prevention.
             early = client.post(
                 f"/api/v1/reliability-cases/{cases[repair_ids[-1]]['id']}/outcome",

@@ -192,6 +192,12 @@ class ReliabilityCase(Base):
     # The verified or reviewed conclusion survives a later rollback. ``status``
     # is the current lifecycle state; outcome is the historical result.
     outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    # Fixed, local-only pre/post windows for a rate comparison. The post window is
+    # capped at the size of the baseline window so it cannot drift over time.
+    baseline_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    baseline_failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    post_repair_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    post_repair_failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
     successful_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
     recurrence_count: Mapped[int] = mapped_column(default=0, nullable=False)
     first_success_execution_id: Mapped[Optional[int]] = mapped_column(
@@ -205,8 +211,47 @@ class ReliabilityCase(Base):
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
     outcome_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    def _comparison_values(self) -> Dict[str, Any]:
+        comparison_minimum = comparison_minimum_execution_count()
+        baseline_rate = (
+            self.baseline_failure_count / self.baseline_execution_count
+            if self.baseline_execution_count
+            else None
+        )
+        post_rate = (
+            self.post_repair_failure_count / self.post_repair_execution_count
+            if self.post_repair_execution_count
+            else None
+        )
+        comparison_ready = (
+            self.baseline_execution_count >= comparison_minimum
+            and self.post_repair_execution_count >= self.baseline_execution_count
+            and baseline_rate is not None
+            and baseline_rate > 0
+            and post_rate is not None
+        )
+        return {
+            "baseline_execution_count": self.baseline_execution_count,
+            "baseline_failure_count": self.baseline_failure_count,
+            "post_repair_execution_count": self.post_repair_execution_count,
+            "post_repair_failure_count": self.post_repair_failure_count,
+            "comparison_minimum_executions": comparison_minimum,
+            "comparison_ready": comparison_ready,
+            "baseline_failure_rate": round(baseline_rate, 4) if baseline_rate is not None else None,
+            "post_repair_failure_rate": round(post_rate, 4) if post_rate is not None else None,
+            "recurrence_reduction": (
+                round(1 - (post_rate / baseline_rate), 4) if comparison_ready else None
+            ),
+        }
+
+    def _ready_for_outcome_review(self) -> bool:
+        return (
+            self.status == "observing"
+            and self.successful_execution_count >= verification_success_threshold()
+            and self.recurrence_count == 0
+        )
+
     def to_dict(self) -> Dict[str, Any]:
-        required = verification_success_threshold()
         return {
             "id": self.id,
             "repair_id": self.repair_id,
@@ -216,16 +261,13 @@ class ReliabilityCase(Base):
             "failure_mode": self.failure_mode,
             "status": self.status,
             "outcome": self.outcome,
+            **self._comparison_values(),
             "successful_execution_count": self.successful_execution_count,
             "recurrence_count": self.recurrence_count,
             "first_success_execution_id": self.first_success_execution_id,
             "first_recurrence_execution_id": self.first_recurrence_execution_id,
-            "required_successful_executions": required,
-            "ready_for_outcome_review": (
-                self.status == "observing"
-                and self.successful_execution_count >= required
-                and self.recurrence_count == 0
-            ),
+            "required_successful_executions": verification_success_threshold(),
+            "ready_for_outcome_review": self._ready_for_outcome_review(),
             "outcome_note": self.outcome_note,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -405,6 +447,24 @@ def verification_success_threshold() -> int:
         return 30
 
 
+def comparison_minimum_execution_count() -> int:
+    """Minimum equal-sized pre/post windows before publishing a rate change."""
+    raw = os.environ.get("PISAMA_COMPARISON_MIN_EXECUTIONS", "10")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
+
+
+def baseline_window_limit() -> int:
+    """Bound baseline work and make every case's comparison window finite."""
+    raw = os.environ.get("PISAMA_BASELINE_MAX_EXECUTIONS", "50")
+    try:
+        return max(comparison_minimum_execution_count(), int(raw))
+    except ValueError:
+        return 50
+
+
 # Columns added after the first (id, workflow_id, received_at, raw) release, keyed by
 # table. create_all() only creates missing TABLES, not missing columns, so an existing
 # self-host DB needs these added in place. ALTER TABLE ADD COLUMN is supported by both
@@ -418,6 +478,10 @@ _ADDED_COLUMNS = {
     },
     "reliability_cases": {
         "outcome": "VARCHAR",
+        "baseline_execution_count": "INTEGER NOT NULL DEFAULT 0",
+        "baseline_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "post_repair_execution_count": "INTEGER NOT NULL DEFAULT 0",
+        "post_repair_failure_count": "INTEGER NOT NULL DEFAULT 0",
     },
 }
 
@@ -657,13 +721,16 @@ class Storage:
         return round(ordered[index], 3)
 
     def _reliability_metrics(self, session: Any) -> Dict[str, Any]:
-        """Aggregate only locally persisted evidence, with explicit denominators.
+        """Aggregate only locally persisted evidence, with explicit denominators."""
+        return {
+            "diagnosis": self._diagnosis_metrics(session),
+            "remediation": self._remediation_metrics(session),
+            "time_to_applied_workflow_control": self._time_to_control_metrics(session),
+            "durable_controls": self._durable_control_metrics(session),
+        }
 
-        A verdict is counted once per detection (its latest verdict). A remediation
-        rate uses only cases with an actual prevention or recurrence outcome. This
-        intentionally does not claim recurrence *reduction*: that needs comparable
-        pre- and post-change population windows, which v1 does not yet store.
-        """
+    @staticmethod
+    def _diagnosis_metrics(session: Any) -> Dict[str, Any]:
         feedback_rows = session.execute(
             select(DetectionFeedback)
             .order_by(DetectionFeedback.detection_id, desc(DetectionFeedback.id))
@@ -679,7 +746,14 @@ class Storage:
             verdict == "not_useful" for verdict in latest_feedback.values()
         )
         reviewed = accepted + rejected
+        return {
+            "accepted": accepted,
+            "rejected": rejected,
+            "reviewed": reviewed,
+            "acceptance_rate": round(accepted / reviewed, 4) if reviewed else None,
+        }
 
+    def _remediation_metrics(self, session: Any) -> Dict[str, Any]:
         outcome_rows = session.execute(
             select(ReliabilityCase.outcome, func.count(ReliabilityCase.id))
             .where(ReliabilityCase.outcome.is_not(None))
@@ -688,9 +762,68 @@ class Storage:
         outcomes = dict(outcome_rows)
         prevented = outcomes.get("prevented", 0)
         recurred = outcomes.get("recurred", 0)
-        inconclusive = outcomes.get("inconclusive", 0)
         verified = prevented + recurred
+        return {
+            "prevented": prevented,
+            "recurred": recurred,
+            "inconclusive": outcomes.get("inconclusive", 0),
+            "verified_outcomes": verified,
+            "verified_remediation_rate": (
+                round(prevented / verified, 4) if verified else None
+            ),
+            **self._comparison_metrics(session),
+        }
 
+    @staticmethod
+    def _comparison_metrics(session: Any) -> Dict[str, Any]:
+        minimum = comparison_minimum_execution_count()
+        cases = session.execute(
+            select(ReliabilityCase).where(
+                ReliabilityCase.baseline_execution_count >= minimum,
+                ReliabilityCase.post_repair_execution_count
+                >= ReliabilityCase.baseline_execution_count,
+                ReliabilityCase.baseline_failure_count > 0,
+            )
+        ).scalars().all()
+        return Storage._comparison_result(
+            len(cases),
+            minimum,
+            sum(case.baseline_execution_count for case in cases),
+            sum(case.baseline_failure_count for case in cases),
+            sum(case.post_repair_execution_count for case in cases),
+            sum(case.post_repair_failure_count for case in cases),
+        )
+
+    @staticmethod
+    def _comparison_result(
+        case_count: int,
+        minimum: int,
+        baseline_executions: int,
+        baseline_failures: int,
+        post_executions: int,
+        post_failures: int,
+    ) -> Dict[str, Any]:
+        baseline_rate = baseline_failures / baseline_executions if baseline_executions else None
+        post_rate = post_failures / post_executions if post_executions else None
+        reduction = (
+            round(1 - (post_rate / baseline_rate), 4)
+            if baseline_rate and post_rate is not None
+            else None
+        )
+        note = (
+            f"Pooled across {case_count} complete equal-sized case window(s)."
+            if reduction is not None
+            else f"Requires at least {minimum} comparable baseline and post-change executions per case."
+        )
+        return {
+            "comparison_cases": case_count,
+            "baseline_failure_rate": round(baseline_rate, 4) if baseline_rate is not None else None,
+            "post_repair_failure_rate": round(post_rate, 4) if post_rate is not None else None,
+            "recurrence_reduction": reduction,
+            "recurrence_reduction_note": note,
+        }
+
+    def _time_to_control_metrics(self, session: Any) -> Dict[str, Any]:
         applied_rows = session.execute(
             select(RepairAttempt.applied_at, Execution.received_at)
             .join(DetectionRow, RepairAttempt.detection_id == DetectionRow.id)
@@ -702,39 +835,21 @@ class Storage:
             applied, received = _parse_iso(applied_at), _parse_iso(received_at)
             if applied is not None and received is not None and applied >= received:
                 elapsed_seconds.append((applied - received).total_seconds())
-
         return {
-            "diagnosis": {
-                "accepted": accepted,
-                "rejected": rejected,
-                "reviewed": reviewed,
-                "acceptance_rate": round(accepted / reviewed, 4) if reviewed else None,
-            },
-            "remediation": {
-                "prevented": prevented,
-                "recurred": recurred,
-                "inconclusive": inconclusive,
-                "verified_outcomes": verified,
-                "verified_remediation_rate": (
-                    round(prevented / verified, 4) if verified else None
-                ),
-                "recurrence_reduction": None,
-                "recurrence_reduction_note": (
-                    "Requires comparable baseline and post-change execution windows."
-                ),
-            },
-            "time_to_applied_workflow_control": {
-                "sample_size": len(elapsed_seconds),
-                "median_seconds": self._percentile(elapsed_seconds, 0.5),
-                "p90_seconds": self._percentile(elapsed_seconds, 0.9),
-            },
-            "durable_controls": {
-                "applied_workflow_controls": len(applied_rows),
-                "share": None,
-                "share_note": (
-                    "n8n workflow controls are the only control type recorded in this release."
-                ),
-            },
+            "sample_size": len(elapsed_seconds),
+            "median_seconds": self._percentile(elapsed_seconds, 0.5),
+            "p90_seconds": self._percentile(elapsed_seconds, 0.9),
+        }
+
+    @staticmethod
+    def _durable_control_metrics(session: Any) -> Dict[str, Any]:
+        applied = session.scalar(
+            select(func.count(RepairAttempt.id)).where(RepairAttempt.applied_at.is_not(None))
+        ) or 0
+        return {
+            "applied_workflow_controls": applied,
+            "share": None,
+            "share_note": "n8n workflow controls are the only control type recorded in this release.",
         }
 
     def _claim_repair(self, repair_id: int, from_status: str, to_status: str) -> Optional[Dict[str, Any]]:
@@ -844,6 +959,13 @@ class Storage:
             detection = session.get(DetectionRow, repair.detection_id)
             if detection is None:
                 raise ValueError("Repair has no source detection.")
+            baseline_executions, baseline_failures = self._baseline_window(
+                session,
+                repair.workflow_id,
+                detection.detector,
+                detection.failure_mode,
+                repair.applied_at,
+            )
             session.add(
                 ReliabilityCase(
                     repair_id=repair.id,
@@ -852,12 +974,63 @@ class Storage:
                     detector=detection.detector,
                     failure_mode=detection.failure_mode,
                     status="observing",
+                    baseline_execution_count=baseline_executions,
+                    baseline_failure_count=baseline_failures,
                     created_at=now,
                     updated_at=now,
                 )
             )
             session.commit()
         self.record_operational_event("reliability_case_opened", {"repair_id": repair_id})
+
+    @staticmethod
+    def _is_runtime_execution(raw: Dict[str, Any]) -> bool:
+        trace = parse_trace(raw)
+        return trace.get("available") and trace.get("kind") == "runtime"
+
+    def _baseline_window(
+        self,
+        session: Any,
+        workflow_id: str,
+        detector: str,
+        failure_mode: Optional[str],
+        applied_at: Optional[str],
+    ) -> tuple[int, int]:
+        """Return a bounded pre-apply runtime window from persisted real executions."""
+        statement = select(Execution).where(Execution.workflow_id == workflow_id)
+        if applied_at is not None:
+            statement = statement.where(Execution.received_at <= applied_at)
+        candidates = session.execute(
+            statement.order_by(desc(Execution.id)).limit(baseline_window_limit() * 20)
+        ).scalars()
+        runtime_ids = []
+        for execution in candidates:
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                continue
+            if self._is_runtime_execution(raw):
+                runtime_ids.append(execution.id)
+            if len(runtime_ids) >= baseline_window_limit():
+                break
+        if not runtime_ids:
+            return 0, 0
+        mode_clause = (
+            DetectionRow.failure_mode.is_(None)
+            if failure_mode is None
+            else DetectionRow.failure_mode == failure_mode
+        )
+        failure_ids = set(
+            session.execute(
+                select(DetectionRow.execution_id).where(
+                    DetectionRow.execution_id.in_(runtime_ids),
+                    DetectionRow.detector == detector,
+                    DetectionRow.detected.is_(True),
+                    mode_clause,
+                )
+            ).scalars()
+        )
+        return len(runtime_ids), len(failure_ids)
 
     def observe_reliability_cases(self, execution_id: int) -> None:
         """Attach a later real runtime execution to applicable post-repair cases.
@@ -888,10 +1061,12 @@ class Storage:
             cases = session.execute(
                 select(ReliabilityCase).where(
                     ReliabilityCase.workflow_id == execution.workflow_id,
-                    ReliabilityCase.status == "observing",
+                    ReliabilityCase.status.in_(("observing", "recurred")),
                 )
             ).scalars().all()
-            successful_runtime = self._is_successful_runtime_execution(raw)
+            trace = parse_trace(raw)
+            runtime_execution = trace.get("available") and trace.get("kind") == "runtime"
+            successful_runtime = runtime_execution and trace.get("status") == "success"
             changed = False
             for case in cases:
                 case_changed = self._observe_reliability_case(
@@ -899,21 +1074,13 @@ class Storage:
                     execution_id,
                     fired,
                     execution_started_at,
+                    runtime_execution,
                     successful_runtime,
                     now,
                 )
                 changed = case_changed or changed
             if changed:
                 session.commit()
-
-    @staticmethod
-    def _is_successful_runtime_execution(raw: Dict[str, Any]) -> bool:
-        trace = parse_trace(raw)
-        return (
-            trace.get("available")
-            and trace.get("kind") == "runtime"
-            and trace.get("status") == "success"
-        )
 
     @staticmethod
     def _is_historical_execution(
@@ -932,27 +1099,45 @@ class Storage:
         execution_id: int,
         fired: set,
         execution_started_at: Optional[datetime],
+        runtime_execution: bool,
         successful_runtime: bool,
         observed_at: str,
     ) -> bool:
         """Mutate one case only when this execution is valid new evidence."""
         if self._is_historical_execution(execution_started_at, case):
             return False
-        if (case.detector, case.failure_mode) in fired:
-            case.status = "recurred"
-            case.outcome = "recurred"
-            case.recurrence_count += 1
-            case.first_recurrence_execution_id = (
-                case.first_recurrence_execution_id or execution_id
-            )
-            case.updated_at = observed_at
-            return True
-        if not successful_runtime:
+        matching_failure = (case.detector, case.failure_mode) in fired
+        if matching_failure:
+            self._record_recurrence(case, execution_id)
+        if successful_runtime:
+            self._record_success(case, execution_id)
+        if runtime_execution:
+            self._record_comparison_execution(case, matching_failure)
+        if not (matching_failure or successful_runtime or runtime_execution):
             return False
-        case.successful_execution_count += 1
-        case.first_success_execution_id = case.first_success_execution_id or execution_id
         case.updated_at = observed_at
         return True
+
+    @staticmethod
+    def _record_recurrence(case: ReliabilityCase, execution_id: int) -> None:
+        case.status = "recurred"
+        case.outcome = "recurred"
+        case.recurrence_count += 1
+        case.first_recurrence_execution_id = case.first_recurrence_execution_id or execution_id
+
+    @staticmethod
+    def _record_success(case: ReliabilityCase, execution_id: int) -> None:
+        case.successful_execution_count += 1
+        case.first_success_execution_id = case.first_success_execution_id or execution_id
+
+    @staticmethod
+    def _record_comparison_execution(
+        case: ReliabilityCase, matching_failure: bool
+    ) -> None:
+        if case.post_repair_execution_count >= case.baseline_execution_count:
+            return
+        case.post_repair_execution_count += 1
+        case.post_repair_failure_count += int(matching_failure)
 
     def get_reliability_case(self, case_id: int) -> Optional[Dict[str, Any]]:
         with self._Session() as session:

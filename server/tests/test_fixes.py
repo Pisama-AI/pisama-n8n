@@ -119,6 +119,9 @@ def test_repair_proposal_lifecycle_is_persisted_in_real_sqlite(tmp_path, monkeyp
     case = cases.json()[0]
     assert case["repair_id"] == repair["id"]
     assert case["status"] == "observing"
+    assert case["baseline_execution_count"] == 1
+    assert case["baseline_failure_count"] == 1
+    assert case["comparison_ready"] is False
     assert case["successful_execution_count"] == 0
     assert case["recurrence_count"] == 0
     # One repair and no post-repair traffic can never be called prevention.
@@ -173,6 +176,7 @@ def test_repair_proposal_lifecycle_is_persisted_in_real_sqlite(tmp_path, monkeyp
     metrics = c.get("/api/v1/reliability/metrics", headers={"Authorization": "Bearer k"})
     assert metrics.status_code == 200, metrics.text
     assert metrics.json()["remediation"]["inconclusive"] == 1
+    assert metrics.json()["remediation"]["recurrence_reduction"] is None
     assert metrics.json()["time_to_applied_workflow_control"]["sample_size"] == 1
     persisted = storage.get_repair(repair["id"], include_workflows=True)
     assert persisted and persisted["status"] == "rolled_back"

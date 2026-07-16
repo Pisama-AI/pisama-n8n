@@ -287,5 +287,14 @@ def test_existing_reliability_case_table_receives_outcome_column_on_upgrade(tmp_
     old_engine.dispose()
 
     upgraded = Storage(url=url)
-    columns = {column["name"] for column in inspect(upgraded.engine).get_columns("reliability_cases")}
-    assert "outcome" in columns
+    columns = {
+        column["name"]
+        for column in inspect(upgraded.engine).get_columns("reliability_cases")
+    }
+    assert {
+        "outcome",
+        "baseline_execution_count",
+        "baseline_failure_count",
+        "post_repair_execution_count",
+        "post_repair_failure_count",
+    } <= columns

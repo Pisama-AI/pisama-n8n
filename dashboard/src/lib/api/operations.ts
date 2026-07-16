@@ -20,7 +20,10 @@ export interface ReliabilityMetrics {
     inconclusive: number
     verified_outcomes: number
     verified_remediation_rate: number | null
-    recurrence_reduction: null
+    comparison_cases: number
+    baseline_failure_rate: number | null
+    post_repair_failure_rate: number | null
+    recurrence_reduction: number | null
     recurrence_reduction_note: string
   }
   time_to_applied_workflow_control: {
