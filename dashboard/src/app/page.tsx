@@ -11,13 +11,14 @@ import {
   RadioTower,
   TerminalSquare,
   Sparkles,
+  Check,
 } from 'lucide-react'
 import { PisamaMark } from '@/components/common/PisamaMark'
 
 export const metadata: Metadata = {
   title: 'Pisama for n8n: failure detection for your workflows',
   description:
-    'Detect failures in n8n workflow executions: timeouts, node errors, runaway loops, resource explosions. Fair-code, self-hostable, with a paid cloud tier for AI fix suggestions and auto-apply.',
+    'Detect failures in n8n workflow executions with self-hosted OSS, free cloud, or Pro cloud plans for AI fixes and approvals.',
 }
 
 const DETECTORS = [
@@ -71,11 +72,173 @@ const CHANNELS = [
   },
 ]
 
+const PLAN_FEATURES = [
+  ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
+  ['n8n connections', 'You manage them', '1', '5'],
+  ['Failure detection', 'All six detectors', 'All six detectors', 'All six detectors'],
+  ['AI fix suggestions', '—', '—', 'Monthly allocation'],
+  ['Apply approved fixes', '—', '—', 'Snapshots and rollback'],
+]
+
+const FIRST_DETECTION_STEPS = [
+  {
+    title: 'Connect your n8n',
+    desc: 'Use the community node, a webhook, or a read-only n8n API key.',
+  },
+  {
+    title: 'Read real executions',
+    desc: 'Pisama checks timings, errors, payload size, and workflow structure.',
+  },
+  {
+    title: 'Review what needs action',
+    desc: 'Open the evidence behind each detection and decide the next step.',
+  },
+]
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="font-mono text-xs uppercase tracking-[0.18em] text-evidence mb-4">
       {children}
     </div>
+  )
+}
+
+function PlanComparison() {
+  return (
+    <section id="plans" className="border-t border-rule bg-paper-2/40 scroll-mt-6">
+      <div className="mx-auto max-w-5xl px-6 py-16">
+        <SectionLabel>Choose your setup</SectionLabel>
+        <div className="md:flex items-end justify-between gap-8 mb-10">
+          <div className="max-w-2xl">
+            <h2 className="font-serif text-2xl mb-3">Start where the workflow lives</h2>
+            <p className="text-ink-3 leading-relaxed">
+              Run Pisama yourself, start with hosted detection at no cost, or give your
+              team AI-assisted fixes when a detection needs action.
+            </p>
+          </div>
+          <p className="mt-4 md:mt-0 shrink-0 font-mono text-xs uppercase tracking-[0.14em] text-ink-4">
+            Change plans when the work changes
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <article className="rounded-lg border border-rule bg-paper-2 p-6 flex flex-col">
+            <div className="font-mono text-xs uppercase tracking-[0.18em] text-ink-3 mb-5">
+              OSS
+            </div>
+            <h3 className="font-serif text-2xl mb-3">Self-hosted</h3>
+            <p className="text-sm text-ink-3 leading-relaxed mb-6">
+              Keep the service, dashboard, and execution data in your own environment.
+            </p>
+            <ul className="space-y-3 text-sm text-ink-2 mb-8">
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                All six detectors
+              </li>
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                No hosted account
+              </li>
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                You control deployment and updates
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Pisama-AI/pisama-n8n"
+              className="mt-auto inline-block w-fit px-4 py-2 rounded-lg border border-rule text-sm font-medium text-ink-2 hover:text-ink hover:border-ink-4 transition-colors"
+            >
+              Self-host OSS
+            </a>
+          </article>
+
+          <article className="rounded-lg border border-rule bg-paper-2 p-6 flex flex-col">
+            <div className="font-mono text-xs uppercase tracking-[0.18em] text-ink-3 mb-5">
+              Cloud
+            </div>
+            <h3 className="font-serif text-2xl mb-3">Free</h3>
+            <p className="text-sm text-ink-3 leading-relaxed mb-6">
+              Get hosted detection and a dashboard for one connected n8n instance.
+            </p>
+            <ul className="space-y-3 text-sm text-ink-2 mb-8">
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                One n8n connection
+              </li>
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                All six detectors
+              </li>
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                Detection stays free
+              </li>
+            </ul>
+            <a
+              href="https://app.n8n.pisama.ai/sign-in"
+              className="mt-auto inline-block w-fit px-4 py-2 rounded-lg border border-rule text-sm font-medium text-ink-2 hover:text-ink hover:border-ink-4 transition-colors"
+            >
+              Start free cloud
+            </a>
+          </article>
+
+          <article className="rounded-lg border border-evidence bg-paper-3 p-6 flex flex-col shadow-[0_0_0_1px_rgba(232,179,65,0.12)]">
+            <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-evidence mb-5">
+              <Sparkles size={15} /> Pro cloud
+            </div>
+            <h3 className="font-serif text-2xl mb-3">Fix and approve</h3>
+            <p className="text-sm text-ink-2 leading-relaxed mb-6">
+              Give a team room to connect more workflows, generate fixes, and apply
+              approved changes with a rollback point.
+            </p>
+            <ul className="space-y-3 text-sm text-ink mb-8">
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                Five n8n connections
+              </li>
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                Monthly AI fix allocation
+              </li>
+              <li className="flex gap-2">
+                <Check size={16} className="text-evidence shrink-0" />
+                Apply and roll back approved fixes
+              </li>
+            </ul>
+            <a
+              href="https://app.n8n.pisama.ai/sign-in"
+              className="mt-auto inline-block w-fit px-4 py-2 rounded-lg bg-evidence text-evidence-ink text-sm font-semibold hover:bg-evidence-2 transition-colors"
+            >
+              Start free, then upgrade
+            </a>
+          </article>
+        </div>
+
+        <div className="mt-8 overflow-x-auto rounded-lg border border-rule bg-paper">
+          <table className="w-full min-w-[660px] text-left text-sm">
+            <caption className="sr-only">Comparison of OSS, free cloud, and Pro cloud options</caption>
+            <thead className="border-b border-rule text-xs uppercase tracking-[0.14em] text-ink-4">
+              <tr>
+                <th scope="col" className="px-5 py-4 font-medium">Includes</th>
+                <th scope="col" className="px-5 py-4 font-medium">OSS</th>
+                <th scope="col" className="px-5 py-4 font-medium">Free cloud</th>
+                <th scope="col" className="px-5 py-4 font-medium text-evidence">Pro cloud</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-rule text-ink-2">
+              {PLAN_FEATURES.map(([feature, oss, free, pro]) => (
+                <tr key={feature}>
+                  <th scope="row" className="px-5 py-4 font-medium text-ink">{feature}</th>
+                  <td className="px-5 py-4">{oss}</td>
+                  <td className="px-5 py-4">{free}</td>
+                  <td className="px-5 py-4 text-ink">{pro}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -92,55 +255,76 @@ export default function Landing() {
             </span>
           </div>
           <nav className="flex items-center gap-5 text-sm">
+            <a href="#plans" className="text-ink-3 hover:text-ink transition-colors">
+              Compare options
+            </a>
             <a
               href="https://github.com/Pisama-AI/pisama-n8n"
               className="text-ink-3 hover:text-ink transition-colors"
             >
               GitHub
             </a>
-            <Link
-              href="/overview"
+            <a
+              href="https://app.n8n.pisama.ai/sign-in"
               className="px-4 py-2 rounded-lg bg-evidence text-evidence-ink font-medium hover:bg-evidence-2 transition-colors"
             >
-              Open dashboard
-            </Link>
+              Start free cloud
+            </a>
           </nav>
         </div>
       </header>
 
       {/* hero */}
-      <section className="mx-auto max-w-5xl px-6 pt-20 pb-16">
-        <h1 className="font-serif text-4xl md:text-5xl leading-tight max-w-3xl">
-          Your n8n workflows fail quietly.
-          <br />
-          <span className="text-evidence">This catches them.</span>
-        </h1>
-        <p className="mt-6 max-w-2xl text-lg text-ink-2 leading-relaxed">
-          Pisama for n8n watches real workflow executions and detects the failures that
-          slip through: nodes that time out, errors swallowed by continue-on-fail, loops
-          that never end, payloads that explode. Fair-code and self-hostable. Your
-          execution data stays on your machine.
-        </p>
-        <div className="mt-8 flex flex-wrap items-center gap-4">
-          <Link
-            href="/overview"
-            className="px-5 py-2.5 rounded-lg bg-evidence text-evidence-ink font-semibold hover:bg-evidence-2 transition-colors"
-          >
-            See it running
-          </Link>
-          <a
-            href="https://github.com/Pisama-AI/pisama-n8n"
-            className="px-5 py-2.5 rounded-lg border border-rule text-ink-2 hover:text-ink hover:border-ink-4 transition-colors"
-          >
-            Read the source
-          </a>
-        </div>
-        <div className="mt-10 rounded-lg border border-rule bg-paper-2 p-4 font-mono text-sm text-ink-2 overflow-x-auto">
-          <span className="text-ink-4">$</span> git clone
-          https://github.com/Pisama-AI/pisama-n8n && cd pisama-n8n/deploy && docker
-          compose up
+      <section className="mx-auto max-w-5xl px-6 py-16 md:py-20">
+        <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
+          <div>
+            <h1 className="font-serif text-4xl md:text-5xl leading-tight max-w-3xl">
+              Your n8n workflows fail quietly.
+              <br />
+              <span className="text-evidence">This catches them.</span>
+            </h1>
+            <p className="mt-6 max-w-2xl text-lg text-ink-2 leading-relaxed">
+              Pisama reads real workflow executions and surfaces the failures that slip
+              through: timeouts, swallowed errors, runaway loops, and exploding payloads.
+              Connect your n8n and see the evidence behind each detection.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-4">
+              <a
+                href="https://app.n8n.pisama.ai/sign-in"
+                className="px-5 py-2.5 rounded-lg bg-evidence text-evidence-ink font-semibold hover:bg-evidence-2 transition-colors"
+              >
+                Start free cloud
+              </a>
+              <a
+                href="https://github.com/Pisama-AI/pisama-n8n"
+                className="px-5 py-2.5 rounded-lg border border-rule text-ink-2 hover:text-ink hover:border-ink-4 transition-colors"
+              >
+                Self-host OSS
+              </a>
+              <Link href="#plans" className="text-sm text-ink-3 hover:text-ink transition-colors">
+                Compare all options
+              </Link>
+            </div>
+          </div>
+
+          <aside className="border-l border-evidence/70 pl-6 lg:mb-1">
+            <SectionLabel>First detection</SectionLabel>
+            <ol className="space-y-6">
+              {FIRST_DETECTION_STEPS.map((step, index) => (
+                <li key={step.title} className="grid grid-cols-[2rem_1fr] gap-3">
+                  <span className="font-mono text-xs text-evidence pt-0.5">0{index + 1}</span>
+                  <div>
+                    <h2 className="font-medium text-sm text-ink">{step.title}</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-ink-3">{step.desc}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </aside>
         </div>
       </section>
+
+      <PlanComparison />
 
       {/* detectors */}
       <section className="border-t border-rule bg-paper-2/40">
@@ -182,39 +366,6 @@ export default function Landing() {
                 <p className="text-sm text-ink-3 leading-relaxed">{c.desc}</p>
               </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      {/* paid tier */}
-      <section className="border-t border-rule bg-paper-2/40">
-        <div className="mx-auto max-w-5xl px-6 py-16">
-          <div className="rounded-lg border border-rule bg-paper-2 p-8 md:flex items-center justify-between gap-8">
-            <div className="max-w-xl">
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles size={16} className="text-evidence" />
-                <span className="font-mono text-xs uppercase tracking-[0.18em] text-evidence">
-                  Paid cloud tier
-                </span>
-              </div>
-              <h2 className="font-serif text-2xl mb-3">
-                From detection to a fix you can apply
-              </h2>
-              <p className="text-ink-3 leading-relaxed">
-                The cloud tier generates a targeted fix for each detection, previews the
-                exact change, and applies it to your live workflow with one approval.
-                Every apply is snapshotted and reversible. Your n8n credentials never
-                leave your network; the cloud sees only the traces you send it.
-              </p>
-            </div>
-            <div className="mt-6 md:mt-0 shrink-0">
-              <a
-                href="https://pisama.ai"
-                className="inline-block px-5 py-2.5 rounded-lg border border-evidence text-evidence font-medium hover:bg-evidence hover:text-evidence-ink transition-colors"
-              >
-                Learn about Pisama Cloud
-              </a>
-            </div>
           </div>
         </div>
       </section>
