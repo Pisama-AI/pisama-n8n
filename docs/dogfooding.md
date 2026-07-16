@@ -92,6 +92,34 @@ Dogfood results are internal evidence, not a recall claim. Do not claim detector
 or autonomous repair success until design partners supply independently adjudicated
 incidents and repeated observed repair outcomes.
 
+## Corpus audit
+
+The current database, rather than this document, is the source of truth for whether a
+failure class has retained real evidence. Run the aggregate-only audit before a detector
+rollout or release decision:
+
+```bash
+export PISAMA_DOGFOOD_API_KEY='your-local-read-key'
+python scripts/audit_dogfood_corpus.py
+```
+
+It reads only `/healthz`, the operations summary, and detection metadata. It never
+fetches workflow JSON, traces, node output, or credentials. The report lists every
+fired `detector:failure_mode`, the first and latest retained observation, and the
+source-controlled coverage catalog. An uncatalogued fingerprint is a signal to inspect
+the running image or detector contract, not evidence to silently relabel.
+
+Use an explicit gate only when its required captures are expected to be present:
+
+```bash
+python scripts/audit_dogfood_corpus.py --require-profile core
+```
+
+`core` requires the P0/P1 catalog; `full` also requires P2/P3. Either gate exits
+nonzero and lists its missing fingerprints. A fresh or recreated dogfood volume can
+legitimately fail even if a historical exercise passed, so do not substitute prose or a
+past CI result for this check.
+
 ## Reliability evidence definitions
 
 The local `/api/v1/reliability/metrics` scorecard is a measurement aid, not marketing
@@ -117,6 +145,10 @@ outcome remains part of the local audit record.
 ## Current internal evidence
 
 2026-07-16:
+
+The following records historical internal exercises. They do not assert that each
+capture remains in the currently running database. Use the corpus audit above for a
+current release decision.
 
 - The isolated clean-install check (`scripts/verify_selfhost.sh`) passed against a freshly
   built server and a captured n8n failure execution.
