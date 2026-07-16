@@ -1,9 +1,12 @@
 # VENDORED from the pisama monorepo by scripts/extract_from_monorepo.py — do not edit here.
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from pisama_n8n_engine.trace.base_provider import BaseProviderParser
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -93,8 +96,14 @@ class N8nParser(BaseProviderParser):
             if not node_runs:
                 continue
 
+            # Community node sends dict instead of list — normalize
+            if isinstance(node_runs, dict):
+                node_runs = [node_runs]
+
             ndef = node_defs.get(node_name, {})
             for run in node_runs:
+                if not isinstance(run, dict):
+                    continue
                 node = N8nNode(
                     name=node_name,
                     type=ndef.get("type")
@@ -135,6 +144,7 @@ class N8nParser(BaseProviderParser):
             # span looks identical and only the structural detectors fire.
             response_text = self._extract_response_text(node.output) if is_ai else None
             persona = self._extract_persona(node.parameters) if is_ai else None
+            finish_reason = self._extract_finish_reason(node.output) if is_ai else None
 
             # Mark Execute Workflow nodes as HANDOFF so build_universal_trace
             # emits SpanType.HANDOFF and the delegation-boundary detectors fire.
@@ -166,6 +176,24 @@ class N8nParser(BaseProviderParser):
             if persona:
                 raw_delta["gen_ai.persona"] = persona
                 raw_delta["prompt"] = persona
+            if finish_reason:
+                # Runtime truncation signal: the provider's stop/finish reason.
+                # Carried onto the span so build_n8n_metadata can surface it to
+                # the n8n_truncation detector (silent max-token cutoffs).
+                raw_delta["finish_reason"] = finish_reason
+            elif is_ai:
+                # Shape-miss telemetry: an AI node whose output carries NO
+                # stop/finish key anywhere. The truncation detector is
+                # structurally blind on this span, so mark it (surfaced as
+                # ai_node_shape_misses by build_n8n_metadata) and log the
+                # output SHAPE -- top-level key names only, never values.
+                raw_delta["finish_reason_missing"] = True
+                logger.info(
+                    "n8n_truncation_shape_miss node=%s node_type=%s output_keys=%s",
+                    node.name,
+                    node.type,
+                    self._output_shape_keys(node.output),
+                )
 
             state_delta = self._redact_and_filter(
                 raw_delta,
@@ -294,6 +322,35 @@ class N8nParser(BaseProviderParser):
                     if isinstance(txt, str) and txt.strip():
                         return txt.strip()
         return None
+
+    def _extract_finish_reason(self, output: Any) -> Optional[str]:
+        """Pull the provider stop/finish reason from an AI node's main output.
+
+        The key name (``finish_reason`` / ``stop_reason`` / ``finishReason``) is
+        stable across providers even though n8n / LangChain nest it differently
+        (agent vs bound chat-model vs chainLlm), so a tolerant recursive search
+        is used. See ``pisama_n8n_engine.detect.truncation``.
+        """
+        from pisama_n8n_engine.detect.truncation import extract_stop_reason
+
+        return extract_stop_reason(output)
+
+    @staticmethod
+    def _output_shape_keys(output: Any) -> List[str]:
+        """Top-level key NAMES of an AI node's output -- never values.
+
+        Privacy: the shape-miss log must describe the shape we failed to read,
+        not the content, so only key names of the output dict (or of the dict
+        items in an n8n ``main`` output list) are returned.
+        """
+        if isinstance(output, dict):
+            items = [output]
+        elif isinstance(output, list):
+            items = [item for item in output if isinstance(item, dict)]
+        else:
+            return []
+        keys = {k for item in items for k in item.keys() if isinstance(k, str)}
+        return sorted(keys)
 
     # Mirrors the orchestrator's persona-prompt prefixes — text whose first
     # line begins with one of these reads like a role spec, not a user task.
