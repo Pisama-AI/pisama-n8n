@@ -118,3 +118,7 @@ incidents and repeated observed repair outcomes.
   code-node repair applied and the workflow was restored; a deliberate post-apply human
   edit was rejected as stale before rollback. The next Cloud execution could not be
   observed because this Cloud instance reported its execution quota was exhausted.
+- A fresh SQLite n8n `1.70.0` volume with an active controlled-failure workflow was
+  backed up, started successfully on `1.91.3`, then restored from that pre-upgrade backup
+  into a fresh `1.91.3` start. The workflow remained active and its webhook returned the
+  expected controlled `500` after both the upgrade and restore.
