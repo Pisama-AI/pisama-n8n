@@ -298,6 +298,50 @@ async def operations_summary(storage: Storage = Depends(get_storage)) -> Dict[st
     return storage.operational_summary()
 
 
+@app.get("/api/v1/reliability-cases", dependencies=[Depends(require_read_auth)])
+async def list_reliability_cases(
+    storage: Storage = Depends(get_storage),
+) -> List[Dict[str, Any]]:
+    """Tenant-local repair verification cases, newest first."""
+    return storage.list_reliability_cases()
+
+
+@app.get(
+    "/api/v1/reliability-cases/{case_id}", dependencies=[Depends(require_read_auth)]
+)
+async def get_reliability_case(
+    case_id: int, storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    case = storage.get_reliability_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Unknown reliability case id.")
+    return case
+
+
+@app.post(
+    "/api/v1/reliability-cases/{case_id}/outcome", dependencies=[Depends(require_auth)]
+)
+async def conclude_reliability_case(
+    case_id: int,
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Record a reviewed outcome. Prevention requires the configured evidence bar."""
+    outcome = body.get("outcome")
+    note = body.get("note")
+    if outcome not in {"prevented", "inconclusive"}:
+        raise HTTPException(status_code=422, detail="outcome must be prevented or inconclusive.")
+    if note is not None and not isinstance(note, str):
+        raise HTTPException(status_code=422, detail="note must be a string when provided.")
+    try:
+        case = storage.conclude_reliability_case(case_id, outcome, note)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if case is None:
+        raise HTTPException(status_code=404, detail="Unknown reliability case id.")
+    return case
+
+
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
 
 

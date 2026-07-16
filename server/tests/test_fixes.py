@@ -33,9 +33,12 @@ def _seed(client):
         )
     )
     client.post("/api/v1/n8n/webhook", headers={"Authorization": "Bearer k"}, json=fx)
-    return client.get(
+    rows = client.get(
         "/api/v1/detections", headers={"Authorization": "Bearer k"}
-    ).json()[0]["id"]
+    ).json()
+    return next(
+        row["id"] for row in rows if row["detector"] == "error" and row["detected"]
+    )
 
 
 def test_paid_features_gated_without_cloud_key(tmp_path, monkeypatch):
@@ -109,10 +112,52 @@ def test_repair_proposal_lifecycle_is_persisted_in_real_sqlite(tmp_path, monkeyp
         repair["id"], context["workflow"], context["workflow"]
     )
     assert applied["status"] == "applied"
+    # Applying a repair opens a durable, tenant-local verification record. It is
+    # evidence gathering, not a claim that the failure is fixed.
+    cases = c.get("/api/v1/reliability-cases", headers={"Authorization": "Bearer k"})
+    assert cases.status_code == 200, cases.text
+    case = cases.json()[0]
+    assert case["repair_id"] == repair["id"]
+    assert case["status"] == "observing"
+    assert case["successful_execution_count"] == 0
+    assert case["recurrence_count"] == 0
+    # One repair and no post-repair traffic can never be called prevention.
+    too_early = c.post(
+        f"/api/v1/reliability-cases/{case['id']}/outcome",
+        headers={"Authorization": "Bearer k"},
+        json={"outcome": "prevented"},
+    )
+    assert too_early.status_code == 409
+
+    # Re-ingesting an actual historical capture remains valid detector-regression
+    # input, but cannot be misclassified as a post-repair recurrence.
+    source = json.load(
+        open(
+            os.path.join(
+                os.path.dirname(__file__),
+                "fixtures",
+                "executions",
+                "error",
+                "ERROR-01-throw.json",
+            )
+        )
+    )
+    recurrence = c.post("/api/v1/n8n/webhook", headers={"Authorization": "Bearer k"}, json=source)
+    assert recurrence.status_code == 200, recurrence.text
+    observed = c.get(
+        f"/api/v1/reliability-cases/{case['id']}", headers={"Authorization": "Bearer k"}
+    )
+    assert observed.status_code == 200, observed.text
+    assert observed.json()["status"] == "observing"
+    assert observed.json()["recurrence_count"] == 0
+
     rollback = storage.claim_repair_rollback(repair["id"])
     assert rollback and rollback["status"] == "rolling_back"
     restored = storage.mark_repair_rolled_back(repair["id"])
     assert restored["status"] == "rolled_back"
+    assert c.get(
+        f"/api/v1/reliability-cases/{case['id']}", headers={"Authorization": "Bearer k"}
+    ).json()["status"] == "rolled_back"
     persisted = storage.get_repair(repair["id"], include_workflows=True)
     assert persisted and persisted["status"] == "rolled_back"
     assert persisted["baseline_workflow"] == context["workflow"]

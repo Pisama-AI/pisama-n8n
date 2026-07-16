@@ -14,6 +14,7 @@ export interface OperationsSummary {
   fired_by_detector: Record<string, number>
   repairs_by_status: Record<string, number>
   feedback_by_verdict: Record<string, number>
+  reliability_cases_by_status: Record<string, number>
   latest_events: Record<string, OperationalEvent>
 }
 

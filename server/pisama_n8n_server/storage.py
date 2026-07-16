@@ -167,6 +167,67 @@ class DetectionFeedback(Base):
         }
 
 
+class ReliabilityCase(Base):
+    """Tenant-local evidence for whether one applied repair changed a failure pattern.
+
+    A case intentionally stores ids, a narrow failure fingerprint, and aggregate
+    observations only. It never copies execution payloads into a second dataset.
+    ``prevented`` is an operator conclusion, not an inference from one healthy run.
+    """
+
+    __tablename__ = "reliability_cases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repair_id: Mapped[int] = mapped_column(
+        ForeignKey("repair_attempts.id"), nullable=False, unique=True, index=True
+    )
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    detector: Mapped[str] = mapped_column(String, nullable=False)
+    failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="observing", index=True)
+    successful_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    recurrence_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    first_success_execution_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("executions.id"), nullable=True
+    )
+    first_recurrence_execution_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("executions.id"), nullable=True
+    )
+    outcome_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    outcome_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        required = verification_success_threshold()
+        return {
+            "id": self.id,
+            "repair_id": self.repair_id,
+            "detection_id": self.detection_id,
+            "workflow_id": self.workflow_id,
+            "detector": self.detector,
+            "failure_mode": self.failure_mode,
+            "status": self.status,
+            "successful_execution_count": self.successful_execution_count,
+            "recurrence_count": self.recurrence_count,
+            "first_success_execution_id": self.first_success_execution_id,
+            "first_recurrence_execution_id": self.first_recurrence_execution_id,
+            "required_successful_executions": required,
+            "ready_for_outcome_review": (
+                self.status == "observing"
+                and self.successful_execution_count >= required
+                and self.recurrence_count == 0
+            ),
+            "outcome_note": self.outcome_note,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "outcome_at": self.outcome_at,
+        }
+
+
 class OperationalEvent(Base):
     """Small, local-only audit events for ingestion and polling health."""
 
@@ -329,6 +390,16 @@ def database_url() -> str:
     return os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL
 
 
+def verification_success_threshold() -> int:
+    """Minimum post-change successful executions before an operator may conclude
+    a failure was prevented. Keep this deliberately conservative by default."""
+    raw = os.environ.get("PISAMA_VERIFICATION_MIN_SUCCESSFUL_EXECUTIONS", "30")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
 # Columns added after the first (id, workflow_id, received_at, raw) release, keyed by
 # table. create_all() only creates missing TABLES, not missing columns, so an existing
 # self-host DB needs these added in place. ALTER TABLE ADD COLUMN is supported by both
@@ -411,7 +482,9 @@ class Storage:
                 )
             session.add(execution)
             session.commit()
-            return execution.id
+            execution_id = execution.id
+        self.observe_reliability_cases(execution_id)
+        return execution_id
 
     def seen_source_ids(self) -> set:
         """The set of upstream n8n execution ids already ingested (for poll dedup)."""
@@ -543,6 +616,10 @@ class Storage:
                 select(DetectionFeedback.verdict, func.count(DetectionFeedback.id))
                 .group_by(DetectionFeedback.verdict)
             ).all()
+            case_rows = session.execute(
+                select(ReliabilityCase.status, func.count(ReliabilityCase.id))
+                .group_by(ReliabilityCase.status)
+            ).all()
             events = session.execute(
                 select(OperationalEvent)
                 .order_by(desc(OperationalEvent.id))
@@ -558,6 +635,7 @@ class Storage:
                 "fired_by_detector": dict(detector_rows),
                 "repairs_by_status": dict(repair_rows),
                 "feedback_by_verdict": dict(feedback_rows),
+                "reliability_cases_by_status": dict(case_rows),
                 "latest_events": latest_events,
             }
 
@@ -585,7 +663,7 @@ class Storage:
     def mark_repair_applied(
         self, repair_id: int, snapshot: Dict[str, Any], applied_workflow: Dict[str, Any]
     ) -> Dict[str, Any]:
-        return self._finish_repair(
+        repair = self._finish_repair(
             repair_id,
             "applying",
             "applied",
@@ -593,14 +671,25 @@ class Storage:
             applied_workflow=self._encode(applied_workflow),
             applied_at=datetime.now(timezone.utc).isoformat(),
         )
+        self._start_reliability_case(repair_id)
+        return repair
 
     def mark_repair_rolled_back(self, repair_id: int) -> Dict[str, Any]:
-        return self._finish_repair(
+        repair = self._finish_repair(
             repair_id,
             "rolling_back",
             "rolled_back",
             rolled_back_at=datetime.now(timezone.utc).isoformat(),
         )
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            session.execute(
+                update(ReliabilityCase)
+                .where(ReliabilityCase.repair_id == repair_id)
+                .values(status="rolled_back", updated_at=now, outcome_at=now)
+            )
+            session.commit()
+        return repair
 
     def mark_repair_failed(self, repair_id: int, from_status: str, reason: str) -> None:
         self._finish_repair(
@@ -634,6 +723,153 @@ class Storage:
             row = session.get(RepairAttempt, repair_id)
             assert row is not None
             return row.to_dict()
+
+    def _start_reliability_case(self, repair_id: int) -> None:
+        """Open the post-apply observation record from the original real detection."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            existing = session.execute(
+                select(ReliabilityCase).where(ReliabilityCase.repair_id == repair_id)
+            ).scalar_one_or_none()
+            if existing is not None:
+                return
+            repair = session.get(RepairAttempt, repair_id)
+            if repair is None:
+                raise ValueError("Unknown repair id.")
+            detection = session.get(DetectionRow, repair.detection_id)
+            if detection is None:
+                raise ValueError("Repair has no source detection.")
+            session.add(
+                ReliabilityCase(
+                    repair_id=repair.id,
+                    detection_id=detection.id,
+                    workflow_id=repair.workflow_id,
+                    detector=detection.detector,
+                    failure_mode=detection.failure_mode,
+                    status="observing",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+        self.record_operational_event("reliability_case_opened", {"repair_id": repair_id})
+
+    def observe_reliability_cases(self, execution_id: int) -> None:
+        """Attach a later real runtime execution to applicable post-repair cases.
+
+        A matching fired fingerprint is a recurrence. A runtime execution that
+        completed successfully without that fingerprint increases exposure evidence.
+        The method deliberately never marks a case ``prevented`` automatically.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            execution = session.get(Execution, execution_id)
+            if execution is None or not execution.workflow_id:
+                return
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return
+            execution_started_at = _parse_iso(raw.get("startedAt"))
+            trace = parse_trace(raw)
+            fired = {
+                (row.detector, row.failure_mode)
+                for row in session.execute(
+                    select(DetectionRow).where(
+                        DetectionRow.execution_id == execution_id,
+                        DetectionRow.detected.is_(True),
+                    )
+                ).scalars()
+            }
+            cases = session.execute(
+                select(ReliabilityCase).where(
+                    ReliabilityCase.workflow_id == execution.workflow_id,
+                    ReliabilityCase.status == "observing",
+                )
+            ).scalars().all()
+            changed = False
+            for case in cases:
+                # Captured history remains useful for detector regression, but it
+                # cannot become post-repair evidence merely because it is replayed.
+                # When n8n supplies a start time, require it to be after the case.
+                case_created_at = _parse_iso(case.created_at)
+                if (
+                    execution_started_at is not None
+                    and case_created_at is not None
+                    and execution_started_at <= case_created_at
+                ):
+                    continue
+                if (case.detector, case.failure_mode) in fired:
+                    case.status = "recurred"
+                    case.recurrence_count += 1
+                    case.first_recurrence_execution_id = (
+                        case.first_recurrence_execution_id or execution_id
+                    )
+                    case.updated_at = now
+                    changed = True
+                elif trace.get("available") and trace.get("kind") == "runtime" and trace.get("status") == "success":
+                    case.successful_execution_count += 1
+                    case.first_success_execution_id = (
+                        case.first_success_execution_id or execution_id
+                    )
+                    case.updated_at = now
+                    changed = True
+            if changed:
+                session.commit()
+
+    def get_reliability_case(self, case_id: int) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.get(ReliabilityCase, case_id)
+            return row.to_dict() if row else None
+
+    def get_reliability_case_for_detection(
+        self, detection_id: int
+    ) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.execute(
+                select(ReliabilityCase)
+                .where(ReliabilityCase.detection_id == detection_id)
+                .order_by(desc(ReliabilityCase.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            return row.to_dict() if row else None
+
+    def list_reliability_cases(self) -> List[Dict[str, Any]]:
+        with self._Session() as session:
+            rows = session.execute(
+                select(ReliabilityCase).order_by(desc(ReliabilityCase.id))
+            ).scalars()
+            return [row.to_dict() for row in rows]
+
+    def conclude_reliability_case(
+        self, case_id: int, outcome: str, note: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Record an accountable human conclusion after the evidence is available."""
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                return None
+            if case.status != "observing":
+                raise ValueError(f"Case is already {case.status}.")
+            if outcome == "prevented":
+                if case.successful_execution_count < verification_success_threshold():
+                    raise ValueError(
+                        "More successful post-repair executions are required before "
+                        "recording prevention."
+                    )
+                if case.recurrence_count:
+                    raise ValueError("A recurring case cannot be recorded as prevented.")
+            now = datetime.now(timezone.utc).isoformat()
+            case.status = outcome
+            case.outcome_note = note.strip()[:1000] if note else None
+            case.updated_at = now
+            case.outcome_at = now
+            session.commit()
+            result = case.to_dict()
+        self.record_operational_event(
+            "reliability_case_concluded", {"case_id": case_id, "outcome": outcome}
+        )
+        return result
 
     # The execution columns joined onto every detection row the API returns.
     _EXEC_COLS = (
@@ -685,6 +921,13 @@ class Storage:
                 .limit(1)
             ).scalar_one_or_none()
             result["feedback"] = feedback.to_dict() if feedback else None
+            case = session.execute(
+                select(ReliabilityCase)
+                .where(ReliabilityCase.detection_id == detection_id)
+                .order_by(desc(ReliabilityCase.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            result["reliability_case"] = case.to_dict() if case else None
             return result
 
     def get_execution_trace(self, detection_id: int) -> Optional[Dict[str, Any]]:

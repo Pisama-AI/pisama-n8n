@@ -130,6 +130,11 @@ incidents and repeated observed repair outcomes.
   recorded one attempt. Pisama therefore reports `n8n_retry_not_observed`, rather than
   falsely claiming that a retry budget was exhausted. Duplicate-side-effect detection is
   deliberately held until a real execution records repeated unsafe action attempts.
+- Repair verification now has a tenant-local case record. In the disposable SQLite lane,
+  a real controlled failure was safely changed through the stale-workflow guard, a later
+  successful execution was ingested by API polling, and the case remained `observing`.
+  Pisama correctly refused to label a single success as prevention, then restored the
+  original workflow and retained the rolled-back audit record.
 - No real LLM token-limit or AI-agent tool/output-validation execution has yet been
   captured in this lane. The associated detectors remain evidence-gated and must not be
   described as validated until those captures exist.

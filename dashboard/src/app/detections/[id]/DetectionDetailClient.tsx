@@ -171,6 +171,49 @@ export function DetectionDetailClient({ id }: { id: string }) {
                 )}
 
                 {detection.detected && <FixPanel detectionId={id} />}
+
+                {detection.reliability_case && (
+                  <Card padding="lg">
+                    <CardHeader className="mb-4">
+                      <CardTitle>Repair verification</CardTitle>
+                    </CardHeader>
+                    <p className="text-sm leading-relaxed text-ink-2">
+                      {detection.reliability_case.status === 'recurred'
+                        ? 'The same failure pattern appeared again after this repair.'
+                        : detection.reliability_case.status === 'prevented'
+                          ? 'An operator concluded that the repair prevented recurrence.'
+                          : detection.reliability_case.status === 'rolled_back'
+                            ? 'This repair was rolled back. Its verification record is retained for audit.'
+                            : 'Pisama is observing later real executions. A successful run is evidence of exposure, not proof that the failure is prevented.'}
+                    </p>
+                    <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 border-t border-rule pt-5">
+                      <Field
+                        label="Status"
+                        value={
+                          <Badge
+                            variant={detection.reliability_case.status === 'recurred' ? 'warning' : 'default'}
+                            size="sm"
+                          >
+                            {detection.reliability_case.status}
+                          </Badge>
+                        }
+                      />
+                      <Field label="Recurrences" value={detection.reliability_case.recurrence_count} />
+                      <Field
+                        label="Successful executions observed"
+                        value={`${detection.reliability_case.successful_execution_count} of ${detection.reliability_case.required_successful_executions}`}
+                      />
+                      <Field
+                        label="Conclusion"
+                        value={
+                          detection.reliability_case.ready_for_outcome_review
+                            ? 'Ready for operator review'
+                            : detection.reliability_case.outcome_note || 'Still collecting evidence'
+                        }
+                      />
+                    </div>
+                  </Card>
+                )}
               </>
             )
           })()

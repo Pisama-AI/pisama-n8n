@@ -18,6 +18,7 @@ export interface ServerDetection {
   workflow_name?: string | null
   n8n_execution_id?: string | null
   feedback?: DetectionFeedback | null
+  reliability_case?: ReliabilityCase | null
 }
 
 // Shape the copied DetectionListItem (and the detail view) expect. `detected`
@@ -43,6 +44,7 @@ export interface Detection {
     affected_agents?: number
   }
   feedback?: DetectionFeedback | null
+  reliability_case?: ReliabilityCase | null
 }
 
 export type FeedbackVerdict = 'useful' | 'not_useful' | 'fixed_manually'
@@ -53,6 +55,26 @@ export interface DetectionFeedback {
   verdict: FeedbackVerdict
   note: string | null
   created_at: string
+}
+
+export interface ReliabilityCase {
+  id: number
+  repair_id: number
+  detection_id: number
+  workflow_id: string
+  detector: string
+  failure_mode: string | null
+  status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back'
+  successful_execution_count: number
+  recurrence_count: number
+  first_success_execution_id: number | null
+  first_recurrence_execution_id: number | null
+  required_successful_executions: number
+  ready_for_outcome_review: boolean
+  outcome_note: string | null
+  created_at: string
+  updated_at: string
+  outcome_at: string | null
 }
 
 function severityFromConfidence(confidence: number): string {
@@ -77,6 +99,7 @@ export function adaptDetection(row: ServerDetection): Detection {
     workflow_name: row.workflow_name ?? null,
     n8n_execution_id: row.n8n_execution_id ?? null,
     feedback: row.feedback ?? null,
+    reliability_case: row.reliability_case ?? null,
     details: {
       severity: severityFromConfidence(row.confidence),
     },
