@@ -14,11 +14,23 @@ export interface FixSuggestion {
   patch_ops: PatchOp[]
   mutated_workflow: Record<string, unknown>
   workflow_id: string | null
+  // OSS returns a durable local repair id. The hosted API may use its own repair
+  // lifecycle while the two products converge, so this remains optional here.
+  repair_id?: number
+  repair_status?: 'proposed'
 }
 
 export interface ApplyResult {
-  snapshot: Record<string, unknown>
-  applied: Record<string, unknown>
+  repair: RepairRecord
+}
+
+export interface RepairRecord {
+  id: number
+  status: string
+  workflow_id: string
+  applied_at: string | null
+  rolled_back_at: string | null
+  failure_reason: string | null
 }
 
 export interface PaidStatus {
@@ -52,17 +64,15 @@ export function requestFix(detectionId: string): Promise<FixSuggestion> {
 }
 
 export function applyFix(
-  workflowId: string,
-  mutatedWorkflow: Record<string, unknown>,
+  repairId: number,
 ): Promise<ApplyResult> {
-  return postApi(APPLY, { workflow_id: workflowId, mutated_workflow: mutatedWorkflow })
+  return postApi(APPLY, { repair_id: repairId })
 }
 
 export function rollbackFix(
-  workflowId: string,
-  snapshot: Record<string, unknown>,
+  repairId: number,
 ): Promise<unknown> {
-  return postApi(ROLLBACK, { workflow_id: workflowId, snapshot })
+  return postApi(ROLLBACK, { repair_id: repairId })
 }
 
 // SaaS only: start a Stripe Checkout for the Pro upgrade; returns a redirect URL.

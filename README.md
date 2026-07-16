@@ -63,7 +63,9 @@ execution-lane detectors (timeout/error/resource) also run on parsed runtime dat
   own repo and on npm, not in this repository (n8n's verified-node program requires MIT).
 - **Fix suggestions and auto-fixing** are NOT in this repo. They run in the Pisama cloud
   and are the paid tier. The self-host server calls the cloud with an API key; the user's
-  n8n credentials never leave their network.
+  n8n credentials never leave their network. A suggestion is stored as a server-owned,
+  reviewable repair record. When auto-apply is enabled, Pisama refuses to overwrite a
+  workflow changed since the proposal and preserves a guarded rollback point.
 
 ## Single source of truth
 

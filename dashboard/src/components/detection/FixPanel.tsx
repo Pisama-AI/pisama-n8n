@@ -54,9 +54,9 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
   const [suggestion, setSuggestion] = useState<FixSuggestion | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // apply flow: 'idle' → 'confirm' → 'applying' → 'applied' (holds the snapshot for rollback)
+  // Apply flow uses a server-owned repair record. The browser never retains the
+  // authoritative snapshot or sends workflow JSON back to the server.
   const [applyState, setApplyState] = useState<'idle' | 'confirm' | 'applying' | 'applied'>('idle')
-  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null)
 
   const enabled = status?.enabled ?? false
 
@@ -74,29 +74,27 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
   }
 
   async function onApply() {
-    if (!suggestion?.workflow_id) {
-      setError('No n8n workflow id — configure PISAMA_N8N_URL/KEY on the server.')
+    if (!suggestion?.repair_id) {
+      setError('This fix proposal is invalid. Generate a new fix.')
       return
     }
     setApplyState('applying')
     setError(null)
     try {
-      const result = await applyFix(suggestion.workflow_id, suggestion.mutated_workflow)
-      setSnapshot(result.snapshot)
+      await applyFix(suggestion.repair_id)
       setApplyState('applied')
     } catch {
-      setError('Apply failed — check the server has n8n API access.')
+      setError('Apply failed. The workflow may have changed; review it and generate a new fix.')
       setApplyState('confirm')
     }
   }
 
   async function onRollback() {
-    if (!suggestion?.workflow_id || !snapshot) return
+    if (!suggestion?.repair_id) return
     setApplyState('applying')
     try {
-      await rollbackFix(suggestion.workflow_id, snapshot)
+      await rollbackFix(suggestion.repair_id)
       setApplyState('idle')
-      setSnapshot(null)
     } catch {
       setError('Rollback failed.')
       setApplyState('applied')
@@ -194,7 +192,7 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
               size="sm"
               leftIcon={<Wrench size={14} />}
               isLoading={applyState === 'applying'}
-              disabled={!suggestion.workflow_id}
+              disabled={!suggestion.repair_id}
               onClick={() => setApplyState('confirm')}
             >
               Apply to n8n

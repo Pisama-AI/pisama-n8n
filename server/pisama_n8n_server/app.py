@@ -270,46 +270,110 @@ async def n8n_fix(
         suggestion = await request_fix(ctx["detection"], ctx["workflow"])
     except PaidTierNotConfigured as exc:
         raise HTTPException(status_code=402, detail=str(exc))
-    # Carry the n8n workflow id so the dashboard can target /apply.
-    suggestion["workflow_id"] = ctx.get("workflow_id")
+    workflow_id = ctx.get("workflow_id")
+    if not workflow_id:
+        raise HTTPException(status_code=422, detail="No n8n workflow id stored for this detection.")
+    try:
+        repair = storage.create_repair_proposal(
+            detection_id=int(detection_id),
+            workflow_id=str(workflow_id),
+            baseline_workflow=ctx["workflow"],
+            suggestion=suggestion,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    # The browser gets a reviewable preview plus an opaque, server-owned repair id.
+    suggestion["workflow_id"] = workflow_id
+    suggestion["repair_id"] = repair["id"]
+    suggestion["repair_status"] = repair["status"]
     return suggestion
 
 
 @app.post("/api/v1/n8n/apply", dependencies=[Depends(require_auth)])
-async def n8n_apply(body: Dict[str, Any]) -> Dict[str, Any]:
-    """PAID: apply a cloud-returned mutated workflow to the live n8n (snapshot for rollback).
-    Requires n8n API access (PISAMA_N8N_URL + PISAMA_N8N_API_KEY)."""
-    from pisama_n8n_server.fixes import apply_fix, is_paid_configured
+async def n8n_apply(
+    body: Dict[str, Any], storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Apply one stored, reviewed proposal, refusing stale workflow writes."""
+    from pisama_n8n_server.fixes import (
+        InvalidRepairProposal,
+        StaleRepairProposal,
+        apply_fix,
+        is_paid_configured,
+    )
 
     if not is_paid_configured():
         raise HTTPException(status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY.")
-    workflow_id = body.get("workflow_id")
-    mutated = body.get("mutated_workflow")
-    if not workflow_id or not isinstance(mutated, dict):
-        raise HTTPException(status_code=422, detail="workflow_id and mutated_workflow required.")
+    repair_id = body.get("repair_id")
+    if not isinstance(repair_id, int):
+        raise HTTPException(status_code=422, detail="repair_id is required.")
+    repair = storage.claim_repair_apply(repair_id)
+    if repair is None:
+        existing = storage.get_repair(repair_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Unknown repair_id.")
+        raise HTTPException(status_code=409, detail=f"Repair is already {existing['status']}.")
     client = client_from_env()
     if client is None:
+        storage.mark_repair_failed(repair_id, "applying", "n8n API not configured.")
         raise HTTPException(status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY).")
     try:
-        return await apply_fix(client, workflow_id, mutated)
+        result = await apply_fix(
+            client,
+            repair["workflow_id"],
+            repair["baseline_workflow"],
+            repair["proposed_workflow"],
+        )
+        return {"repair": storage.mark_repair_applied(repair_id, **result)}
+    except StaleRepairProposal as exc:
+        storage.mark_repair_failed(repair_id, "applying", str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except InvalidRepairProposal as exc:
+        storage.mark_repair_failed(repair_id, "applying", str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except Exception as exc:
+        storage.mark_repair_failed(repair_id, "applying", str(exc))
+        raise
     finally:
         await client.aclose()
 
 
 @app.post("/api/v1/n8n/rollback", dependencies=[Depends(require_auth)])
-async def n8n_rollback(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Restore a workflow snapshot returned by /apply."""
-    from pisama_n8n_server.fixes import rollback
+async def n8n_rollback(
+    body: Dict[str, Any], storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Restore a server-stored snapshot, refusing to overwrite later human edits."""
+    from pisama_n8n_server.fixes import StaleRepairProposal, rollback
 
-    workflow_id = body.get("workflow_id")
-    snapshot = body.get("snapshot")
-    if not workflow_id or not isinstance(snapshot, dict):
-        raise HTTPException(status_code=422, detail="workflow_id and snapshot required.")
+    repair_id = body.get("repair_id")
+    if not isinstance(repair_id, int):
+        raise HTTPException(status_code=422, detail="repair_id is required.")
+    repair = storage.claim_repair_rollback(repair_id)
+    if repair is None:
+        existing = storage.get_repair(repair_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Unknown repair_id.")
+        raise HTTPException(status_code=409, detail=f"Repair is already {existing['status']}.")
+    if not isinstance(repair.get("snapshot"), dict) or not isinstance(repair.get("applied_workflow"), dict):
+        storage.mark_repair_failed(repair_id, "rolling_back", "Repair has no restorable snapshot.")
+        raise HTTPException(status_code=409, detail="Repair has no restorable snapshot.")
     client = client_from_env()
     if client is None:
+        storage.mark_repair_failed(repair_id, "rolling_back", "n8n API not configured.")
         raise HTTPException(status_code=400, detail="n8n API not configured.")
     try:
-        return {"restored": await rollback(client, workflow_id, snapshot)}
+        restored = await rollback(
+            client,
+            repair["workflow_id"],
+            repair["snapshot"],
+            repair["applied_workflow"],
+        )
+        return {"restored": restored, "repair": storage.mark_repair_rolled_back(repair_id)}
+    except StaleRepairProposal as exc:
+        storage.mark_repair_failed(repair_id, "rolling_back", str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except Exception as exc:
+        storage.mark_repair_failed(repair_id, "rolling_back", str(exc))
+        raise
     finally:
         await client.aclose()
 

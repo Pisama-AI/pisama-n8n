@@ -26,6 +26,7 @@ from sqlalchemy import (
     inspect,
     select,
     text,
+    update,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -84,6 +85,63 @@ class DetectionRow(Base):
             "failure_mode": self.failure_mode,
             "explanation": self.explanation,
         }
+
+
+class RepairAttempt(Base):
+    """A durable, server-owned record of a proposed workflow repair.
+
+    Repair payloads must never be trusted when they come back from a browser. Keeping
+    the proposal, pre-apply snapshot, and lifecycle transitions here creates an audit
+    trail and prevents stale tabs from applying arbitrary workflow JSON.
+    """
+
+    __tablename__ = "repair_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    detection_id: Mapped[int] = mapped_column(ForeignKey("detections.id"), nullable=False, index=True)
+    workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    baseline_workflow: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_workflow: Mapped[str] = mapped_column(Text, nullable=False)
+    patch_ops: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String, default="proposed", nullable=False, index=True)
+    snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applied_workflow: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    applied_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    rolled_back_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    @staticmethod
+    def _decode(value: Optional[str], fallback: Any) -> Any:
+        if not value:
+            return fallback
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def to_dict(self, include_workflows: bool = False) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "id": self.id,
+            "detection_id": self.detection_id,
+            "workflow_id": self.workflow_id,
+            "patch_ops": self._decode(self.patch_ops, []),
+            "explanation": self.explanation,
+            "status": self.status,
+            "failure_reason": self.failure_reason,
+            "created_at": self.created_at,
+            "applied_at": self.applied_at,
+            "rolled_back_at": self.rolled_back_at,
+        }
+        if include_workflows:
+            result.update(
+                baseline_workflow=self._decode(self.baseline_workflow, {}),
+                proposed_workflow=self._decode(self.proposed_workflow, {}),
+                snapshot=self._decode(self.snapshot, None),
+                applied_workflow=self._decode(self.applied_workflow, None),
+            )
+        return result
 
 
 def _extract_workflow_name(payload: Dict[str, Any]) -> Optional[str]:
@@ -345,6 +403,108 @@ class Storage:
                 "workflow": workflow,
                 "workflow_id": execution.workflow_id if execution else None,
             }
+
+    @staticmethod
+    def _encode(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+    def create_repair_proposal(
+        self,
+        detection_id: int,
+        workflow_id: str,
+        baseline_workflow: Dict[str, Any],
+        suggestion: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Persist a cloud suggestion before a browser can see or apply it."""
+        proposed = suggestion.get("mutated_workflow")
+        if not isinstance(proposed, dict):
+            raise ValueError("Cloud fix response did not include a mutated_workflow object.")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            row = RepairAttempt(
+                detection_id=detection_id,
+                workflow_id=str(workflow_id),
+                baseline_workflow=self._encode(baseline_workflow),
+                proposed_workflow=self._encode(proposed),
+                patch_ops=self._encode(suggestion.get("patch_ops") or []),
+                explanation=str(suggestion.get("explanation") or ""),
+                status="proposed",
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return row.to_dict()
+
+    def get_repair(self, repair_id: int, include_workflows: bool = False) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.get(RepairAttempt, repair_id)
+            return row.to_dict(include_workflows=include_workflows) if row else None
+
+    def _claim_repair(self, repair_id: int, from_status: str, to_status: str) -> Optional[Dict[str, Any]]:
+        """Atomically own a repair transition, preventing double-click races."""
+        with self._Session() as session:
+            claimed = session.execute(
+                update(RepairAttempt)
+                .where(RepairAttempt.id == repair_id, RepairAttempt.status == from_status)
+                .values(status=to_status, failure_reason=None)
+            ).rowcount
+            if claimed != 1:
+                session.rollback()
+                return None
+            session.commit()
+            row = session.get(RepairAttempt, repair_id)
+            return row.to_dict(include_workflows=True) if row else None
+
+    def claim_repair_apply(self, repair_id: int) -> Optional[Dict[str, Any]]:
+        return self._claim_repair(repair_id, "proposed", "applying")
+
+    def claim_repair_rollback(self, repair_id: int) -> Optional[Dict[str, Any]]:
+        return self._claim_repair(repair_id, "applied", "rolling_back")
+
+    def mark_repair_applied(
+        self, repair_id: int, snapshot: Dict[str, Any], applied_workflow: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._finish_repair(
+            repair_id,
+            "applying",
+            "applied",
+            snapshot=self._encode(snapshot),
+            applied_workflow=self._encode(applied_workflow),
+            applied_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def mark_repair_rolled_back(self, repair_id: int) -> Dict[str, Any]:
+        return self._finish_repair(
+            repair_id,
+            "rolling_back",
+            "rolled_back",
+            rolled_back_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def mark_repair_failed(self, repair_id: int, from_status: str, reason: str) -> None:
+        self._finish_repair(
+            repair_id,
+            from_status,
+            "failed",
+            failure_reason=reason[:1000],
+        )
+
+    def _finish_repair(
+        self, repair_id: int, from_status: str, to_status: str, **values: Any
+    ) -> Dict[str, Any]:
+        with self._Session() as session:
+            changed = session.execute(
+                update(RepairAttempt)
+                .where(RepairAttempt.id == repair_id, RepairAttempt.status == from_status)
+                .values(status=to_status, **values)
+            ).rowcount
+            if changed != 1:
+                session.rollback()
+                raise ValueError("Repair state changed concurrently.")
+            session.commit()
+            row = session.get(RepairAttempt, repair_id)
+            assert row is not None
+            return row.to_dict()
 
     # The execution columns joined onto every detection row the API returns.
     _EXEC_COLS = (

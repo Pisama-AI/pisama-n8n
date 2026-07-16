@@ -12,6 +12,9 @@ platform.
   dashboard can read the API.
 - Both detection lanes run per execution: structural (from the workflow JSON) + runtime
   (from the execution's runData), merged into one stored report.
+- **Repair safety**: cloud-generated proposals are persisted server-side. Apply and rollback
+  accept a repair id, never client-supplied workflow JSON or snapshots. Both reject a stale
+  workflow rather than overwriting an operator's later edit.
 
 ## Ingestion channels
 
@@ -27,13 +30,16 @@ platform.
 - `POST /api/v1/n8n/webhook` — ingest one execution (push channel).
 - `POST /api/v1/n8n/sync` — poll the configured n8n and ingest new executions.
 - `GET /api/v1/detections` — every stored detection (each carries the ingest timestamp).
+- `POST /api/v1/n8n/fix` — generate and persist a read-only paid repair proposal.
+- `POST /api/v1/n8n/apply` — apply a reviewed proposal by `repair_id`, after a live
+  workflow freshness check.
+- `POST /api/v1/n8n/rollback` — roll back an applied proposal by `repair_id`, only when
+  the workflow still matches Pisama's applied version.
 - `GET /healthz` — liveness.
 
 ## Status
 
 Implemented + tested (no mocks): both ingestion channels, both detection lanes, SQLite
-persistence with dedup, bearer auth, CORS. The webhook + storage + auth path has 8 e2e
-tests; the polling channel has a live e2e gated on `PISAMA_HARNESS_N8N=1` + a real n8n.
-
-TODO: an SSE stream for live dashboard updates; a built-in background poll loop (today
-`/sync` is triggered externally); the community node's HMAC signature as an auth option.
+persistence with dedup, bearer and community-node HMAC auth, CORS, SSE live updates,
+an optional background polling loop, and a guarded repair lifecycle. The polling channel's
+live e2e remains gated on `PISAMA_HARNESS_N8N=1` and a real n8n instance.

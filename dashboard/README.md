@@ -1,18 +1,20 @@
-# pisama-n8n-dashboard (planned)
+# pisama-n8n-dashboard
 
-Minimal Next.js dashboard for the self-host server. Not a fork of the main
-Pisama monorepo frontend (97 routes) — this is a small, focused app with
-roughly 10 routes:
+Focused Next.js dashboard for the self-host Pisama n8n server. It is intentionally
+separate from the main Pisama frontend: no shared build, no shared routing, and no
+need to run the larger multi-platform application.
 
-- `/` — overview
-- `/executions` — execution list
-- `/executions/[id]` — execution / trace detail
-- `/detections` — detection list
-- `/detections/[id]` — detection detail, with a paid "get fix" upsell
-- `/workflows` — workflow list
-- `/workflows/[id]` — workflow detail
-- `/settings` — server + auth settings
-- `/stream` — live detection stream (SSE)
+## Available pages
+
+- `/overview` — executions analyzed, fired detections, failure breakdown, and recent activity.
+- `/detections` — fired detection list with filtering.
+- `/detections/[id]` — explanation, execution trace, and a reviewable paid fix proposal.
+- `/settings` — server connection, polling, and cloud-fix status.
+- `/onboarding` and `/sign-in` — connection and hosted-account flows.
+
+The detection detail defaults to guidance only. One-click apply is feature-flagged off by
+default. When enabled, it uses a server-owned repair id and the server rejects stale
+workflow updates or unsafe rollback attempts.
 
 ## Relationship to the monorepo frontend
 
@@ -24,5 +26,5 @@ server's API.
 
 ## Status
 
-Not yet scaffolded beyond `package.json`. This README describes the
-intended structure only; no pages or components exist yet.
+Implemented. The dashboard typechecks, production-builds, and has Playwright coverage for
+the hosted settings view plus the self-host overview, detection list, and trace detail.
