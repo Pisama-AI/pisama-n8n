@@ -197,7 +197,11 @@ def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
 # --- routes ---------------------------------------------------------------
 
 @app.get("/healthz")
+@app.get("/api/v1/health")  # the published community node's credential-test path
 async def healthz() -> Dict[str, str]:
+    # /api/v1/health is where n8n-nodes-pisama's credential "Test" button GETs
+    # (baseURL {apiUrl} + "/health"); aliasing it here makes the credential
+    # validate green against a self-hosted server. Unauthenticated, like /healthz.
     return {"status": "ok"}
 
 

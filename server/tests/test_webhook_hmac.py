@@ -208,8 +208,22 @@ def test_unauthenticated_request_cannot_burn_a_nonce(client, body):
     assert accepted.status_code == 200, accepted.text
 
 
-# 9. The DIVERGED unpublished signing variant (nonce inside the base, no
-#    "sha256=" prefix) must be rejected — the server speaks published v0.3.0.
+# 9. The published node's credential "Test" button GETs {apiUrl}/health (its
+#    apiUrl carries the /api/v1 suffix). The server aliases /api/v1/health to
+#    its health check, unauthenticated, so the credential validates green.
+
+def test_credential_test_health_path(client):
+    resp = client.get("/api/v1/health")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "ok"}
+
+    # The node sends X-Pisama-API-Key on the test request too; still fine.
+    with_key = client.get("/api/v1/health", headers={"X-Pisama-API-Key": API_KEY})
+    assert with_key.status_code == 200, with_key.text
+
+
+# 10. The DIVERGED unpublished signing variant (nonce inside the base, no
+#     "sha256=" prefix) must be rejected — the server speaks published v0.3.0.
 
 def test_old_nonce_in_base_variant_rejected(client, body):
     ts = str(int(time.time()))

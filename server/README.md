@@ -42,14 +42,20 @@ registered workflow; this server is single-tenant, so one secret covers it.
 
 ### Pointing the published community node at this server
 
-The node's own docs assume the hosted platform (pisama.ai). Against this server, fill
-its Pisama API credential like this:
+The node's own docs assume the hosted platform (pisama.ai). In the node's **Pisama API**
+credential (field names below are verbatim from `n8n-nodes-pisama@0.3.0` on npm), set:
 
-- **Base URL**: your server, e.g. `http://your-host:8400` (the docker-compose port; the
-  node posts to `/api/v1/n8n/webhook` under it).
-- **API Key**: the value of `PISAMA_API_KEY`.
-- **Webhook Secret** (optional): the value of `PISAMA_WEBHOOK_SECRET` if you set one;
-  leave both unset or both equal to the API key otherwise.
+- **API URL**: your server base **with the `/api/v1` suffix**, e.g.
+  `http://your-host:8400/api/v1`. The node's default is `https://api.pisama.ai/api/v1`
+  and it appends `/n8n/webhook`; drop the `/api/v1` and the POST 404s. (This is also the
+  base the credential's **Test** button GETs `/health` against — the server aliases
+  `/api/v1/health` to its health check so Test validates green.)
+- **API Key**: the value of `PISAMA_API_KEY`. The node always sends it as
+  `X-Pisama-API-Key`, which this server accepts on its own.
+- **Webhook Secret**: leave **empty** to authenticate by the API key alone (the node then
+  sends no signature). Set it to HMAC-sign every POST — it must equal the server's
+  `PISAMA_WEBHOOK_SECRET`, or `PISAMA_API_KEY` if you didn't set a separate secret. When
+  set, the server enforces the signature plus replay protection.
 
 No node changes needed; v0.3.0 as published on npm works unmodified.
 
@@ -63,7 +69,8 @@ No node changes needed; v0.3.0 as published on npm works unmodified.
 - `GET /api/v1/stream`: SSE stream of live detection events (token via `?token=`).
 - `GET /api/v1/paid/status`, `POST /api/v1/n8n/fix|apply|rollback`: paid tier
   (cloud-backed fix suggestions and auto-apply), gated on `PISAMA_CLOUD_KEY`.
-- `GET /healthz`: liveness.
+- `GET /healthz` (alias `GET /api/v1/health`): liveness; the alias is the community
+  node's credential-Test path.
 
 ## Status
 
