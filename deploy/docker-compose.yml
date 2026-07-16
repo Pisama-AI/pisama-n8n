@@ -15,6 +15,9 @@ services:
       - "8400:8400"
     environment:
       - PISAMA_API_KEY=${PISAMA_API_KEY:-}
+      # Optional separate secret for the community node's HMAC signatures
+      # (the node's "Webhook Secret" credential field). Defaults to the API key.
+      - PISAMA_WEBHOOK_SECRET=${PISAMA_WEBHOOK_SECRET:-}
       # SQLite by default; point at Postgres for a durable multi-process deploy.
       - DATABASE_URL=${DATABASE_URL:-sqlite:////data/pisama.db}
     volumes:

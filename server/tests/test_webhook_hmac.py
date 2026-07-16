@@ -167,7 +167,48 @@ def test_x_pisama_api_key_header_accepted(client, body):
     assert wrong.status_code == 401, wrong.text
 
 
-# 8. The DIVERGED unpublished signing variant (nonce inside the base, no
+# 8. Nonce semantics mirror the backend's verify_webhook_if_configured: the
+#    nonce is required on the HMAC path (the published node always sends it),
+#    and a signed request is single-use — replaying the exact same request
+#    inside the freshness window is rejected, while a fresh signature from
+#    the same sender keeps working.
+
+def test_missing_nonce_401(client, body):
+    headers = _sign(body, API_KEY)
+    del headers["X-Pisama-Nonce"]
+    resp = client.post("/api/v1/n8n/webhook", content=body, headers=headers)
+    assert resp.status_code == 401, resp.text
+    assert "nonce" in resp.json()["detail"].lower()
+
+
+def test_replayed_request_401(client, body):
+    headers = _sign(body, API_KEY)
+    first = client.post("/api/v1/n8n/webhook", content=body, headers=headers)
+    assert first.status_code == 200, first.text
+
+    replay = client.post("/api/v1/n8n/webhook", content=body, headers=headers)
+    assert replay.status_code == 401, replay.text
+    assert "replay" in replay.json()["detail"].lower()
+
+    fresh = client.post("/api/v1/n8n/webhook", content=body, headers=_sign(body, API_KEY))
+    assert fresh.status_code == 200, fresh.text
+
+
+def test_unauthenticated_request_cannot_burn_a_nonce(client, body):
+    """A wrong-secret request must NOT consume its nonce — otherwise anyone
+    could pre-burn nonces and lock out the legitimate sender."""
+    ts = str(int(time.time()))
+    good = _sign(body, API_KEY, timestamp=ts)
+    forged = dict(good, **{"X-Pisama-Signature": _sign(body, "not-the-secret", timestamp=ts)["X-Pisama-Signature"]})
+
+    rejected = client.post("/api/v1/n8n/webhook", content=body, headers=forged)
+    assert rejected.status_code == 401, rejected.text
+
+    accepted = client.post("/api/v1/n8n/webhook", content=body, headers=good)
+    assert accepted.status_code == 200, accepted.text
+
+
+# 9. The DIVERGED unpublished signing variant (nonce inside the base, no
 #    "sha256=" prefix) must be rejected — the server speaks published v0.3.0.
 
 def test_old_nonce_in_base_variant_rejected(client, body):

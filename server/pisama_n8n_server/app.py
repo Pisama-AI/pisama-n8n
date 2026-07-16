@@ -108,7 +108,32 @@ def public_read_enabled() -> bool:
 # PISAMA_WEBHOOK_SECRET when set, falling back to PISAMA_API_KEY. The node
 # also always sends its apiKey credential as X-Pisama-API-Key; accept that as
 # equivalent to Bearer so a node with no Webhook Secret can still authenticate.
+#
+# Semantics mirror the hosted backend's verify_webhook_if_configured
+# (backend/app/api/v1/provider_base.py): same signature base and freshness
+# window, and a signed request is single-use — the nonce is consumed on
+# success, which is the actual replay defense (the timestamp window alone
+# would let a captured request be re-posted, and webhook ingests have no
+# upstream execution id to dedup on). The backend keys the secret per
+# registered workflow; this server is single-tenant, so one env secret is
+# the whole keyspace.
 _HMAC_FRESHNESS_SECONDS = 300  # reject signatures older/newer than 5 minutes
+
+# Nonces live in memory: single-tenant, single-process server. Kept for twice
+# the freshness window (a timestamp up to +300s in the future stays verifiable
+# until +600s), pruned inline so the dict stays bounded without a sweeper.
+_seen_nonces: Dict[str, float] = {}
+
+
+def _consume_nonce(nonce: str) -> bool:
+    """Mark a nonce used; False if it was already used inside its lifetime."""
+    now = time.time()
+    for stale in [n for n, expiry in _seen_nonces.items() if expiry <= now]:
+        del _seen_nonces[stale]
+    if nonce in _seen_nonces:
+        return False
+    _seen_nonces[nonce] = now + 2 * _HMAC_FRESHNESS_SECONDS
+    return True
 
 
 async def require_read_auth(request: Request) -> None:
@@ -140,9 +165,16 @@ async def require_auth(request: Request) -> None:
     signature = request.headers.get("x-pisama-signature")
     timestamp = request.headers.get("x-pisama-timestamp")
     if signature and timestamp:
-        if _valid_hmac_signature(await request.body(), signature, timestamp):
-            return
-        raise HTTPException(status_code=401, detail="Invalid or stale webhook signature.")
+        nonce = request.headers.get("x-pisama-nonce")
+        if not nonce:
+            raise HTTPException(status_code=401, detail="Webhook nonce required.")
+        if not _valid_hmac_signature(await request.body(), signature, timestamp):
+            raise HTTPException(status_code=401, detail="Invalid or stale webhook signature.")
+        # Only a request that proved knowledge of the secret may consume a
+        # nonce — otherwise unauthenticated garbage could burn future nonces.
+        if not _consume_nonce(nonce):
+            raise HTTPException(status_code=401, detail="Replay attack detected.")
+        return
     raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
 
 
