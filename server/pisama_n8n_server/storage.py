@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from math import ceil
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -188,6 +189,9 @@ class ReliabilityCase(Base):
     detector: Mapped[str] = mapped_column(String, nullable=False)
     failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="observing", index=True)
+    # The verified or reviewed conclusion survives a later rollback. ``status``
+    # is the current lifecycle state; outcome is the historical result.
+    outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     successful_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
     recurrence_count: Mapped[int] = mapped_column(default=0, nullable=False)
     first_success_execution_id: Mapped[Optional[int]] = mapped_column(
@@ -211,6 +215,7 @@ class ReliabilityCase(Base):
             "detector": self.detector,
             "failure_mode": self.failure_mode,
             "status": self.status,
+            "outcome": self.outcome,
             "successful_execution_count": self.successful_execution_count,
             "recurrence_count": self.recurrence_count,
             "first_success_execution_id": self.first_success_execution_id,
@@ -410,6 +415,9 @@ _ADDED_COLUMNS = {
     "executions": {
         "source_execution_id": "VARCHAR",
         "workflow_name": "VARCHAR",
+    },
+    "reliability_cases": {
+        "outcome": "VARCHAR",
     },
 }
 
@@ -636,8 +644,98 @@ class Storage:
                 "repairs_by_status": dict(repair_rows),
                 "feedback_by_verdict": dict(feedback_rows),
                 "reliability_cases_by_status": dict(case_rows),
+                "reliability_metrics": self._reliability_metrics(session),
                 "latest_events": latest_events,
             }
+
+    @staticmethod
+    def _percentile(values: List[float], percentile: float) -> Optional[float]:
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, ceil(len(ordered) * percentile) - 1)
+        return round(ordered[index], 3)
+
+    def _reliability_metrics(self, session: Any) -> Dict[str, Any]:
+        """Aggregate only locally persisted evidence, with explicit denominators.
+
+        A verdict is counted once per detection (its latest verdict). A remediation
+        rate uses only cases with an actual prevention or recurrence outcome. This
+        intentionally does not claim recurrence *reduction*: that needs comparable
+        pre- and post-change population windows, which v1 does not yet store.
+        """
+        feedback_rows = session.execute(
+            select(DetectionFeedback)
+            .order_by(DetectionFeedback.detection_id, desc(DetectionFeedback.id))
+        ).scalars()
+        latest_feedback: Dict[int, str] = {}
+        for feedback in feedback_rows:
+            latest_feedback.setdefault(feedback.detection_id, feedback.verdict)
+        accepted = sum(
+            verdict in {"useful", "fixed_manually"}
+            for verdict in latest_feedback.values()
+        )
+        rejected = sum(
+            verdict == "not_useful" for verdict in latest_feedback.values()
+        )
+        reviewed = accepted + rejected
+
+        outcome_rows = session.execute(
+            select(ReliabilityCase.outcome, func.count(ReliabilityCase.id))
+            .where(ReliabilityCase.outcome.is_not(None))
+            .group_by(ReliabilityCase.outcome)
+        ).all()
+        outcomes = dict(outcome_rows)
+        prevented = outcomes.get("prevented", 0)
+        recurred = outcomes.get("recurred", 0)
+        inconclusive = outcomes.get("inconclusive", 0)
+        verified = prevented + recurred
+
+        applied_rows = session.execute(
+            select(RepairAttempt.applied_at, Execution.received_at)
+            .join(DetectionRow, RepairAttempt.detection_id == DetectionRow.id)
+            .join(Execution, DetectionRow.execution_id == Execution.id)
+            .where(RepairAttempt.applied_at.is_not(None))
+        ).all()
+        elapsed_seconds = []
+        for applied_at, received_at in applied_rows:
+            applied, received = _parse_iso(applied_at), _parse_iso(received_at)
+            if applied is not None and received is not None and applied >= received:
+                elapsed_seconds.append((applied - received).total_seconds())
+
+        return {
+            "diagnosis": {
+                "accepted": accepted,
+                "rejected": rejected,
+                "reviewed": reviewed,
+                "acceptance_rate": round(accepted / reviewed, 4) if reviewed else None,
+            },
+            "remediation": {
+                "prevented": prevented,
+                "recurred": recurred,
+                "inconclusive": inconclusive,
+                "verified_outcomes": verified,
+                "verified_remediation_rate": (
+                    round(prevented / verified, 4) if verified else None
+                ),
+                "recurrence_reduction": None,
+                "recurrence_reduction_note": (
+                    "Requires comparable baseline and post-change execution windows."
+                ),
+            },
+            "time_to_applied_workflow_control": {
+                "sample_size": len(elapsed_seconds),
+                "median_seconds": self._percentile(elapsed_seconds, 0.5),
+                "p90_seconds": self._percentile(elapsed_seconds, 0.9),
+            },
+            "durable_controls": {
+                "applied_workflow_controls": len(applied_rows),
+                "share": None,
+                "share_note": (
+                    "n8n workflow controls are the only control type recorded in this release."
+                ),
+            },
+        }
 
     def _claim_repair(self, repair_id: int, from_status: str, to_status: str) -> Optional[Dict[str, Any]]:
         """Atomically own a repair transition, preventing double-click races."""
@@ -683,11 +781,18 @@ class Storage:
         )
         now = datetime.now(timezone.utc).isoformat()
         with self._Session() as session:
-            session.execute(
-                update(ReliabilityCase)
-                .where(ReliabilityCase.repair_id == repair_id)
-                .values(status="rolled_back", updated_at=now, outcome_at=now)
-            )
+            case = session.execute(
+                select(ReliabilityCase).where(ReliabilityCase.repair_id == repair_id)
+            ).scalar_one_or_none()
+            if case is not None:
+                if case.outcome is None and case.status in {
+                    "prevented",
+                    "inconclusive",
+                    "recurred",
+                }:
+                    case.outcome = case.status
+                case.status = "rolled_back"
+                case.updated_at = now
             session.commit()
         return repair
 
@@ -771,7 +876,6 @@ class Storage:
             except (TypeError, ValueError):
                 return
             execution_started_at = _parse_iso(raw.get("startedAt"))
-            trace = parse_trace(raw)
             fired = {
                 (row.detector, row.failure_mode)
                 for row in session.execute(
@@ -787,35 +891,68 @@ class Storage:
                     ReliabilityCase.status == "observing",
                 )
             ).scalars().all()
+            successful_runtime = self._is_successful_runtime_execution(raw)
             changed = False
             for case in cases:
-                # Captured history remains useful for detector regression, but it
-                # cannot become post-repair evidence merely because it is replayed.
-                # When n8n supplies a start time, require it to be after the case.
-                case_created_at = _parse_iso(case.created_at)
-                if (
-                    execution_started_at is not None
-                    and case_created_at is not None
-                    and execution_started_at <= case_created_at
-                ):
-                    continue
-                if (case.detector, case.failure_mode) in fired:
-                    case.status = "recurred"
-                    case.recurrence_count += 1
-                    case.first_recurrence_execution_id = (
-                        case.first_recurrence_execution_id or execution_id
-                    )
-                    case.updated_at = now
-                    changed = True
-                elif trace.get("available") and trace.get("kind") == "runtime" and trace.get("status") == "success":
-                    case.successful_execution_count += 1
-                    case.first_success_execution_id = (
-                        case.first_success_execution_id or execution_id
-                    )
-                    case.updated_at = now
-                    changed = True
+                case_changed = self._observe_reliability_case(
+                    case,
+                    execution_id,
+                    fired,
+                    execution_started_at,
+                    successful_runtime,
+                    now,
+                )
+                changed = case_changed or changed
             if changed:
                 session.commit()
+
+    @staticmethod
+    def _is_successful_runtime_execution(raw: Dict[str, Any]) -> bool:
+        trace = parse_trace(raw)
+        return (
+            trace.get("available")
+            and trace.get("kind") == "runtime"
+            and trace.get("status") == "success"
+        )
+
+    @staticmethod
+    def _is_historical_execution(
+        execution_started_at: Optional[datetime], case: ReliabilityCase
+    ) -> bool:
+        case_created_at = _parse_iso(case.created_at)
+        return bool(
+            execution_started_at is not None
+            and case_created_at is not None
+            and execution_started_at <= case_created_at
+        )
+
+    def _observe_reliability_case(
+        self,
+        case: ReliabilityCase,
+        execution_id: int,
+        fired: set,
+        execution_started_at: Optional[datetime],
+        successful_runtime: bool,
+        observed_at: str,
+    ) -> bool:
+        """Mutate one case only when this execution is valid new evidence."""
+        if self._is_historical_execution(execution_started_at, case):
+            return False
+        if (case.detector, case.failure_mode) in fired:
+            case.status = "recurred"
+            case.outcome = "recurred"
+            case.recurrence_count += 1
+            case.first_recurrence_execution_id = (
+                case.first_recurrence_execution_id or execution_id
+            )
+            case.updated_at = observed_at
+            return True
+        if not successful_runtime:
+            return False
+        case.successful_execution_count += 1
+        case.first_success_execution_id = case.first_success_execution_id or execution_id
+        case.updated_at = observed_at
+        return True
 
     def get_reliability_case(self, case_id: int) -> Optional[Dict[str, Any]]:
         with self._Session() as session:
@@ -861,6 +998,7 @@ class Storage:
                     raise ValueError("A recurring case cannot be recorded as prevented.")
             now = datetime.now(timezone.utc).isoformat()
             case.status = outcome
+            case.outcome = outcome
             case.outcome_note = note.strip()[:1000] if note else None
             case.updated_at = now
             case.outcome_at = now

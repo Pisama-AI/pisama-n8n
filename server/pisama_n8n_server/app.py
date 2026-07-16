@@ -298,6 +298,12 @@ async def operations_summary(storage: Storage = Depends(get_storage)) -> Dict[st
     return storage.operational_summary()
 
 
+@app.get("/api/v1/reliability/metrics", dependencies=[Depends(require_read_auth)])
+async def reliability_metrics(storage: Storage = Depends(get_storage)) -> Dict[str, Any]:
+    """Evidence scorecard for this tenant. No cross-tenant or raw trace data."""
+    return storage.operational_summary()["reliability_metrics"]
+
+
 @app.get("/api/v1/reliability-cases", dependencies=[Depends(require_read_auth)])
 async def list_reliability_cases(
     storage: Storage = Depends(get_storage),

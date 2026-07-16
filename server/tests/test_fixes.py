@@ -151,13 +151,29 @@ def test_repair_proposal_lifecycle_is_persisted_in_real_sqlite(tmp_path, monkeyp
     assert observed.json()["status"] == "observing"
     assert observed.json()["recurrence_count"] == 0
 
+    inconclusive = c.post(
+        f"/api/v1/reliability-cases/{case['id']}/outcome",
+        headers={"Authorization": "Bearer k"},
+        json={"outcome": "inconclusive", "note": "Not enough post-repair traffic."},
+    )
+    assert inconclusive.status_code == 200, inconclusive.text
+    assert inconclusive.json()["status"] == "inconclusive"
+    assert inconclusive.json()["outcome"] == "inconclusive"
+    assert inconclusive.json()["outcome_note"] == "Not enough post-repair traffic."
+
     rollback = storage.claim_repair_rollback(repair["id"])
     assert rollback and rollback["status"] == "rolling_back"
     restored = storage.mark_repair_rolled_back(repair["id"])
     assert restored["status"] == "rolled_back"
-    assert c.get(
+    rolled_back_case = c.get(
         f"/api/v1/reliability-cases/{case['id']}", headers={"Authorization": "Bearer k"}
-    ).json()["status"] == "rolled_back"
+    )
+    assert rolled_back_case.json()["status"] == "rolled_back"
+    assert rolled_back_case.json()["outcome"] == "inconclusive"
+    metrics = c.get("/api/v1/reliability/metrics", headers={"Authorization": "Bearer k"})
+    assert metrics.status_code == 200, metrics.text
+    assert metrics.json()["remediation"]["inconclusive"] == 1
+    assert metrics.json()["time_to_applied_workflow_control"]["sample_size"] == 1
     persisted = storage.get_repair(repair["id"], include_workflows=True)
     assert persisted and persisted["status"] == "rolled_back"
     assert persisted["baseline_workflow"] == context["workflow"]

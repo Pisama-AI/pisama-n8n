@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, inspect, text
 
 from pisama_n8n_server.app import app, get_storage
 from pisama_n8n_server.storage import Storage
@@ -224,6 +225,12 @@ def test_feedback_and_operations_summary_use_persisted_execution_data(client):
     assert body["executions_analyzed"] == 1
     assert body["detections_fired"] >= 1
     assert body["feedback_by_verdict"] == {"useful": 1}
+    assert body["reliability_metrics"]["diagnosis"] == {
+        "accepted": 1,
+        "rejected": 0,
+        "reviewed": 1,
+        "acceptance_rate": 1.0,
+    }
     assert "webhook_ingested" in body["latest_events"]
 
 
@@ -256,3 +263,29 @@ def test_undecodable_list_payload_is_422(client):
     resp = client.post("/api/v1/n8n/webhook", json=[{"file": "notes.json"}, {"x": 1}])
     assert resp.status_code == 422, resp.text
     assert "Unrecognized execution payload" in resp.json()["detail"]
+
+
+def test_existing_reliability_case_table_receives_outcome_column_on_upgrade(tmp_path):
+    """The prior repair-case release had no outcome column. Opening its real
+    SQLite file under this release must perform the additive upgrade in place."""
+    db_path = tmp_path / "prior-release.db"
+    url = f"sqlite:///{db_path}"
+    old_engine = create_engine(url)
+    with old_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE reliability_cases ("
+                "id INTEGER PRIMARY KEY, repair_id INTEGER NOT NULL, "
+                "detection_id INTEGER NOT NULL, workflow_id VARCHAR NOT NULL, "
+                "detector VARCHAR NOT NULL, failure_mode VARCHAR, status VARCHAR NOT NULL, "
+                "successful_execution_count INTEGER NOT NULL, recurrence_count INTEGER NOT NULL, "
+                "first_success_execution_id INTEGER, first_recurrence_execution_id INTEGER, "
+                "outcome_note TEXT, created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, "
+                "outcome_at VARCHAR)"
+            )
+        )
+    old_engine.dispose()
+
+    upgraded = Storage(url=url)
+    columns = {column["name"] for column in inspect(upgraded.engine).get_columns("reliability_cases")}
+    assert "outcome" in columns

@@ -92,6 +92,26 @@ Dogfood results are internal evidence, not a recall claim. Do not claim detector
 or autonomous repair success until design partners supply independently adjudicated
 incidents and repeated observed repair outcomes.
 
+## Reliability evidence definitions
+
+The local `/api/v1/reliability/metrics` scorecard is a measurement aid, not marketing
+copy. Its fields have fixed meanings:
+
+- **Diagnosis acceptance** is the latest operator verdict per detection. `useful` and
+  `fixed_manually` are accepted; `not_useful` is rejected. Unreviewed detections are
+  excluded from the denominator.
+- **Verified remediation** is `prevented / (prevented + recurred)`. An `inconclusive`
+  outcome is not silently treated as success or failure.
+- **Time to applied workflow control** runs from Pisama receiving the source execution
+  to a stale-guarded workflow change being applied. It does not claim that the change
+  solved the issue.
+- **Recurrence reduction** is intentionally unavailable until we record comparable
+  baseline and post-change execution windows for each failure class.
+
+An outcome is retained when a repair is later rolled back. The repair's current lifecycle
+state may be `rolled_back`, while its previous `prevented`, `recurred`, or `inconclusive`
+outcome remains part of the local audit record.
+
 ## Current internal evidence
 
 2026-07-16:
@@ -131,10 +151,11 @@ incidents and repeated observed repair outcomes.
   falsely claiming that a retry budget was exhausted. Duplicate-side-effect detection is
   deliberately held until a real execution records repeated unsafe action attempts.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
-  a real controlled failure was safely changed through the stale-workflow guard, a later
-  successful execution was ingested by API polling, and the case remained `observing`.
-  Pisama correctly refused to label a single success as prevention, then restored the
-  original workflow and retained the rolled-back audit record.
+  two real workflow controls sourced from one controlled failure were safely applied
+  through the stale-workflow guard. A later successful execution was ingested by API
+  polling and updated both `observing` cases. Pisama correctly refused to label a single
+  success as prevention, then restored the controls in reverse order and retained their
+  rolled-back audit records.
 - No real LLM token-limit or AI-agent tool/output-validation execution has yet been
   captured in this lane. The associated detectors remain evidence-gated and must not be
   described as validated until those captures exist.

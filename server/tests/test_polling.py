@@ -98,7 +98,7 @@ def test_repair_verification_observes_a_real_post_apply_execution(tmp_path, monk
     post-apply evidence. No replayed fixture or fabricated execution participates."""
     key = _provision_key()
     wid = _run_failing_workflow(key)
-    repair_id = None
+    repair_ids = []
     storage = None
     try:
         monkeypatch.setenv("PISAMA_N8N_URL", N8N_URL)
@@ -123,16 +123,12 @@ def test_repair_verification_observes_a_real_post_apply_execution(tmp_path, monk
             if row["detector"] == "error" and row["detected"] and row["workflow_id"] == wid
         )
 
-        async def apply_reviewed_change():
+        async def apply_reviewed_change(baseline, proposed):
             n8n = N8nClient(N8N_URL, key)
             try:
-                baseline = await n8n.get_workflow(wid)
-                proposed = deepcopy(baseline)
-                boom = next(node for node in proposed["nodes"] if node["name"] == "Boom")
-                boom["parameters"]["jsCode"] = "return [{ json: { repaired: true } }];"
                 applied = await apply_fix(n8n, wid, baseline, proposed)
                 workflow = await n8n.get_workflow(wid)
-                return baseline, proposed, applied, workflow
+                return applied, workflow
             finally:
                 await n8n.aclose()
 
@@ -160,14 +156,35 @@ def test_repair_verification_observes_a_real_post_apply_execution(tmp_path, monk
                     "mutated_workflow": proposed,
                 },
             )
-            repair_id = proposal["id"]
-            assert storage.claim_repair_apply(repair_id)
+            repair_ids.append(proposal["id"])
+            assert storage.claim_repair_apply(repair_ids[-1])
             # Construct a fresh client inside the coroutine because httpx clients
             # are bound to the event loop that owns them.
-            _baseline, _proposed, applied, workflow = run(apply_reviewed_change())
-            assert _baseline == baseline
-            assert _proposed == proposed
-            storage.mark_repair_applied(repair_id, **applied)
+            applied, workflow = run(apply_reviewed_change(baseline, proposed))
+            storage.mark_repair_applied(repair_ids[-1], **applied)
+
+            # A second real workflow control can be applied to the same source
+            # detection. Its later execution must update both open cases.
+            second_baseline = workflow
+            second_proposed = deepcopy(second_baseline)
+            boom = next(node for node in second_proposed["nodes"] if node["name"] == "Boom")
+            boom["parameters"]["jsCode"] = "return [{ json: { repaired: true, revision: 2 } }];"
+            second_proposal = storage.create_repair_proposal(
+                detection_id=source["id"],
+                workflow_id=wid,
+                baseline_workflow=second_baseline,
+                suggestion={
+                    "explanation": "Add a durable revision marker to the repaired control.",
+                    "patch_ops": [],
+                    "mutated_workflow": second_proposed,
+                },
+            )
+            repair_ids.append(second_proposal["id"])
+            assert storage.claim_repair_apply(repair_ids[-1])
+            second_applied, workflow = run(
+                apply_reviewed_change(second_baseline, second_proposed)
+            )
+            storage.mark_repair_applied(repair_ids[-1], **second_applied)
 
             # The same real webhook now creates a later successful n8n execution.
             webhook = next(node for node in workflow["nodes"] if node["name"] == "Webhook")
@@ -178,35 +195,42 @@ def test_repair_verification_observes_a_real_post_apply_execution(tmp_path, monk
             second_sync = client.post("/api/v1/n8n/sync", headers=headers)
             assert second_sync.status_code == 200, second_sync.text
 
-            case = storage.get_reliability_case_for_detection(source["id"])
-            assert case and case["status"] == "observing"
-            assert case["successful_execution_count"] >= 1
-            assert case["recurrence_count"] == 0
+            cases = {
+                case["repair_id"]: case
+                for case in storage.list_reliability_cases()
+                if case["repair_id"] in repair_ids
+            }
+            assert set(cases) == set(repair_ids)
+            assert all(case["status"] == "observing" for case in cases.values())
+            assert all(
+                case["successful_execution_count"] >= 1 for case in cases.values()
+            )
+            assert all(case["recurrence_count"] == 0 for case in cases.values())
             # One execution is useful exposure evidence, never enough to assert prevention.
             early = client.post(
-                f"/api/v1/reliability-cases/{case['id']}/outcome",
+                f"/api/v1/reliability-cases/{cases[repair_ids[-1]]['id']}/outcome",
                 headers=headers,
                 json={"outcome": "prevented"},
             )
             assert early.status_code == 409
         finally:
-            if repair_id is not None:
+            for repair_id in reversed(repair_ids):
                 repair = storage.get_repair(repair_id, include_workflows=True)
                 if repair and repair["status"] == "applied":
                     assert storage.claim_repair_rollback(repair_id)
-                    async def restore_snapshot():
+                    async def restore_snapshot(repair_to_restore):
                         n8n = N8nClient(N8N_URL, key)
                         try:
                             return await rollback(
                                 n8n,
                                 wid,
-                                repair["snapshot"],
-                                repair["applied_workflow"],
+                                repair_to_restore["snapshot"],
+                                repair_to_restore["applied_workflow"],
                             )
                         finally:
                             await n8n.aclose()
 
-                    restored = run(restore_snapshot())
+                    restored = run(restore_snapshot(repair))
                     assert restored
                     storage.mark_repair_rolled_back(repair_id)
     finally:

@@ -65,6 +65,7 @@ export interface ReliabilityCase {
   detector: string
   failure_mode: string | null
   status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back'
+  outcome: ReliabilityOutcome | 'recurred' | null
   successful_execution_count: number
   recurrence_count: number
   first_success_execution_id: number | null
@@ -76,6 +77,8 @@ export interface ReliabilityCase {
   updated_at: string
   outcome_at: string | null
 }
+
+export type ReliabilityOutcome = 'prevented' | 'inconclusive'
 
 function severityFromConfidence(confidence: number): string {
   if (confidence >= 0.8) return 'high'
@@ -123,6 +126,14 @@ export function submitDetectionFeedback(
   verdict: FeedbackVerdict,
 ): Promise<DetectionFeedback> {
   return postApi(`/api/v1/detections/${detectionId}/feedback`, { verdict })
+}
+
+export function concludeReliabilityCase(
+  caseId: number,
+  outcome: ReliabilityOutcome,
+  note?: string,
+): Promise<ReliabilityCase> {
+  return postApi(`/api/v1/reliability-cases/${caseId}/outcome`, { outcome, note })
 }
 
 // Per-node execution trace behind a detection (GET /detections/{id}/trace).

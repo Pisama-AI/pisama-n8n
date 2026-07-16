@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Wrench, Sparkles, Lock, Check, Undo2, ArrowRight } from 'lucide-react'
 import { Card, CardHeader, CardTitle, Button } from '@/components/ui'
 import {
@@ -49,7 +49,14 @@ function ProposedChange({ ops }: { ops: PatchOp[] }) {
 // locked upsell when the server has no cloud key; a live "Get fix" when it does. Applying
 // the fix to the live workflow is gated behind HEALING_APPLY_ENABLED (default off) so an
 // unproven fix can't mutate a customer's production workflow by default.
-export function FixPanel({ detectionId }: { detectionId: string }) {
+export function FixPanel({
+  detectionId,
+  onRepairApplied,
+}: {
+  detectionId: string
+  onRepairApplied?: () => void
+}) {
+  const queryClient = useQueryClient()
   const { data: status } = useQuery({ queryKey: ['paid-status'], queryFn: getPaidStatus })
   const [suggestion, setSuggestion] = useState<FixSuggestion | null>(null)
   const [loading, setLoading] = useState(false)
@@ -83,6 +90,8 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
     try {
       await applyFix(suggestion.repair_id)
       setApplyState('applied')
+      await queryClient.invalidateQueries({ queryKey: ['detection', detectionId] })
+      onRepairApplied?.()
     } catch {
       setError('Apply failed. The workflow may have changed; review it and generate a new fix.')
       setApplyState('confirm')
