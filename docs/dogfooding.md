@@ -87,6 +87,17 @@ touching an existing deployment.
 For an upgrade check, retain the volume from a prior release, start the next image against
 that volume, verify `/healthz`, detections, feedback, repair records, and operational
 summary, then restore a backup into a second isolated project and repeat the same checks.
+The reproducible real-data gate does this end to end for n8n `1.70.0` to `1.91.3`:
+
+```bash
+python scripts/verify_n8n_upgrade_restore.py
+```
+
+It creates uniquely named temporary Compose projects, provisions a controlled failing
+webhook, copies the complete SQLite volume, upgrades the original lane, restores the
+backup into a second target lane, provisions fresh API keys after each image transition,
+and verifies Pisama polling plus second-sync deduplication. It emits only a redacted
+manifest and removes its temporary containers and volumes unless `--keep` is requested.
 
 ## External-readiness rule
 
@@ -294,6 +305,11 @@ current release decision.
   fourteen real executions and the second added zero. The current-build `core` gate
   still misses only P0 truncation, while the four withheld fingerprints have zero
   current-build detector rows and an explicit gate for them exits nonzero.
+- The automated `verify_n8n_upgrade_restore.py` gate passed against real n8n images
+  `1.70.0` and `1.91.3`. Both the in-place upgraded lane and the restored lane retained
+  the controlled workflow, produced a real error and `error_workflow` finding, and
+  returned `initial_sync_new: 2` followed by `second_sync_new: 0`. The run left no
+  temporary containers or volumes.
 - Repair verification now has a tenant-local case record. In the disposable SQLite lane,
   two real workflow controls sourced from one controlled failure were safely applied
   through the stale-workflow guard. A later successful execution was ingested by API
