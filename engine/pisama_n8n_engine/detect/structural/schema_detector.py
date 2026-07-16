@@ -23,6 +23,7 @@ from pisama_n8n_engine.detect.base import (
     TurnAwareDetectionResult,
     TurnAwareSeverity,
 )
+from pisama_n8n_engine.detect.runtime import classify_error, remediation_for
 
 logger = logging.getLogger(__name__)
 
@@ -140,16 +141,56 @@ class N8NSchemaDetector(TurnAwareDetector):
         turns: List[TurnSnapshot],
         conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
-        """Detect schema mismatches between consecutive n8n nodes."""
-        if len(turns) < 2:
+        """Detect only data-contract failures n8n recorded at runtime.
+
+        Static type inference is intentionally not used: n8n passes dynamic JSON,
+        and a real runtime error is the only reliable contract violation signal.
+        """
+        if not turns:
             return TurnAwareDetectionResult(
                 detected=False,
                 severity=TurnAwareSeverity.NONE,
                 confidence=0.0,
                 failure_mode=None,
-                explanation="Need at least 2 nodes to check schema compatibility",
+                explanation="No execution turns were available for runtime data-contract analysis",
                 detector_name=self.name,
             )
+
+        issues = [
+            {
+                "node": turn.participant_id,
+                "turn": turn.turn_number,
+                "message": turn.turn_metadata.get("error_message"),
+            }
+            for turn in turns
+            if turn.turn_metadata.get("has_error") and classify_error(turn) == "expression"
+        ]
+        if not issues:
+            return TurnAwareDetectionResult(
+                detected=False,
+                severity=TurnAwareSeverity.NONE,
+                confidence=0.0,
+                failure_mode=None,
+                explanation="No runtime data-contract failure was recorded",
+                detector_name=self.name,
+            )
+
+        names = ", ".join(dict.fromkeys(str(issue["node"]) for issue in issues))
+        return TurnAwareDetectionResult(
+            detected=True,
+            severity=TurnAwareSeverity.MODERATE,
+            confidence=0.95,
+            failure_mode="n8n_data_contract",
+            explanation=(
+                f"n8n recorded {len(issues)} data-contract failure(s) in: {names}. "
+                f"{remediation_for('expression')}"
+            ),
+            affected_turns=[issue["turn"] for issue in issues],
+            evidence={"issues": issues},
+            suggested_fix=remediation_for("expression"),
+            detector_name=self.name,
+            detector_version=self.version,
+        )
 
         issues = []
         affected_turns = []

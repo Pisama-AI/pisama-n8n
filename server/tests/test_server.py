@@ -69,15 +69,17 @@ def test_healthy_fixture_fires_no_failure_detection(client):
         assert not _fired(body, detector), f"{detector} unexpectedly fired: {body}"
 
 
-# 2. Structural lane: a complexity workflow yields schema/complexity detections.
+# 2. Structural lane: a complexity workflow yields a complexity verdict. Runtime
+# data-contract analysis deliberately does not run without an execution.
 
-def test_complexity_workflow_yields_structural_detections(client):
+def test_complexity_workflow_yields_structural_detection(client):
     payload = _load("complexity/01-COMPLEXITY-high-node-count.json")
     resp = client.post("/api/v1/n8n/webhook", json=payload)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     detectors = {d["detector"] for d in body["detections"]}
-    assert {"schema", "complexity"} <= detectors, body
+    assert {"cycle", "complexity"} <= detectors, body
+    assert "schema" not in detectors, body
     assert _fired(body, "complexity"), body
 
 

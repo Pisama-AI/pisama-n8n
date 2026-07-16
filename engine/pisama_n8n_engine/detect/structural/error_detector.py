@@ -17,6 +17,7 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 from pisama_n8n_engine.detect.n8n_utils import build_connection_map
+from pisama_n8n_engine.detect.runtime import classify_error, remediation_for
 from pisama_n8n_engine.detect.base import (
     TurnSnapshot,
     TurnAwareDetector,
@@ -365,9 +366,17 @@ class N8NErrorDetector(TurnAwareDetector):
         else:
             confidence = 0.80
 
+        failed_turns = [turn for turn in turns if self._has_error(turn)]
+        categories = [classify_error(turn) for turn in failed_turns]
+        category = next((item for item in categories if item != "node_error"), "node_error")
+
         # Build explanation
         explanations = [issue["explanation"] for issue in issues]
-        full_explanation = "; ".join(explanations)
+        full_explanation = (
+            f"{category.replace('_', ' ').title()} incident. "
+            + "; ".join(explanations)
+            + f". Recommended action: {remediation_for(category)}"
+        )
 
         # Suggest fixes
         fixes = []
@@ -395,11 +404,11 @@ class N8NErrorDetector(TurnAwareDetector):
             detected=True,
             severity=severity,
             confidence=confidence,
-            failure_mode="F14",
+            failure_mode=f"n8n_{category}",
             explanation=full_explanation,
             affected_turns=sorted(set(affected_turns)),
-            evidence={"issues": issues},
-            suggested_fix=suggested_fix,
+            evidence={"issues": issues, "categories": categories},
+            suggested_fix=remediation_for(category) if category != "node_error" else suggested_fix,
             detector_name=self.name,
             detector_version=self.version,
         )

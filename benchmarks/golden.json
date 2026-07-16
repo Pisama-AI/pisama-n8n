@@ -1,6 +1,7 @@
 {
   "executions/error.json": [
-    "error"
+    "error",
+    "error_workflow"
   ],
   "executions/healthy.json": [],
   "executions/resource.json": [

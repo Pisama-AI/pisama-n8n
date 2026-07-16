@@ -41,6 +41,11 @@ def test_turn_shape_and_metadata_contract():
         "workflow_duration_ms": 150,
         "workflow_mode": "webhook",
         "workflow_status": "success",
+        "workflow_json": {},
+        "workflow_available": False,
+        "execution_id": "exec-test",
+        "retry_of": None,
+        "retry_success_id": None,
     }
 
 

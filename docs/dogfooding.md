@@ -122,3 +122,14 @@ incidents and repeated observed repair outcomes.
   backed up, started successfully on `1.91.3`, then restored from that pre-upgrade backup
   into a fresh `1.91.3` start. The workflow remained active and its webhook returned the
   expected controlled `500` after both the upgrade and restore.
+- The disposable local `1.91.3` lane captured new real HTTP executions for a provider
+  `429` and a `401` authentication rejection. The standalone detector classified them as
+  `n8n_rate_limit` and `n8n_credential`, respectively. A real Code-node missing-field
+  execution also fired the runtime-only `n8n_data_contract` detector.
+- A retry-enabled unsafe HTTP write returned a real provider `502`, but this n8n release
+  recorded one attempt. Pisama therefore reports `n8n_retry_not_observed`, rather than
+  falsely claiming that a retry budget was exhausted. Duplicate-side-effect detection is
+  deliberately held until a real execution records repeated unsafe action attempts.
+- No real LLM token-limit or AI-agent tool/output-validation execution has yet been
+  captured in this lane. The associated detectors remain evidence-gated and must not be
+  described as validated until those captures exist.

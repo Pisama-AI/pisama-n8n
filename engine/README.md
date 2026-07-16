@@ -20,7 +20,9 @@ for d in report.fired:
     print(d.detector, d.confidence, d.explanation)
 ```
 
-Detectors: cycle, schema, resource, timeout, error, complexity.
+Detectors: cycle, runtime data contract, resource, timeout, classified error,
+complexity, AI output truncation, retry recovery, missing error workflow,
+duplicate-side-effect risk, and evidence-gated AI-agent diagnostics.
 
 The detectors are vendored from the Pisama monorepo (the single source of truth) via
 `scripts/extract_from_monorepo.py`; a parity check guards against drift. Fair-code

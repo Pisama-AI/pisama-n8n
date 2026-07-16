@@ -18,7 +18,7 @@ from conftest import fired_names, load_execution
     ("fixture", "expected"),
     [
         ("timeout.json", ["timeout"]),
-        ("error.json", ["error"]),
+        ("error.json", ["error", "error_workflow"]),
         ("resource.json", ["resource"]),
         ("healthy.json", []),
     ],

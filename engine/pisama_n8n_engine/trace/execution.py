@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pisama_n8n_engine.detect.base import TurnSnapshot
 from pisama_n8n_engine.trace.flatted import normalize_execution
+from pisama_n8n_engine.detect.n8n_utils import is_ai_node_type
+from pisama_n8n_engine.detect.truncation import extract_stop_reason
 
 
 def _normalized(execution_data: Any) -> Dict[str, Any]:
@@ -70,6 +72,29 @@ def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
     return None
 
 
+def _error_details(error: Any, swallowed: Any) -> Tuple[Optional[str], Optional[int]]:
+    """Extract the recorded error text and HTTP status without reading healthy output."""
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("description") or error.get("name")
+        status = error.get("httpCode") or error.get("statusCode") or error.get("status")
+    else:
+        message = error or swallowed
+        status = None
+    try:
+        return (str(message) if message else None, int(status) if status is not None else None)
+    except (TypeError, ValueError):
+        return (str(message) if message else None, None)
+
+
+def _http_request_metadata(parameters: Dict[str, Any], node_type: str) -> Tuple[Optional[str], bool]:
+    """Return HTTP method and explicit idempotency-key presence from node config."""
+    if "httprequest" not in node_type.lower():
+        return None, False
+    method = parameters.get("method") or parameters.get("requestMethod") or "GET"
+    encoded = json.dumps(parameters, default=str).lower()
+    return str(method).upper(), "idempotency-key" in encoded
+
+
 def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     """Build the per-node runtime turns from a captured execution's runData."""
     execution_data = _normalized(execution_data)
@@ -97,6 +122,10 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
         ndef = node_defs.get(node_name, {})
         node_type = ndef.get("type", "unknown")
         node_params = ndef.get("parameters", {})
+        retry_on_fail = bool(ndef.get("retryOnFail"))
+        retry_attempts = len(node_runs)
+        http_method, has_idempotency_key = _http_request_metadata(node_params, node_type)
+        is_ai = is_ai_node_type(node_type)
 
         # n8n stores continue-on-fail config at the NODE level (`onError`), not under
         # `parameters`. Older/exported workflows use `settings.continueOnFail` or a
@@ -130,6 +159,8 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
             # so the error detector can see it. Gated on the node's own `onError` config,
             # so a healthy node whose data merely contains a field named "error" is unaffected.
             swallowed = None if error_info else _swallowed_error(run, on_error)
+            error_message, http_status = _error_details(error_info, swallowed)
+            finish_reason = extract_stop_reason(main_branches)
 
             content_parts = [f"Node: {node_name} (type: {node_type})"]
             if output_data:
@@ -164,7 +195,15 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
                     "parameters": node_params,
                     "status": execution_status,
                     "has_error": error_info is not None or swallowed is not None,
+                    "error_message": error_message,
+                    "http_status": http_status,
                     "continue_on_fail": continue_on_fail,
+                    "retry_on_fail": retry_on_fail,
+                    "attempt_count": retry_attempts,
+                    "http_method": http_method,
+                    "has_idempotency_key": has_idempotency_key,
+                    "is_ai_node": is_ai,
+                    "finish_reason": finish_reason,
                     # Structured per-run output item count, so detectors don't have to
                     # re-derive it from the rendered content string (which leads with a
                     # "Node: ..." header and defeats naive JSON parsing).
@@ -182,6 +221,7 @@ def execution_to_turns_and_metadata(
     """Turns plus the workflow-level metadata the timeout detector reads."""
     execution_data = _normalized(execution_data)
     turns = execution_to_turns(execution_data)
+    workflow_json = execution_data.get("workflow") or execution_data.get("workflowData") or {}
     metadata = {
         "workflow_id": execution_data.get("workflowId"),
         "workflow_duration_ms": sum(
@@ -193,6 +233,11 @@ def execution_to_turns_and_metadata(
         # it defaulted to "success" and flagged every visibly-failed workflow as a
         # hidden "success-despite-failure" — a false positive on real error executions.
         "workflow_status": _workflow_status(execution_data),
+        "workflow_json": workflow_json,
+        "workflow_available": bool(workflow_json),
+        "execution_id": execution_data.get("id") or execution_data.get("executionId"),
+        "retry_of": execution_data.get("retryOf"),
+        "retry_success_id": execution_data.get("retrySuccessId"),
     }
     return turns, metadata
 

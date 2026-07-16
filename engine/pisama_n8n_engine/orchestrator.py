@@ -19,18 +19,30 @@ from pisama_n8n_engine.detect.structural import (
     N8NErrorDetector,
     N8NComplexityDetector,
 )
+from pisama_n8n_engine.detect.runtime import (
+    N8NAgentDiagnosticsDetector,
+    N8NErrorWorkflowDetector,
+    N8NIdempotencyDetector,
+    N8NRetryRecoveryDetector,
+    N8NTruncationDetector,
+)
 
 # Detectors whose production semantic is static workflow-structure analysis.
 _STRUCTURAL = {
     "cycle": N8NCycleDetector,
-    "schema": N8NSchemaDetector,
     "complexity": N8NComplexityDetector,
 }
 # Detectors whose production semantic is runtime-observed failure (need execution turns).
 _EXECUTION = {
+    "schema": N8NSchemaDetector,
     "timeout": N8NTimeoutDetector,
     "error": N8NErrorDetector,
     "resource": N8NResourceDetector,
+    "truncation": N8NTruncationDetector,
+    "retry_recovery": N8NRetryRecoveryDetector,
+    "error_workflow": N8NErrorWorkflowDetector,
+    "idempotency": N8NIdempotencyDetector,
+    "agent_diagnostics": N8NAgentDiagnosticsDetector,
 }
 
 
