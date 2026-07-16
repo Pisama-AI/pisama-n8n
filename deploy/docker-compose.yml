@@ -12,7 +12,7 @@ services:
       dockerfile: deploy/Dockerfile.server
     image: pisama-n8n-server
     ports:
-      - "8400:8400"
+      - "${PISAMA_SERVER_PORT:-8400}:8400"
     environment:
       - PISAMA_API_KEY=${PISAMA_API_KEY:-}
       # SQLite by default; point at Postgres for a durable multi-process deploy.

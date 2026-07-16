@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Self-host smoke gate: bring the server up via docker compose and prove it detects a
-# real n8n failure over HTTP, then tear down. Requires docker + a captured fixture.
+# Clean-install smoke gate: bring an isolated server up via docker compose and prove it
+# detects a real captured n8n failure over HTTP, then tear it down. This deliberately
+# uses a separate project, volume, and port so it cannot affect an operator's deployment.
 #
 #   scripts/verify_selfhost.sh [path-to-execution-fixture.json]
 #
@@ -11,21 +12,26 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="${1:-$REPO/server/tests/fixtures/executions/error/ERROR-01-throw.json}"
 KEY="selfhost-smoke-key"
-PORT=8400
+PROJECT="pisama-n8n-selfhost-verify"
+PORT="${PISAMA_VERIFY_PORT:-8402}"
+
+compose() {
+  docker compose -p "$PROJECT" -f "$REPO/deploy/docker-compose.yml" "$@"
+}
 
 if [[ ! -f "$FIXTURE" ]]; then
   echo "FAIL: fixture not found: $FIXTURE" >&2; exit 1
 fi
 
-cleanup() { (cd "$REPO/deploy" && docker compose down -v >/dev/null 2>&1) || true; }
+cleanup() { compose down -v >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 echo "[selfhost] docker compose up --build ..."
-(cd "$REPO/deploy" && PISAMA_API_KEY="$KEY" docker compose up -d --build server)
+PISAMA_API_KEY="$KEY" PISAMA_SERVER_PORT="$PORT" compose up -d --build server
 
 echo "[selfhost] waiting for health ..."
 for _ in $(seq 1 30); do
-  s=$(cd "$REPO/deploy" && docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q server)" 2>/dev/null || echo starting)
+  s=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q server)" 2>/dev/null || echo starting)
   [[ "$s" == "healthy" ]] && break
   sleep 3
 done

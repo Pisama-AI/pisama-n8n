@@ -1,0 +1,54 @@
+# Real n8n dogfood target. This is intentionally separate from deploy/docker-compose.yml:
+# it owns only disposable internal test state and never shares an operator's volumes.
+#
+# SQLite lane:
+#   docker compose -p pisama-n8n-dogfood -f deploy/docker-compose.dogfood.yml up -d
+#
+# Pick a supported n8n release without editing this file:
+#   N8N_VERSION=1.91.3 docker compose -p pisama-n8n-dogfood -f deploy/docker-compose.dogfood.yml up -d
+services:
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-1.91.3}
+    ports:
+      - "${PISAMA_DOGFOOD_N8N_PORT:-5681}:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:${PISAMA_DOGFOOD_N8N_PORT:-5681}/
+      - GENERIC_TIMEZONE=UTC
+      - DB_TYPE=sqlite
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+    volumes:
+      - dogfood_n8n_config:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  server:
+    profiles: ["server"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    ports:
+      - "${PISAMA_DOGFOOD_SERVER_PORT:-8401}:8400"
+    environment:
+      - PISAMA_API_KEY=${PISAMA_DOGFOOD_API_KEY:-dogfood-local-pisama-key}
+      - PISAMA_N8N_URL=http://n8n:5678
+      # Replace the placeholder before exercising the API-polling lane.
+      - PISAMA_N8N_API_KEY=${PISAMA_DOGFOOD_N8N_API_KEY:-not-configured}
+      - PISAMA_POLL_INTERVAL=${PISAMA_DOGFOOD_POLL_INTERVAL:-60}
+      - DATABASE_URL=sqlite:////data/pisama-dogfood.db
+    volumes:
+      - dogfood_pisama_data:/data
+    depends_on:
+      n8n:
+        condition: service_healthy
+
+volumes:
+  dogfood_n8n_config:
+  dogfood_pisama_data:
