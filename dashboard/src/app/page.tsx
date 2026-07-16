@@ -76,8 +76,8 @@ const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
   ['n8n connections', 'You manage them', '1', '5'],
   ['Failure detection', 'All six detectors', 'All six detectors', 'All six detectors'],
-  ['AI fix suggestions', '—', '—', 'Monthly allocation'],
-  ['Apply approved fixes', '—', '—', 'Snapshots and rollback'],
+  ['AI fix suggestions', 'With a cloud key', 'Not included', 'Monthly allocation'],
+  ['Apply approved fixes', 'With a cloud key', 'Not included', 'Snapshots and rollback'],
 ]
 
 const FIRST_DETECTION_STEPS = [
