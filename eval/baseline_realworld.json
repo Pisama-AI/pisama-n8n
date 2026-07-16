@@ -1,0 +1,34 @@
+{
+  "title": "REAL-WORLD community workflows (rescored saved executions)",
+  "n": 69,
+  "detectors": {
+    "timeout": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 69,
+      "precision": null,
+      "recall": null,
+      "f1": null
+    },
+    "error": {
+      "tp": 20,
+      "fp": 0,
+      "fn": 0,
+      "tn": 49,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "resource": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "tn": 66,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "source": "community workflows executed on local n8n; ground truth from n8n's own record"
+}

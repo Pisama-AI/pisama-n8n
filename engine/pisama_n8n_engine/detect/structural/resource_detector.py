@@ -54,6 +54,8 @@ class N8NResourceDetector(TurnAwareDetector):
         growth_rate_threshold: float = 2.5,
         max_content_size: int = 10000,
         api_call_threshold: int = 5,
+        min_explosion_chars: int = 10000,
+        min_amplified_items: int = 10,
     ):
         """Initialize resource detector.
 
@@ -61,10 +63,22 @@ class N8NResourceDetector(TurnAwareDetector):
             growth_rate_threshold: Flag if content grows by this factor (2.5x = 250%)
             max_content_size: Maximum acceptable content size in characters
             api_call_threshold: Maximum healthy API calls to same endpoint
+            min_explosion_chars: Absolute floor for the growth-ratio checks.
+                Real-world validation (69 community-workflow executions): a pure
+                ratio test flags 45 -> 115 chars as a "2.6x explosion" — 9 of 11
+                false positives came from ratio-only firing on trivially small
+                payloads. Growth only counts when the peak is also materially large;
+                the default deliberately equals max_content_size so the detector has
+                ONE scale line for "big" (growth then adds the which-node-exploded
+                diagnostic on top of the oversized fact).
+            min_amplified_items: Absolute floor for data amplification (1 -> 3 tiny
+                items is normal fan-out; 1 -> 10+ is the explosion semantic).
         """
         self.growth_rate_threshold = growth_rate_threshold
         self.max_content_size = max_content_size
         self.api_call_threshold = api_call_threshold
+        self.min_explosion_chars = min_explosion_chars
+        self.min_amplified_items = min_amplified_items
 
     def detect(
         self,
@@ -215,7 +229,10 @@ class N8NResourceDetector(TurnAwareDetector):
 
         monotonic_ratio = monotonic_growth / (len(sizes) - 1) if len(sizes) > 1 else 0
 
-        if overall_growth >= self.growth_rate_threshold:
+        # A ratio alone is not an explosion: 45 -> 115 chars is "2.6x growth" but
+        # trivially small. The peak must also be materially large (absolute floor) —
+        # 9 of 11 real-world false positives came from ratio-only firing.
+        if overall_growth >= self.growth_rate_threshold and max_size >= self.min_explosion_chars:
             # Find the turn where explosion happened (in workflow_turns)
             explosion_idx = max(range(len(sizes)), key=lambda i: sizes[i])
             explosion_turn = workflow_turns[explosion_idx]
@@ -244,17 +261,31 @@ class N8NResourceDetector(TurnAwareDetector):
         item_counts = []
 
         for turn in turns:
-            count = self._estimate_item_count(turn.content)
+            # Prefer the structured per-turn item count when the parser provides it
+            # (`items_out` in turn_metadata); estimating from the rendered content
+            # string undercounts, because turn content leads with a "Node: ..."
+            # header line so the JSON parse never engages.
+            structured = None
+            if isinstance(turn.turn_metadata, dict):
+                structured = turn.turn_metadata.get("items_out")
+            if isinstance(structured, int) and structured >= 0:
+                count = structured
+            else:
+                count = self._estimate_item_count(turn.content)
             item_counts.append(count)
 
         if not item_counts or max(item_counts) <= 1:
             return {"detected": False}
 
-        # Find amplification points
+        # Find amplification points. The ratio needs an absolute floor too:
+        # 1 -> 3 tiny items is normal fan-out, 1 -> 10+ is the explosion semantic.
         for i in range(1, len(item_counts)):
             if item_counts[i - 1] > 0:
                 amplification = item_counts[i] / item_counts[i - 1]
-                if amplification >= self.growth_rate_threshold:
+                if (
+                    amplification >= self.growth_rate_threshold
+                    and item_counts[i] >= self.min_amplified_items
+                ):
                     return {
                         "detected": True,
                         "type": "data_amplification",
@@ -269,8 +300,19 @@ class N8NResourceDetector(TurnAwareDetector):
         return {"detected": False}
 
     def _estimate_item_count(self, content: str) -> int:
-        """Estimate number of items in node output."""
+        """Estimate number of items in node output.
+
+        Turn content is rendered as a "Node: <name> (type: ...)" header line followed
+        by the output JSON, so skip leading non-JSON lines before parsing — without
+        this the parse never engages and every count collapses to 1.
+        """
         content = content.strip()
+        if not content.startswith(("[", "{")):
+            lines = content.split("\n")
+            for idx, line in enumerate(lines):
+                if line.lstrip().startswith(("[", "{")):
+                    content = "\n".join(lines[idx:]).strip()
+                    break
 
         # Try to parse as JSON array
         if content.startswith('['):
@@ -351,8 +393,10 @@ class N8NResourceDetector(TurnAwareDetector):
             if sizes[i] > sizes[i - 1] * 1.1:  # >10% growth
                 growth_count += 1
 
-        # If >70% of steps show growth, this is runaway accumulation
-        if growth_count >= len(sizes) * 0.7:
+        # If >70% of steps show growth, this is runaway accumulation — but only when
+        # the accumulation is materially large (same absolute floor as the explosion
+        # check; consistent small-payload growth is normal data shaping).
+        if growth_count >= len(sizes) * 0.7 and max(sizes) >= self.min_explosion_chars:
             total_growth = sizes[-1] / sizes[0] if sizes[0] > 0 else 0
 
             return {

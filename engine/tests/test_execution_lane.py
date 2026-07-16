@@ -45,3 +45,62 @@ def test_error_execution_carries_the_error_turn(bench_fixtures):
     error_turns = [t for t in turns if t.turn_metadata["has_error"]]
     assert error_turns, "the captured error execution must yield at least one error turn"
     assert any("ERROR" in t.content for t in error_turns)
+
+
+def test_loud_terminal_failure_yields_a_detection():
+    """A crashed execution must never produce ZERO detections.
+
+    Real-world regression (eval corpus rw_7e9aa5d6cc): a terminal single-node failure
+    in an 8-node workflow tripped none of the hidden-error checks — no continueOnFail,
+    no downstream turns, error rate 12.5% under the 15% threshold, and the
+    success-despite-failures check suppresses itself once the workflow is marked
+    failed. The execution_failure branch now covers loud failures.
+    """
+    from conftest import execution_doc
+
+    run = {
+        "executionTime": 5,
+        "executionStatus": "success",
+        "source": [{"previousNode": "Prev"}],
+        "data": {"main": [[{"json": {"ok": True}}]]},
+    }
+    failing = dict(run, executionStatus="error", error={"message": "merge misconfig"})
+    run_data = {f"N{i}": [dict(run)] for i in range(7)}
+    run_data["Merge"] = [failing]
+    raw = execution_doc(run_data, status="error", finished=False)
+
+    turns, metadata = execution_to_turns_and_metadata(raw)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "error" in fired_names(report)
+
+
+def test_small_payload_growth_is_not_a_resource_failure():
+    """The resource growth checks need an absolute floor: 41 -> 260 chars is a 6x
+    ratio but trivially small (9 of 11 real-world false positives were ratio-only)."""
+    from conftest import execution_doc
+
+    def run_with(payload):
+        return {
+            "executionTime": 5,
+            "executionStatus": "success",
+            "source": [{"previousNode": "Prev"}],
+            "data": {"main": [[{"json": payload}]]},
+        }
+
+    raw = execution_doc({
+        "Start": [run_with({"a": 1})],
+        "Shape": [run_with({"b": "x" * 60})],
+        "Render": [run_with({"c": "y" * 200})],
+    }, status="success", finished=True)
+    turns, metadata = execution_to_turns_and_metadata(raw)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "resource" not in fired_names(report)
+
+    # Same shape but growing to a genuinely oversized payload still fires.
+    raw_big = execution_doc({
+        "Start": [run_with({"a": 1})],
+        "Blow": [run_with({"c": "y" * 30000})],
+    }, status="success", finished=True)
+    turns, metadata = execution_to_turns_and_metadata(raw_big)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "resource" in fired_names(report)

@@ -141,8 +141,18 @@ def build_corpus() -> List[Case]:
         _node("HTTP", "n8n-nodes-base.httpRequest", 300, {"users": [1, 2, 3]}),
         _node("Set", "n8n-nodes-base.set", 20, small),
     ])
-    add("error_low_rate_visible", "adversarial", set(), status="error", nodes=[
-        # 1/10 errored, NOT continueOnFail (visible stop, rate 10% < 15%)
+    add("error_low_rate_visible", "adversarial", {"error"}, status="error", nodes=[
+        # 1/10 errored, NOT continueOnFail (visible stop, rate 10% < 15%).
+        # SEMANTIC DECISION (real-world validation, 2026-07-16): originally expected
+        # EMPTY — the detector was hidden-errors-only, so a correctly-halted visible
+        # failure was a designed negative. But on real community workflows that scope
+        # meant a crashed execution could yield ZERO detections (terminal single-node
+        # failure: no continueOnFail, no downstream turns, rate under 15%, and the
+        # success-despite-failures check suppresses itself once the workflow is marked
+        # failed) — invisible to dashboards and healing, which gate on detections. The
+        # detector now has an execution_failure branch for loud failures; this case is
+        # a positive of that type. The original FP-guard purpose is preserved by the
+        # adjacent negatives (error_content_mentions_error, continueOnFail-no-failure).
         _node("N0", "n8n-nodes-base.httpRequest", 200, None, error="one failure"),
         *[_node(f"N{i}", "n8n-nodes-base.set", 20, small) for i in range(1, 10)],
     ])

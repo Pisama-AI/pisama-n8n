@@ -74,7 +74,7 @@ class TestSwallowedContinueOnFail:
 
     def test_continue_regular_output_surfaces_item_error(self):
         # The errored item flows through the regular output with a truthy STRING
-        # `error` in its json (a dict-shaped error is deliberately ignored).
+        # `error` in its json.
         raw = self._doc(
             on_error="continueRegularOutput",
             output=[{"json": {"error": "upstream 500"}}],
@@ -83,6 +83,37 @@ class TestSwallowedContinueOnFail:
         (turn,) = turns
         assert turn.turn_metadata["has_error"] is True
         assert "swallowed" in turn.content
+
+    def test_continue_regular_output_surfaces_structured_error_object(self):
+        # n8n also records the swallowed failure as an error OBJECT with a message
+        # ({message, name, description, ...}) — the shape found on real wild
+        # production executions (olavofranzin corpus).
+        raw = self._doc(
+            on_error="continueRegularOutput",
+            output=[{"json": {"error": {"message": "The service was not able to "
+                                                   "process your request",
+                              "name": "NodeApiError"}}}],
+        )
+        turns, _ = execution_to_turns_and_metadata(raw)
+        (turn,) = turns
+        assert turn.turn_metadata["has_error"] is True
+
+    def test_legacy_continue_on_fail_bool_maps_to_regular_output(self):
+        # Legacy top-level `continueOnFail: true` (no onError field) behaves like
+        # continueRegularOutput. Regression for a REAL community workflow whose
+        # Code node crashed, was continued, and n8n marked the run successful —
+        # invisible until this mapping (eval corpus rw_d7be75a953).
+        node = make_node("Careful", "n8n-nodes-base.code")
+        node["continueOnFail"] = True
+        raw = execution_doc(
+            {"Careful": [_run(output=[{"json": {"error": "Cannot read properties "
+                                                          "of undefined"}}])]},
+            nodes=[node],
+        )
+        turns, _ = execution_to_turns_and_metadata(raw)
+        (turn,) = turns
+        assert turn.turn_metadata["continue_on_fail"] is True
+        assert turn.turn_metadata["has_error"] is True
 
     def test_continue_error_output_surfaces_error_branch(self):
         # continueErrorOutput routes failed items to the SECOND main branch; a

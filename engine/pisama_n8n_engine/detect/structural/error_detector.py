@@ -249,6 +249,44 @@ class N8NErrorDetector(TurnAwareDetector):
 
         return None
 
+    def _detect_execution_failure(
+        self, turns: List[TurnSnapshot], metadata: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """The execution itself failed: n8n recorded a workflow-level failure and a node
+        errored. Distinct from the hidden-error checks (which target failures n8n HIDES):
+        this surfaces LOUD failures so a crashed execution always yields a detection.
+
+        Real-world validation motivated this: a terminal single-node failure in an 8-node
+        workflow trips none of the hidden-error checks (no continueOnFail, no downstream
+        turns, 12.5% < 15% rate, and success_despite_failures suppresses itself when the
+        workflow is already marked failed) — so the execution produced ZERO detections,
+        and anything gated on detections (dashboards, healing) never saw it.
+        """
+        if self._is_workflow_successful(metadata):
+            return None
+        failed_nodes = [
+            (i, turn) for i, turn in enumerate(turns) if self._has_error(turn)
+        ]
+        if not failed_nodes:
+            return None
+        return {
+            "detected": True,
+            "type": "execution_failure",
+            "failed_nodes": [
+                {
+                    "turn": i,
+                    "node": turn.participant_id,
+                    "node_type": turn.turn_metadata.get("node_type", "unknown"),
+                }
+                for i, turn in failed_nodes
+            ],
+            "explanation": (
+                f"Execution failed: {len(failed_nodes)} node(s) errored and the "
+                f"workflow stopped"
+            ),
+            "turns": [i for i, _ in failed_nodes],
+        }
+
     def detect(
         self,
         turns: List[TurnSnapshot],
@@ -294,6 +332,12 @@ class N8NErrorDetector(TurnAwareDetector):
             issues.append(success_despite_failures)
             affected_turns.extend(success_despite_failures.get("turns", []))
 
+        # 5. Detect loud execution failure (workflow-level error + errored node)
+        execution_failure = self._detect_execution_failure(turns, conversation_metadata)
+        if execution_failure:
+            issues.append(execution_failure)
+            affected_turns.extend(execution_failure.get("turns", []))
+
         if not issues:
             return TurnAwareDetectionResult(
                 detected=False,
@@ -306,13 +350,20 @@ class N8NErrorDetector(TurnAwareDetector):
 
         # Determine severity
         severity = TurnAwareSeverity.MODERATE
-        if hidden or success_despite_failures:
+        if hidden or success_despite_failures or execution_failure:
             severity = TurnAwareSeverity.SEVERE
         elif high_error_rate:
             severity = TurnAwareSeverity.MODERATE
 
-        # Calculate confidence
-        confidence = 0.90 if hidden or success_despite_failures else 0.80
+        # Calculate confidence. A loud execution failure is a recorded fact (n8n itself
+        # marked the run failed and the node carries the error object), so it scores
+        # highest.
+        if execution_failure:
+            confidence = 0.95
+        elif hidden or success_despite_failures:
+            confidence = 0.90
+        else:
+            confidence = 0.80
 
         # Build explanation
         explanations = [issue["explanation"] for issue in issues]
@@ -332,6 +383,11 @@ class N8NErrorDetector(TurnAwareDetector):
             )
         if success_despite_failures:
             fixes.append("Add error handler nodes to properly handle failures")
+        if execution_failure:
+            fixes.append(
+                "Inspect the failing node's error and configuration; the workflow "
+                "stopped at it"
+            )
 
         suggested_fix = "; ".join(fixes) if fixes else None
 

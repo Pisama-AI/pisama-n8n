@@ -44,6 +44,13 @@ def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
                 err = j.get("error")
                 if isinstance(err, str) and err.strip():
                     return err
+                # n8n also records the swallowed failure as a structured error
+                # OBJECT ({message, name, description, ...}) on the item json —
+                # observed on real production executions (wild-mined corpus).
+                if isinstance(err, dict):
+                    msg = err.get("message")
+                    if isinstance(msg, str) and msg.strip():
+                        return msg
     return None
 
 
@@ -80,9 +87,14 @@ def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
         # `onError` is a sibling of `parameters` — is read faithfully.
         node_settings = ndef.get("settings") or {}
         on_error = (ndef.get("onError") or node_params.get("onError") or "")
-        continue_on_fail = on_error in ("continueErrorOutput", "continueRegularOutput") or bool(
-            node_settings.get("continueOnFail") or ndef.get("continueOnFail")
-        )
+        if not on_error and (node_settings.get("continueOnFail") or ndef.get("continueOnFail")):
+            # The legacy boolean behaves like continueRegularOutput: the errored item
+            # flows through the regular output. Without this mapping, a swallowed
+            # failure on a legacy-config node is invisible — found on a REAL community
+            # workflow whose Code node crashed, was continued, and n8n marked the run
+            # successful (eval/data/realworld rw_d7be75a953).
+            on_error = "continueRegularOutput"
+        continue_on_fail = on_error in ("continueErrorOutput", "continueRegularOutput")
 
         for run in node_runs:
             execution_time_ms = run.get("executionTime", 0)
@@ -136,6 +148,10 @@ def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
                     "status": execution_status,
                     "has_error": error_info is not None or swallowed is not None,
                     "continue_on_fail": continue_on_fail,
+                    # Structured per-run output item count, so detectors don't have to
+                    # re-derive it from the rendered content string (which leads with a
+                    # "Node: ..." header and defeats naive JSON parsing).
+                    "items_out": len(output_data) if isinstance(output_data, list) else 0,
                 },
             ))
             seq += 1
