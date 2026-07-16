@@ -92,6 +92,7 @@ def get_storage() -> Storage:
 
 # --- auth -----------------------------------------------------------------
 
+
 def public_read_enabled() -> bool:
     """PISAMA_PUBLIC_READ=1 opens the read-only GETs (detections, stream, paid status)
     while every POST stays key-gated. This is what makes a hosted public dashboard safe:
@@ -142,7 +143,9 @@ async def require_auth(request: Request) -> None:
     if signature and timestamp:
         if _valid_hmac_signature(await request.body(), signature, timestamp):
             return
-        raise HTTPException(status_code=401, detail="Invalid or stale webhook signature.")
+        raise HTTPException(
+            status_code=401, detail="Invalid or stale webhook signature."
+        )
     raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
 
 
@@ -158,11 +161,14 @@ def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
     if abs(time.time() - signed_at) > _HMAC_FRESHNESS_SECONDS:
         return False
     payload = f"{timestamp}.".encode() + body
-    computed = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    computed = (
+        "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    )
     return hmac.compare_digest(computed.encode(), signature.encode())
 
 
 # --- routes ---------------------------------------------------------------
+
 
 @app.get("/healthz")
 async def healthz() -> Dict[str, str]:
@@ -185,7 +191,11 @@ async def n8n_webhook(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     storage.record_operational_event(
         "webhook_ingested",
-        {"detections_fired": sum(1 for d in report.get("detections", []) if d.get("detected"))},
+        {
+            "detections_fired": sum(
+                1 for d in report.get("detections", []) if d.get("detected")
+            )
+        },
     )
     if report.get("detections"):
         await broadcaster.publish(fired_event(report))
@@ -237,7 +247,9 @@ async def get_detection(
     return row
 
 
-@app.get("/api/v1/detections/{detection_id}/trace", dependencies=[Depends(require_read_auth)])
+@app.get(
+    "/api/v1/detections/{detection_id}/trace", dependencies=[Depends(require_read_auth)]
+)
 async def get_detection_trace(
     detection_id: int,
     storage: Storage = Depends(get_storage),
@@ -253,7 +265,9 @@ async def get_detection_trace(
 _FEEDBACK_VERDICTS = {"useful", "not_useful", "fixed_manually"}
 
 
-@app.post("/api/v1/detections/{detection_id}/feedback", dependencies=[Depends(require_auth)])
+@app.post(
+    "/api/v1/detections/{detection_id}/feedback", dependencies=[Depends(require_auth)]
+)
 async def submit_detection_feedback(
     detection_id: int,
     body: Dict[str, Any],
@@ -263,9 +277,14 @@ async def submit_detection_feedback(
     verdict = body.get("verdict")
     note = body.get("note")
     if verdict not in _FEEDBACK_VERDICTS:
-        raise HTTPException(status_code=422, detail="verdict must be useful, not_useful, or fixed_manually.")
+        raise HTTPException(
+            status_code=422,
+            detail="verdict must be useful, not_useful, or fixed_manually.",
+        )
     if note is not None and not isinstance(note, str):
-        raise HTTPException(status_code=422, detail="note must be a string when provided.")
+        raise HTTPException(
+            status_code=422, detail="note must be a string when provided."
+        )
     feedback = storage.submit_detection_feedback(detection_id, verdict, note)
     if feedback is None:
         raise HTTPException(status_code=404, detail="Unknown detection id.")
@@ -281,10 +300,12 @@ async def operations_summary(storage: Storage = Depends(get_storage)) -> Dict[st
 
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
 
+
 @app.get("/api/v1/paid/status", dependencies=[Depends(require_read_auth)])
 async def paid_status() -> Dict[str, bool]:
     """Whether the paid tier (fix suggestions + auto-fix) is configured on this server."""
     from pisama_n8n_server.fixes import is_paid_configured
+
     return {"enabled": is_paid_configured()}
 
 
@@ -295,26 +316,50 @@ async def n8n_fix(
 ) -> Dict[str, Any]:
     """PAID: request a fix suggestion for a detection. Looks up the detection's workflow,
     sends it to the Pisama cloud, returns the suggestion (read-only preview)."""
-    from pisama_n8n_server.fixes import PaidTierNotConfigured, request_fix
+    from pisama_n8n_server.fixes import (
+        PaidTierNotConfigured,
+        is_paid_configured,
+        request_fix,
+    )
 
     detection_id = body.get("detection_id")
-    ctx = storage.get_detection_context(int(detection_id)) if detection_id is not None else None
+    if not is_paid_configured():
+        raise HTTPException(
+            status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY."
+        )
+    ctx = (
+        storage.get_detection_context(int(detection_id))
+        if detection_id is not None
+        else None
+    )
     if ctx is None:
         raise HTTPException(status_code=404, detail="Unknown detection_id.")
-    if not ctx.get("workflow"):
-        raise HTTPException(status_code=422, detail="No workflow stored for this detection.")
-    try:
-        suggestion = await request_fix(ctx["detection"], ctx["workflow"])
-    except PaidTierNotConfigured as exc:
-        raise HTTPException(status_code=402, detail=str(exc))
     workflow_id = ctx.get("workflow_id")
     if not workflow_id:
-        raise HTTPException(status_code=422, detail="No n8n workflow id stored for this detection.")
+        raise HTTPException(
+            status_code=422, detail="No n8n workflow id stored for this detection."
+        )
+    client = client_from_env()
+    if client is None:
+        raise HTTPException(
+            status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY)."
+        )
+    try:
+        # Executions can contain n8n-injected defaults that are absent from the workflow
+        # API response. Use a fresh API read as the repair baseline, otherwise the stale
+        # guard would reject a proposal even when no human has edited the workflow.
+        baseline_workflow = await client.get_workflow(str(workflow_id))
+    finally:
+        await client.aclose()
+    try:
+        suggestion = await request_fix(ctx["detection"], baseline_workflow)
+    except PaidTierNotConfigured as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
     try:
         repair = storage.create_repair_proposal(
             detection_id=int(detection_id),
             workflow_id=str(workflow_id),
-            baseline_workflow=ctx["workflow"],
+            baseline_workflow=baseline_workflow,
             suggestion=suggestion,
         )
     except ValueError as exc:
@@ -339,7 +384,9 @@ async def n8n_apply(
     )
 
     if not is_paid_configured():
-        raise HTTPException(status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY.")
+        raise HTTPException(
+            status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY."
+        )
     repair_id = body.get("repair_id")
     if not isinstance(repair_id, int):
         raise HTTPException(status_code=422, detail="repair_id is required.")
@@ -348,11 +395,15 @@ async def n8n_apply(
         existing = storage.get_repair(repair_id)
         if existing is None:
             raise HTTPException(status_code=404, detail="Unknown repair_id.")
-        raise HTTPException(status_code=409, detail=f"Repair is already {existing['status']}.")
+        raise HTTPException(
+            status_code=409, detail=f"Repair is already {existing['status']}."
+        )
     client = client_from_env()
     if client is None:
         storage.mark_repair_failed(repair_id, "applying", "n8n API not configured.")
-        raise HTTPException(status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY).")
+        raise HTTPException(
+            status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY)."
+        )
     try:
         result = await apply_fix(
             client,
@@ -389,10 +440,18 @@ async def n8n_rollback(
         existing = storage.get_repair(repair_id)
         if existing is None:
             raise HTTPException(status_code=404, detail="Unknown repair_id.")
-        raise HTTPException(status_code=409, detail=f"Repair is already {existing['status']}.")
-    if not isinstance(repair.get("snapshot"), dict) or not isinstance(repair.get("applied_workflow"), dict):
-        storage.mark_repair_failed(repair_id, "rolling_back", "Repair has no restorable snapshot.")
-        raise HTTPException(status_code=409, detail="Repair has no restorable snapshot.")
+        raise HTTPException(
+            status_code=409, detail=f"Repair is already {existing['status']}."
+        )
+    if not isinstance(repair.get("snapshot"), dict) or not isinstance(
+        repair.get("applied_workflow"), dict
+    ):
+        storage.mark_repair_failed(
+            repair_id, "rolling_back", "Repair has no restorable snapshot."
+        )
+        raise HTTPException(
+            status_code=409, detail="Repair has no restorable snapshot."
+        )
     client = client_from_env()
     if client is None:
         storage.mark_repair_failed(repair_id, "rolling_back", "n8n API not configured.")
@@ -404,7 +463,10 @@ async def n8n_rollback(
             repair["snapshot"],
             repair["applied_workflow"],
         )
-        return {"restored": restored, "repair": storage.mark_repair_rolled_back(repair_id)}
+        return {
+            "restored": restored,
+            "repair": storage.mark_repair_rolled_back(repair_id),
+        }
     except StaleRepairProposal as exc:
         storage.mark_repair_stale(repair_id, "rolling_back", str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -421,7 +483,11 @@ async def stream(request: Request) -> StreamingResponse:
     Auth is via the `token` query param (EventSource can't set headers); open when
     PISAMA_PUBLIC_READ=1 (read-only stream) or when PISAMA_API_KEY is unset (dev mode)."""
     expected = os.environ.get("PISAMA_API_KEY")
-    if (not public_read_enabled()) and expected and request.query_params.get("token") != expected:
+    if (
+        (not public_read_enabled())
+        and expected
+        and request.query_params.get("token") != expected
+    ):
         raise HTTPException(status_code=401, detail="Invalid or missing token.")
 
     async def gen() -> AsyncIterator[str]:
@@ -448,6 +514,7 @@ async def stream(request: Request) -> StreamingResponse:
 
 # --- background polling loop ----------------------------------------------
 
+
 async def _poll_loop(interval: float) -> None:
     """Periodically poll the configured n8n and publish any new detections."""
     while True:
@@ -462,6 +529,8 @@ async def _poll_loop(interval: float) -> None:
                 await broadcaster.publish({"type": "poll", **summary})
         except Exception as exc:  # never let the loop die on a transient error
             logger.warning("background poll failed: %s", exc)
-            get_storage().record_operational_event("poll_failed", {"error": type(exc).__name__})
+            get_storage().record_operational_event(
+                "poll_failed", {"error": type(exc).__name__}
+            )
         finally:
             await client.aclose()

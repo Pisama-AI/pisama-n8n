@@ -1,27 +1,40 @@
 """Paid-tier gating + seam tests. The 402 gating runs by default (no mocks, no cloud);
 the full cloud→apply→rollback loop is proven by the live harness (paid_e2e), gated here."""
+
 import json
 import os
+from copy import deepcopy
 
 from fastapi.testclient import TestClient
 
 
 def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("PISAMA_API_KEY", "k")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'fx.db'}")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'fx.db'}")
     monkeypatch.delenv("PISAMA_CLOUD_KEY", raising=False)
     import pisama_n8n_server.app as appmod
     from pisama_n8n_server.storage import Storage
+
     appmod._storage = Storage()
     return TestClient(appmod.app)
 
 
 def _seed(client):
-    fx = json.load(open(os.path.join(
-        os.path.dirname(__file__), "fixtures",
-        "executions", "error", "ERROR-01-throw.json")))
+    fx = json.load(
+        open(
+            os.path.join(
+                os.path.dirname(__file__),
+                "fixtures",
+                "executions",
+                "error",
+                "ERROR-01-throw.json",
+            )
+        )
+    )
     client.post("/api/v1/n8n/webhook", headers={"Authorization": "Bearer k"}, json=fx)
-    return client.get("/api/v1/detections", headers={"Authorization": "Bearer k"}).json()[0]["id"]
+    return client.get(
+        "/api/v1/detections", headers={"Authorization": "Bearer k"}
+    ).json()[0]["id"]
 
 
 def test_paid_features_gated_without_cloud_key(tmp_path, monkeypatch):
@@ -29,17 +42,29 @@ def test_paid_features_gated_without_cloud_key(tmp_path, monkeypatch):
     h = {"Authorization": "Bearer k"}
     assert c.get("/api/v1/paid/status", headers=h).json() == {"enabled": False}
     did = _seed(c)
-    assert c.post("/api/v1/n8n/fix", headers=h, json={"detection_id": did}).status_code == 402
-    assert c.post("/api/v1/n8n/apply", headers=h,
-                  json={"workflow_id": "x", "mutated_workflow": {}}).status_code == 402
+    assert (
+        c.post("/api/v1/n8n/fix", headers=h, json={"detection_id": did}).status_code
+        == 402
+    )
+    assert (
+        c.post(
+            "/api/v1/n8n/apply",
+            headers=h,
+            json={"workflow_id": "x", "mutated_workflow": {}},
+        ).status_code
+        == 402
+    )
 
 
 def test_fix_unknown_detection_404(tmp_path, monkeypatch):
     monkeypatch.setenv("PISAMA_CLOUD_KEY", "x")  # past the gate
     c = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("PISAMA_CLOUD_KEY", "x")
-    r = c.post("/api/v1/n8n/fix", headers={"Authorization": "Bearer k"},
-               json={"detection_id": 999999})
+    r = c.post(
+        "/api/v1/n8n/fix",
+        headers={"Authorization": "Bearer k"},
+        json={"detection_id": 999999},
+    )
     assert r.status_code == 404
 
 
@@ -90,3 +115,61 @@ def test_repair_proposal_lifecycle_is_persisted_in_real_sqlite(tmp_path, monkeyp
     persisted = storage.get_repair(repair["id"], include_workflows=True)
     assert persisted and persisted["status"] == "rolled_back"
     assert persisted["baseline_workflow"] == context["workflow"]
+
+
+def test_fix_uses_a_fresh_n8n_workflow_as_its_stale_guard_baseline(
+    tmp_path, monkeypatch
+):
+    """Execution exports contain transient defaults, so they must not become repair baselines."""
+    monkeypatch.setenv("PISAMA_CLOUD_KEY", "x")
+    c = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("PISAMA_CLOUD_KEY", "x")
+    detection_id = _seed(c)
+
+    import pisama_n8n_server.app as appmod
+    import pisama_n8n_server.fixes as fixes
+
+    live_workflow = {
+        "name": "Canonical live workflow",
+        "nodes": [],
+        "connections": {},
+        "settings": {},
+    }
+
+    class FakeClient:
+        async def get_workflow(self, _workflow_id):
+            return deepcopy(live_workflow)
+
+        async def aclose(self):
+            return None
+
+    async def fake_request_fix(_detection, workflow):
+        proposed = deepcopy(workflow)
+        proposed["settings"]["executionTimeout"] = 30
+        return {
+            "explanation": "Set a timeout.",
+            "patch_ops": [
+                {
+                    "op": "set",
+                    "target": "settings",
+                    "key": "executionTimeout",
+                    "value": 30,
+                }
+            ],
+            "mutated_workflow": proposed,
+        }
+
+    monkeypatch.setattr(appmod, "client_from_env", lambda: FakeClient())
+    monkeypatch.setattr(fixes, "request_fix", fake_request_fix)
+
+    response = c.post(
+        "/api/v1/n8n/fix",
+        headers={"Authorization": "Bearer k"},
+        json={"detection_id": detection_id},
+    )
+
+    assert response.status_code == 200
+    repair = appmod.get_storage().get_repair(
+        response.json()["repair_id"], include_workflows=True
+    )
+    assert repair and repair["baseline_workflow"] == live_workflow
