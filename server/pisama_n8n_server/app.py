@@ -183,6 +183,10 @@ async def n8n_webhook(
         report = process_execution(payload, storage)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    storage.record_operational_event(
+        "webhook_ingested",
+        {"detections_fired": sum(1 for d in report.get("detections", []) if d.get("detected"))},
+    )
     if report.get("detections"):
         await broadcaster.publish(fired_event(report))
     return report
@@ -202,9 +206,13 @@ async def n8n_sync(
         )
     try:
         summary = await poll_once(client, storage)
+        storage.record_operational_event("poll_succeeded", summary)
         if summary.get("new"):
             await broadcaster.publish({"type": "poll", **summary})
         return summary
+    except Exception as exc:
+        storage.record_operational_event("poll_failed", {"error": type(exc).__name__})
+        raise
     finally:
         await client.aclose()
 
@@ -240,6 +248,35 @@ async def get_detection_trace(
     if trace is None:
         raise HTTPException(status_code=404, detail="Unknown detection id.")
     return trace
+
+
+_FEEDBACK_VERDICTS = {"useful", "not_useful", "fixed_manually"}
+
+
+@app.post("/api/v1/detections/{detection_id}/feedback", dependencies=[Depends(require_auth)])
+async def submit_detection_feedback(
+    detection_id: int,
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Store an explicit local operator verdict. This never sends feedback to Pisama."""
+    verdict = body.get("verdict")
+    note = body.get("note")
+    if verdict not in _FEEDBACK_VERDICTS:
+        raise HTTPException(status_code=422, detail="verdict must be useful, not_useful, or fixed_manually.")
+    if note is not None and not isinstance(note, str):
+        raise HTTPException(status_code=422, detail="note must be a string when provided.")
+    feedback = storage.submit_detection_feedback(detection_id, verdict, note)
+    if feedback is None:
+        raise HTTPException(status_code=404, detail="Unknown detection id.")
+    storage.record_operational_event("feedback_recorded", {"verdict": verdict})
+    return feedback
+
+
+@app.get("/api/v1/operations/summary", dependencies=[Depends(require_read_auth)])
+async def operations_summary(storage: Storage = Depends(get_storage)) -> Dict[str, Any]:
+    """Real local ingestion, detection, repair, and feedback health for operators."""
+    return storage.operational_summary()
 
 
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
@@ -325,7 +362,7 @@ async def n8n_apply(
         )
         return {"repair": storage.mark_repair_applied(repair_id, **result)}
     except StaleRepairProposal as exc:
-        storage.mark_repair_failed(repair_id, "applying", str(exc))
+        storage.mark_repair_stale(repair_id, "applying", str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except InvalidRepairProposal as exc:
         storage.mark_repair_failed(repair_id, "applying", str(exc))
@@ -369,7 +406,7 @@ async def n8n_rollback(
         )
         return {"restored": restored, "repair": storage.mark_repair_rolled_back(repair_id)}
     except StaleRepairProposal as exc:
-        storage.mark_repair_failed(repair_id, "rolling_back", str(exc))
+        storage.mark_repair_stale(repair_id, "rolling_back", str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except Exception as exc:
         storage.mark_repair_failed(repair_id, "rolling_back", str(exc))
@@ -420,9 +457,11 @@ async def _poll_loop(interval: float) -> None:
             continue
         try:
             summary = await poll_once(client, get_storage())
+            get_storage().record_operational_event("poll_succeeded", summary)
             if summary.get("new"):
                 await broadcaster.publish({"type": "poll", **summary})
         except Exception as exc:  # never let the loop die on a transient error
             logger.warning("background poll failed: %s", exc)
+            get_storage().record_operational_event("poll_failed", {"error": type(exc).__name__})
         finally:
             await client.aclose()

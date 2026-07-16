@@ -18,11 +18,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
+    desc,
     Float,
     ForeignKey,
     String,
     Text,
     create_engine,
+    func,
     inspect,
     select,
     text,
@@ -142,6 +144,46 @@ class RepairAttempt(Base):
                 applied_workflow=self._decode(self.applied_workflow, None),
             )
         return result
+
+
+class DetectionFeedback(Base):
+    """An operator's explicit verdict on a detection, kept in the self-host database."""
+
+    __tablename__ = "detection_feedback"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    detection_id: Mapped[int] = mapped_column(ForeignKey("detections.id"), nullable=False, index=True)
+    verdict: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "detection_id": self.detection_id,
+            "verdict": self.verdict,
+            "note": self.note,
+            "created_at": self.created_at,
+        }
+
+
+class OperationalEvent(Base):
+    """Small, local-only audit events for ingestion and polling health."""
+
+    __tablename__ = "operational_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    details: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "event_type": self.event_type,
+            "details": RepairAttempt._decode(self.details, {}),
+            "created_at": self.created_at,
+        }
 
 
 def _extract_workflow_name(payload: Dict[str, Any]) -> Optional[str]:
@@ -440,6 +482,85 @@ class Storage:
             row = session.get(RepairAttempt, repair_id)
             return row.to_dict(include_workflows=include_workflows) if row else None
 
+    def record_operational_event(self, event_type: str, details: Dict[str, Any]) -> None:
+        """Persist a minimal local health event. Workflow payloads never belong here."""
+        with self._Session() as session:
+            session.add(
+                OperationalEvent(
+                    event_type=event_type,
+                    details=self._encode(details),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+            session.commit()
+
+    def submit_detection_feedback(
+        self, detection_id: int, verdict: str, note: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Record one opt-in operator verdict. None means the detection does not exist."""
+        with self._Session() as session:
+            if session.get(DetectionRow, detection_id) is None:
+                return None
+            feedback = DetectionFeedback(
+                detection_id=detection_id,
+                verdict=verdict,
+                note=note.strip()[:1000] if note else None,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(feedback)
+            session.commit()
+            return feedback.to_dict()
+
+    def latest_detection_feedback(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.execute(
+                select(DetectionFeedback)
+                .where(DetectionFeedback.detection_id == detection_id)
+                .order_by(desc(DetectionFeedback.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            return row.to_dict() if row else None
+
+    def operational_summary(self) -> Dict[str, Any]:
+        """Local operational signals for an operator, derived from real persisted state."""
+        with self._Session() as session:
+            executions = session.scalar(select(func.count(Execution.id))) or 0
+            fired = session.scalar(
+                select(func.count(DetectionRow.id)).where(DetectionRow.detected.is_(True))
+            ) or 0
+            latest_execution = session.scalar(select(func.max(Execution.received_at)))
+            detector_rows = session.execute(
+                select(DetectionRow.detector, func.count(DetectionRow.id))
+                .where(DetectionRow.detected.is_(True))
+                .group_by(DetectionRow.detector)
+                .order_by(desc(func.count(DetectionRow.id)))
+            ).all()
+            repair_rows = session.execute(
+                select(RepairAttempt.status, func.count(RepairAttempt.id))
+                .group_by(RepairAttempt.status)
+            ).all()
+            feedback_rows = session.execute(
+                select(DetectionFeedback.verdict, func.count(DetectionFeedback.id))
+                .group_by(DetectionFeedback.verdict)
+            ).all()
+            events = session.execute(
+                select(OperationalEvent)
+                .order_by(desc(OperationalEvent.id))
+                .limit(100)
+            ).scalars()
+            latest_events: Dict[str, Dict[str, Any]] = {}
+            for event in events:
+                latest_events.setdefault(event.event_type, event.to_dict())
+            return {
+                "executions_analyzed": executions,
+                "detections_fired": fired,
+                "last_ingested_at": latest_execution,
+                "fired_by_detector": dict(detector_rows),
+                "repairs_by_status": dict(repair_rows),
+                "feedback_by_verdict": dict(feedback_rows),
+                "latest_events": latest_events,
+            }
+
     def _claim_repair(self, repair_id: int, from_status: str, to_status: str) -> Optional[Dict[str, Any]]:
         """Atomically own a repair transition, preventing double-click races."""
         with self._Session() as session:
@@ -486,6 +607,14 @@ class Storage:
             repair_id,
             from_status,
             "failed",
+            failure_reason=reason[:1000],
+        )
+
+    def mark_repair_stale(self, repair_id: int, from_status: str, reason: str) -> None:
+        self._finish_repair(
+            repair_id,
+            from_status,
+            "stale",
             failure_reason=reason[:1000],
         )
 
@@ -546,7 +675,17 @@ class Storage:
                 .join(Execution, DetectionRow.execution_id == Execution.id)
                 .where(DetectionRow.id == detection_id)
             ).first()
-            return self._enrich(*row) if row else None
+            if row is None:
+                return None
+            result = self._enrich(*row)
+            feedback = session.execute(
+                select(DetectionFeedback)
+                .where(DetectionFeedback.detection_id == detection_id)
+                .order_by(desc(DetectionFeedback.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            result["feedback"] = feedback.to_dict() if feedback else None
+            return result
 
     def get_execution_trace(self, detection_id: int) -> Optional[Dict[str, Any]]:
         """The per-node execution trace for a detection's execution — what ran, its

@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { Activity, AlertTriangle, Percent } from 'lucide-react'
 import { format, startOfDay, subDays, isSameDay, formatDistanceToNow } from 'date-fns'
+import { useQuery } from '@tanstack/react-query'
 import { Layout } from '@/components/common/Layout'
 import { StatCard } from '@/components/detection/StatCard'
 import { Card, CardHeader, CardTitle, EmptyState } from '@/components/ui'
@@ -13,6 +14,7 @@ import {
   plainEnglishLabels,
 } from '@/components/detection/DetectionTypeConfig'
 import type { Detection } from '@/lib/api/detections'
+import { getOperationsSummary, type OperationsSummary } from '@/lib/api/operations'
 
 const TREND_DAYS = 14
 const BAR_AREA_PX = 128 // chart height in px; explicit so bar heights don't rely on % of a flex parent
@@ -186,8 +188,54 @@ function TopWorkflows({ fired }: { fired: Detection[] }) {
   )
 }
 
+function OperationalHealth({ summary }: { summary?: OperationsSummary }) {
+  if (!summary) return null
+  const latestPoll = [summary.latest_events.poll_succeeded, summary.latest_events.poll_failed]
+    .filter(Boolean)
+    .sort((a, b) => (b?.created_at ?? '').localeCompare(a?.created_at ?? ''))[0]
+  const failedRepairs = summary.repairs_by_status.failed ?? 0
+  const staleRepairs = summary.repairs_by_status.stale ?? 0
+
+  return (
+    <Card padding="lg">
+      <CardHeader className="mb-4">
+        <CardTitle>Operational health</CardTitle>
+        <p className="text-xs text-ink-3 mt-1">Local ingestion and repair signals</p>
+      </CardHeader>
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div className="text-ink-3">Last ingestion</div>
+          <div className="text-ink-2 mt-1">
+            {summary.last_ingested_at
+              ? formatDistanceToNow(new Date(summary.last_ingested_at), { addSuffix: true })
+              : 'No executions yet'}
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Latest poll</div>
+          <div className="text-ink-2 mt-1">
+            {latestPoll ? latestPoll.event_type.replace('_', ' ') : 'Not run'}
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Failed repairs</div>
+          <div className="text-ink-2 mt-1">{failedRepairs}</div>
+        </div>
+        <div>
+          <div className="text-ink-3">Stale repairs blocked</div>
+          <div className="text-ink-2 mt-1">{staleRepairs}</div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 export function OverviewClient() {
   const { data, isLoading, isError, error } = useDetections()
+  const { data: operations } = useQuery({
+    queryKey: ['operations-summary'],
+    queryFn: getOperationsSummary,
+  })
 
   const detections = data ?? []
   const fired = detections.filter((d) => d.detected)
@@ -262,9 +310,11 @@ export function OverviewClient() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <OperationalHealth summary={operations} />
               <RecentActivity fired={fired} />
-              <TopWorkflows fired={fired} />
             </div>
+
+            <TopWorkflows fired={fired} />
           </>
         )}
       </div>

@@ -198,7 +198,43 @@ def test_trace_unknown_id_404(client):
     assert client.get("/api/v1/detections/999999/trace").status_code == 404
 
 
-# 9. Flatted DB wire format: a dumped execution_data column POSTs and detects.
+# 9. Operator feedback + local operational health are persisted with real execution data.
+
+def test_feedback_and_operations_summary_use_persisted_execution_data(client):
+    posted = client.post("/api/v1/n8n/webhook", json=_load("executions/error/ERROR-01-throw.json"))
+    assert posted.status_code == 200, posted.text
+    detection_id = client.get("/api/v1/detections").json()[0]["id"]
+
+    feedback = client.post(
+        f"/api/v1/detections/{detection_id}/feedback",
+        json={"verdict": "useful"},
+    )
+    assert feedback.status_code == 200, feedback.text
+    assert feedback.json()["verdict"] == "useful"
+
+    detail = client.get(f"/api/v1/detections/{detection_id}")
+    assert detail.status_code == 200
+    assert detail.json()["feedback"]["verdict"] == "useful"
+
+    summary = client.get("/api/v1/operations/summary")
+    assert summary.status_code == 200, summary.text
+    body = summary.json()
+    assert body["executions_analyzed"] == 1
+    assert body["detections_fired"] >= 1
+    assert body["feedback_by_verdict"] == {"useful": 1}
+    assert "webhook_ingested" in body["latest_events"]
+
+
+def test_feedback_rejects_unknown_verdict_and_detection(client):
+    assert client.post(
+        "/api/v1/detections/999999/feedback", json={"verdict": "useful"}
+    ).status_code == 404
+    assert client.post(
+        "/api/v1/detections/1/feedback", json={"verdict": "maybe"}
+    ).status_code == 422
+
+
+# 10. Flatted DB wire format: a dumped execution_data column POSTs and detects.
 #    FLATTED-01-error.json is ERROR-01-throw.json's data column re-encoded in the
 #    `flatted` npm wire format (what n8n stores in the DB) — synthetic, no wild data.
 

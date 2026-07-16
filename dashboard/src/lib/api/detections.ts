@@ -1,4 +1,4 @@
-import { fetchApi } from './client'
+import { fetchApi, postApi } from './client'
 
 // Raw row shape returned by the server's GET /api/v1/detections.
 export interface ServerDetection {
@@ -17,6 +17,7 @@ export interface ServerDetection {
   workflow_id?: string | null
   workflow_name?: string | null
   n8n_execution_id?: string | null
+  feedback?: DetectionFeedback | null
 }
 
 // Shape the copied DetectionListItem (and the detail view) expect. `detected`
@@ -41,6 +42,17 @@ export interface Detection {
     severity?: string
     affected_agents?: number
   }
+  feedback?: DetectionFeedback | null
+}
+
+export type FeedbackVerdict = 'useful' | 'not_useful' | 'fixed_manually'
+
+export interface DetectionFeedback {
+  id: number
+  detection_id: number
+  verdict: FeedbackVerdict
+  note: string | null
+  created_at: string
 }
 
 function severityFromConfidence(confidence: number): string {
@@ -64,6 +76,7 @@ export function adaptDetection(row: ServerDetection): Detection {
     workflow_id: row.workflow_id ?? null,
     workflow_name: row.workflow_name ?? null,
     n8n_execution_id: row.n8n_execution_id ?? null,
+    feedback: row.feedback ?? null,
     details: {
       severity: severityFromConfidence(row.confidence),
     },
@@ -80,6 +93,13 @@ export async function getDetections(): Promise<Detection[]> {
 export async function getDetection(id: string): Promise<Detection> {
   const row = await fetchApi<ServerDetection>(`/api/v1/detections/${id}`)
   return adaptDetection(row)
+}
+
+export function submitDetectionFeedback(
+  detectionId: string,
+  verdict: FeedbackVerdict,
+): Promise<DetectionFeedback> {
+  return postApi(`/api/v1/detections/${detectionId}/feedback`, { verdict })
 }
 
 // Per-node execution trace behind a detection (GET /detections/{id}/trace).
