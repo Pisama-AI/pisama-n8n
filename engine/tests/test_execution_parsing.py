@@ -125,3 +125,44 @@ class TestWorkflowStatusFallback:
             execution_doc({}, status=None, finished=True)
         )
         assert meta["workflow_status"] == "success"
+
+
+class TestDegenerateRunShapes:
+    """Real n8n emits these on errored/edge runs; ingest must parse, not crash.
+
+    Regression for a verified crash: ``data.main = []`` raised IndexError and
+    ``data = null`` / ``main = null`` raised TypeError, killing the whole
+    execution's ingest (silent skip in the poller, 500 on the webhook path).
+    """
+
+    def _doc(self, run_patch):
+        run = _run()
+        run.update(run_patch)
+        return execution_doc({"Edge": [run]})
+
+    def test_main_empty_list_parses(self):
+        turns, _ = execution_to_turns_and_metadata(self._doc({"data": {"main": []}}))
+        (turn,) = turns
+        assert turn.participant_id == "Edge"
+        assert "Node: Edge" in turn.content
+
+    def test_data_null_parses(self):
+        turns, _ = execution_to_turns_and_metadata(self._doc({"data": None}))
+        assert len(turns) == 1
+
+    def test_main_null_parses(self):
+        turns, _ = execution_to_turns_and_metadata(self._doc({"data": {"main": None}}))
+        assert len(turns) == 1
+
+    def test_main_null_branch_placeholder_parses(self):
+        turns, _ = execution_to_turns_and_metadata(self._doc({"data": {"main": [None]}}))
+        (turn,) = turns
+        assert turn.turn_metadata["has_error"] is False
+
+    def test_degenerate_shape_with_error_still_marks_error(self):
+        turns, _ = execution_to_turns_and_metadata(
+            self._doc({"data": None, "error": {"message": "died"}, "executionStatus": "error"})
+        )
+        (turn,) = turns
+        assert turn.turn_metadata["has_error"] is True
+        assert "ERROR: died" in turn.content

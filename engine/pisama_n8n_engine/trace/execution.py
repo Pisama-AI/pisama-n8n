@@ -88,7 +88,11 @@ def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
             execution_time_ms = run.get("executionTime", 0)
             execution_status = run.get("executionStatus", "unknown")
             error_info = run.get("error")
-            output_data = run.get("data", {}).get("main", [[]])[0] if run.get("data") else []
+            # Real n8n emits degenerate shapes here: `data: null` on some errored runs,
+            # `main: []` (no output branches) and `main: [null]` (a null branch placeholder).
+            # Index blindly and the whole execution's ingest crashes.
+            main_branches = (run.get("data") or {}).get("main") or []
+            output_data = (main_branches[0] if main_branches else None) or []
 
             # A node with continue-on-fail that actually failed leaves NO `run.error` and
             # keeps `executionStatus="success"` — the failure is only visible as the error
