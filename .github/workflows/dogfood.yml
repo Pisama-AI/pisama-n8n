@@ -1,0 +1,30 @@
+name: n8n real dogfood evidence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+
+jobs:
+  real-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install n8n engine/server
+        run: python -m pip install -e engine -e server
+      - name: Run real dogfood pipeline
+        env:
+          PISAMA_N8N_URL: ${{ secrets.PISAMA_DOGFOOD_N8N_URL }}
+          PISAMA_N8N_API_KEY: ${{ secrets.PISAMA_DOGFOOD_N8N_API_KEY }}
+          PISAMA_API_KEY: ${{ secrets.PISAMA_DOGFOOD_API_KEY }}
+          PISAMA_SERVER_URL: ${{ secrets.PISAMA_DOGFOOD_SERVER_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          N8N_EVAL_EMAIL: ${{ secrets.N8N_DOGFOOD_OWNER_EMAIL }}
+          N8N_EVAL_PASSWORD: ${{ secrets.N8N_DOGFOOD_OWNER_PASSWORD }}
+          N8N_EVAL_KEY: ${{ secrets.N8N_DOGFOOD_EVAL_KEY }}
+          PISAMA_BUILD_REVISION: ${{ github.sha }}
+        run: bash scripts/run_dogfood_pipeline.sh
