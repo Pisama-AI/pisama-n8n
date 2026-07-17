@@ -30,6 +30,7 @@ from pisama_n8n_engine.detect.truncation import extract_stop_reason
 N8N_URL = os.getenv("PISAMA_N8N_URL", "http://127.0.0.1:5681").rstrip("/")
 SERVER_URL = os.getenv("PISAMA_SERVER_URL", "http://127.0.0.1:8411").rstrip("/")
 MODEL = "claude-haiku-4-5-20251001"
+_EXECUTION_POLL_TIMEOUT_SECONDS = 90
 
 
 def _required(name: str) -> str:
@@ -422,7 +423,10 @@ def _run_workflow(workflow: Dict[str, Any]) -> Dict[str, Any]:
         )
         matching = []
         terminal_rows = []
-        for _ in range(30):
+        # n8n can apply a rate-limit backoff before it writes the terminal row for
+        # a genuine 429 execution. Keep polling long enough to observe that real
+        # failure rather than treating a still-running execution as missing.
+        for _ in range(_EXECUTION_POLL_TIMEOUT_SECONDS):
             time.sleep(1)
             executions = _n8n("GET", "/api/v1/executions?limit=100")
             matching = [
