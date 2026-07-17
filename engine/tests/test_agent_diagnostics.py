@@ -40,6 +40,19 @@ def _failed_result(index=3, tool_id="toolu-real"):
     )
 
 
+def _real_tool_failure(index=2):
+    return _turn(
+        index,
+        "Real tool HTTP failure",
+        execution_order_tier=0,
+        execution_index=index,
+        is_claude_message=False,
+        tool_use_ids=[],
+        tool_results=[],
+        source_nodes=["Claude tool request"],
+    )
+
+
 def _recovery(index=4):
     return _turn(
         index,
@@ -55,7 +68,9 @@ def _recovery(index=4):
 
 
 def test_unhandled_real_tool_failure_is_reported():
-    result = N8NAgentDiagnosticsDetector().detect([_tool_use(), _failed_result()])
+    result = N8NAgentDiagnosticsDetector().detect(
+        [_tool_use(), _real_tool_failure(), _failed_result()]
+    )
     assert result.detected is True
     assert result.failure_mode == "n8n_agent_tool_recovery"
     assert result.evidence["tool_request_execution_index"] == 1
@@ -63,7 +78,9 @@ def test_unhandled_real_tool_failure_is_reported():
 
 
 def test_real_recovery_is_a_negative_control():
-    result = N8NAgentDiagnosticsDetector().detect([_tool_use(), _failed_result(), _recovery()])
+    result = N8NAgentDiagnosticsDetector().detect(
+        [_tool_use(), _real_tool_failure(), _failed_result(), _recovery()]
+    )
     assert result.detected is False
 
 

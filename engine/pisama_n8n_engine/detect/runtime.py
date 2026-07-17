@@ -355,7 +355,7 @@ def _ordered_agent_turns(turns: Iterable[TurnSnapshot]) -> List[TurnSnapshot]:
 def _matching_failed_tool_result(
     turns: List[TurnSnapshot], tool_turn: TurnSnapshot
 ) -> Optional[TurnSnapshot]:
-    """Find a later, source-linked failed result for a recorded Claude tool call."""
+    """Find a later failed result through n8n's observed one-hop tool chain."""
     tool_ids = set((tool_turn.turn_metadata or {}).get("tool_use_ids") or [])
     if not tool_ids:
         return None
@@ -363,7 +363,7 @@ def _matching_failed_tool_result(
         metadata = turn.turn_metadata or {}
         if metadata["execution_index"] <= tool_turn.turn_metadata["execution_index"]:
             continue
-        if tool_turn.participant_id not in (metadata.get("source_nodes") or []):
+        if not _tool_result_is_linked(turns, tool_turn, turn):
             continue
         for result in metadata.get("tool_results") or []:
             if (
@@ -373,6 +373,30 @@ def _matching_failed_tool_result(
             ):
                 return turn
     return None
+
+
+def _tool_result_is_linked(
+    turns: List[TurnSnapshot], tool_turn: TurnSnapshot, result_turn: TurnSnapshot
+) -> bool:
+    """Match direct or one-hop n8n source links, never an inferred graph path.
+
+    Real captures place the HTTP tool failure between Claude's ``tool_use`` output
+    and the Code node that converts its recorded error into ``tool_result``. The
+    one-hop allowance models that exact n8n shape without treating an arbitrary
+    later result as belonging to the tool call.
+    """
+    sources = set((result_turn.turn_metadata or {}).get("source_nodes") or [])
+    if tool_turn.participant_id in sources:
+        return True
+    tool_index = tool_turn.turn_metadata["execution_index"]
+    result_index = result_turn.turn_metadata["execution_index"]
+    return any(
+        candidate.participant_id in sources
+        and tool_turn.participant_id
+        in (candidate.turn_metadata.get("source_nodes") or [])
+        and tool_index < candidate.turn_metadata["execution_index"] < result_index
+        for candidate in turns
+    )
 
 
 def _recovery_response(
