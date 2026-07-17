@@ -354,6 +354,211 @@ async def conclude_reliability_case(
     return case
 
 
+@app.post(
+    "/api/v1/reliability-cases/{case_id}/guard-verification",
+    dependencies=[Depends(require_auth)],
+)
+async def record_guard_verification(
+    case_id: int,
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Record one guardrail prevention probe against a REAL ingested execution.
+
+    kind = 'malformed_rejected' | 'valid_passed'. The server verifies the execution's
+    routing (rejection destination ran / consumer skipped for malformed; consumer ran for
+    valid), turning the reliability case into verified prevention evidence."""
+    kind = body.get("kind")
+    execution_id = body.get("execution_id")
+    if kind not in {"malformed_rejected", "valid_passed"}:
+        raise HTTPException(
+            status_code=422,
+            detail="kind must be 'malformed_rejected' or 'valid_passed'.",
+        )
+    if not isinstance(execution_id, int):
+        raise HTTPException(status_code=422, detail="execution_id (int) is required.")
+    try:
+        return storage.record_guard_verification(case_id, kind, execution_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+# --- input-schema guardrail: a deterministic, operator-gated repair -------
+
+
+@app.post("/api/v1/n8n/guardrail", dependencies=[Depends(require_auth)])
+async def n8n_guardrail(
+    body: Dict[str, Any], storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Propose a deterministic input-schema guardrail from a data-contract detection.
+
+    Derives the required paths from evidence (the recorded property-read error + the
+    failing consumer's own code, confirmed against its recorded input). No model call.
+    Returns the proposal plus the path options and destination choices; the operator
+    then picks a rejection destination via /n8n/repairs/{id}/destination before apply."""
+    from pisama_n8n_engine.guardrails import (
+        observed_consumer_input,
+        observed_required_paths,
+    )
+
+    detection_id = body.get("detection_id")
+    if not isinstance(detection_id, int):
+        raise HTTPException(status_code=422, detail="detection_id (int) is required.")
+    ctx = storage.get_detection_context(detection_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Unknown detection_id.")
+    detection = ctx["detection"]
+    if detection.get("failure_mode") != "n8n_data_contract":
+        raise HTTPException(
+            status_code=422,
+            detail="Guardrails apply only to n8n_data_contract detections.",
+        )
+    workflow = ctx.get("workflow")
+    if not isinstance(workflow, dict) or not ctx.get("workflow_id"):
+        raise HTTPException(
+            status_code=422,
+            detail="The detection has no associated workflow to guard.",
+        )
+    issues = (detection.get("evidence") or {}).get("issues") or []
+    if not issues:
+        raise HTTPException(status_code=422, detail="Detection carries no failing node.")
+    failing_node = issues[0].get("node")
+    error_message = issues[0].get("message") or ""
+    node_def = next(
+        (n for n in workflow.get("nodes", []) if n.get("name") == failing_node), None
+    )
+    if node_def is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failing node {failing_node!r} is not in the workflow.",
+        )
+    failing_code = (node_def.get("parameters") or {}).get("jsCode") or ""
+    observed_input = observed_consumer_input(ctx.get("execution"), failing_node)
+    paths = observed_required_paths(failing_code, error_message, observed_input)
+
+    # Client-supplied paths are allowed only to CONFIRM/extend candidates the operator
+    # reviewed — never to invent a path the evidence does not mention.
+    chosen = list(paths["confirmed"]) or list(paths["candidates"])
+    supplied = body.get("paths")
+    if isinstance(supplied, list) and supplied:
+        allowed = set(paths["confirmed"]) | set(paths["candidates"])
+        invalid = [p for p in supplied if p not in allowed]
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"paths {invalid} are not among the evidence-derived options.",
+            )
+        chosen = supplied
+    if not chosen:
+        raise HTTPException(
+            status_code=422,
+            detail="No required path could be derived from the recorded failure.",
+        )
+
+    guard_config = {
+        "kind": "input_schema",
+        "paths": chosen,
+        "path_options": paths,
+        "failing_node": failing_node,
+        "destination": None,
+        "alert_url": None,
+    }
+    proposal = storage.create_guardrail_proposal(
+        detection_id=detection_id,
+        workflow_id=ctx["workflow_id"],
+        baseline_workflow=workflow,
+        guard_config=guard_config,
+        explanation=(
+            f"Install an input-schema guard before {failing_node!r} requiring "
+            f"{', '.join(chosen)}; choose a rejection destination to apply."
+        ),
+    )
+    return {
+        "repair": proposal,
+        "path_options": paths,
+        "destinations": _guardrail_destination_options(workflow),
+    }
+
+
+def _guardrail_destination_options(workflow: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The rejection destinations, each with whether it is available for this workflow."""
+    from pisama_n8n_engine.guardrails import (
+        GuardrailDestinationError,
+        validate_destination_compatibility,
+    )
+
+    options = []
+    for kind, label in (
+        ("error_workflow", "Stop and fire the workflow's error workflow"),
+        ("alert", "POST the rejection to an alert URL"),
+        ("respond_422", "Respond 422 to the webhook caller"),
+    ):
+        available, reason = True, None
+        try:
+            validate_destination_compatibility(workflow, kind)
+        except GuardrailDestinationError as exc:
+            available, reason = False, str(exc)
+        options.append(
+            {"kind": kind, "label": label, "available": available, "reason": reason}
+        )
+    return options
+
+
+@app.post(
+    "/api/v1/n8n/repairs/{repair_id}/destination", dependencies=[Depends(require_auth)]
+)
+async def set_guardrail_destination(
+    repair_id: int, body: Dict[str, Any], storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Record the operator's chosen rejection destination and build the guarded workflow."""
+    from pisama_n8n_engine.guardrails import (
+        GuardrailDestinationError,
+        GuardrailInsertionError,
+        insert_guard_into_workflow,
+    )
+
+    destination = body.get("destination")
+    alert_url = body.get("alert_url")
+    existing = storage.get_repair(repair_id, include_workflows=True)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Unknown repair_id.")
+    guard = existing.get("guard_config")
+    if not guard:
+        raise HTTPException(status_code=422, detail="Repair is not a guardrail proposal.")
+    if existing["status"] != "proposed":
+        raise HTTPException(
+            status_code=409, detail=f"Repair is already {existing['status']}."
+        )
+    try:
+        built = insert_guard_into_workflow(
+            existing["baseline_workflow"],
+            guard["paths"],
+            guard["failing_node"],
+            destination,
+            alert_url=alert_url,
+        )
+    except (GuardrailDestinationError, GuardrailInsertionError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    guard = {
+        **guard,
+        "destination": destination,
+        "alert_url": alert_url,
+        "fragment_node_names": built["fragment_node_names"],
+        "destination_node_name": built["destination_node_name"],
+        "entry_node": built["entry_node"],
+        "validated_node": built["validated_node"],
+        "rejected_node": built["rejected_node"],
+    }
+    try:
+        updated = storage.set_guardrail_destination(
+            repair_id, built["workflow"], guard
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return {"repair": updated}
+
+
 # --- paid tier: fix suggestions + auto-apply (cloud-backed) ---------------
 
 
@@ -440,18 +645,28 @@ async def n8n_apply(
         prepare_apply,
     )
 
-    if not is_paid_configured():
-        raise HTTPException(
-            status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY."
-        )
     repair_id = body.get("repair_id")
     if not isinstance(repair_id, int):
         raise HTTPException(status_code=422, detail="repair_id is required.")
+    existing = storage.get_repair(repair_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Unknown repair_id.")
+    guard = existing.get("guard_config")
+    # A deterministic guardrail is a FREE repair (no model call), so it does not require
+    # the paid cloud. Only model-generated fixes gate on PISAMA_CLOUD_KEY.
+    if guard is None and not is_paid_configured():
+        raise HTTPException(
+            status_code=402, detail="Auto-fix is a paid feature — set PISAMA_CLOUD_KEY."
+        )
+    # A guardrail cannot be applied until the operator has chosen a rejection destination.
+    # Check BEFORE claiming so a null-destination guardrail is never stuck in 'applying'.
+    if guard is not None and guard.get("destination") is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Choose a rejection destination for this guardrail before applying it.",
+        )
     repair = storage.claim_repair_apply(repair_id)
     if repair is None:
-        existing = storage.get_repair(repair_id)
-        if existing is None:
-            raise HTTPException(status_code=404, detail="Unknown repair_id.")
         raise HTTPException(
             status_code=409, detail=f"Repair is already {existing['status']}."
         )
@@ -480,6 +695,25 @@ async def n8n_apply(
         except Exception as exc:
             storage.mark_repair_failed(repair_id, "applying", str(exc))
             raise
+
+        # Guardrail defense in depth: even though the proposal is server-generated, the
+        # mutated workflow may only ADD the guard fragment nodes — never remove/retype an
+        # existing node. Refuse (and leave the live workflow untouched) otherwise.
+        if guard is not None:
+            from pisama_n8n_engine.guardrails import (
+                GuardrailInsertionError,
+                assert_safe_guardrail_diff,
+            )
+
+            try:
+                assert_safe_guardrail_diff(
+                    repair["baseline_workflow"],
+                    repair["proposed_workflow"],
+                    guard.get("fragment_node_names") or [],
+                )
+            except GuardrailInsertionError as exc:
+                storage.mark_repair_failed(repair_id, "applying", str(exc))
+                raise HTTPException(status_code=422, detail=str(exc)) from None
 
         # Durably record the restore point BEFORE mutating the live workflow. This is the
         # fix for the strand-on-failure bug: if the PUT lands but any later step raises,

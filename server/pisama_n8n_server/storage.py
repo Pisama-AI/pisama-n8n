@@ -171,6 +171,10 @@ class RepairAttempt(Base):
     snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     applied_workflow: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Present only for deterministic guardrail repairs (NULL for model-generated fixes).
+    # Carries {paths, destination, failing_node, alert_url, fragment_node_names}; the
+    # apply path refuses a guardrail whose destination is still null.
+    guard_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     applied_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     rolled_back_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -193,6 +197,7 @@ class RepairAttempt(Base):
             "explanation": self.explanation,
             "status": self.status,
             "failure_reason": self.failure_reason,
+            "guard_config": self._decode(self.guard_config, None),
             "created_at": self.created_at,
             "applied_at": self.applied_at,
             "rolled_back_at": self.rolled_back_at,
@@ -270,6 +275,14 @@ class ReliabilityCase(Base):
     first_recurrence_execution_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("executions.id"), nullable=True
     )
+    # Guardrail prevention probes: the two real executions that prove the installed
+    # guard actually rejects malformed input and passes valid input. A guardrail case
+    # cannot be concluded ``prevented`` until BOTH are recorded — that is what turns a
+    # template into verified prevention evidence rather than a claim.
+    guard_malformed_rejected_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_malformed_rejected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_valid_passed_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_valid_passed_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     outcome_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -336,6 +349,10 @@ class ReliabilityCase(Base):
             "first_recurrence_execution_id": self.first_recurrence_execution_id,
             "required_successful_executions": verification_success_threshold(),
             "ready_for_outcome_review": self._ready_for_outcome_review(),
+            "guard_malformed_rejected_execution_id": self.guard_malformed_rejected_execution_id,
+            "guard_malformed_rejected_at": self.guard_malformed_rejected_at,
+            "guard_valid_passed_execution_id": self.guard_valid_passed_execution_id,
+            "guard_valid_passed_at": self.guard_valid_passed_at,
             "outcome_note": self.outcome_note,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -585,6 +602,13 @@ _ADDED_COLUMNS = {
         "baseline_failure_count": "INTEGER NOT NULL DEFAULT 0",
         "post_repair_execution_count": "INTEGER NOT NULL DEFAULT 0",
         "post_repair_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "guard_malformed_rejected_execution_id": "INTEGER",
+        "guard_malformed_rejected_at": "VARCHAR",
+        "guard_valid_passed_execution_id": "INTEGER",
+        "guard_valid_passed_at": "VARCHAR",
+    },
+    "repair_attempts": {
+        "guard_config": "TEXT",
     },
 }
 
@@ -687,6 +711,7 @@ class Storage:
                 return None
             execution = session.get(Execution, det.execution_id)
             workflow = None
+            raw = None
             if execution is not None:
                 try:
                     raw = json.loads(execution.raw)
@@ -695,10 +720,14 @@ class Storage:
                         workflow = raw
                 except (TypeError, ValueError):
                     workflow = None
+                    raw = None
             return {
                 "detection": det.to_dict(),
                 "workflow": workflow,
                 "workflow_id": execution.workflow_id if execution else None,
+                # The full parsed execution — the guardrail proposer reads the failing
+                # consumer's recorded input from its runData to confirm required paths.
+                "execution": raw,
             }
 
     @staticmethod
@@ -733,6 +762,61 @@ class Storage:
             session.add(row)
             session.commit()
             return row.to_dict()
+
+    def create_guardrail_proposal(
+        self,
+        detection_id: int,
+        workflow_id: str,
+        baseline_workflow: Dict[str, Any],
+        guard_config: Dict[str, Any],
+        explanation: str,
+    ) -> Dict[str, Any]:
+        """Persist a deterministic input-schema guardrail proposal.
+
+        The rejection destination is chosen by the operator in a SECOND step, so the
+        proposed_workflow is not buildable yet — it is stored as the baseline placeholder
+        and rebuilt by ``set_guardrail_destination``. ``guard_config`` carries the derived
+        paths and ``destination: None``; the apply path refuses until a destination is set.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            row = RepairAttempt(
+                detection_id=detection_id,
+                workflow_id=str(workflow_id),
+                baseline_workflow=self._encode(baseline_workflow),
+                proposed_workflow=self._encode(baseline_workflow),
+                patch_ops=self._encode([]),
+                explanation=str(explanation or ""),
+                status="proposed",
+                guard_config=self._encode(guard_config),
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return row.to_dict(include_workflows=True)
+
+    def set_guardrail_destination(
+        self,
+        repair_id: int,
+        proposed_workflow: Dict[str, Any],
+        guard_config: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Record the operator's chosen rejection destination and the built workflow.
+
+        Only a still-``proposed`` guardrail repair can have its destination set/changed.
+        The caller builds ``proposed_workflow`` (engine-side) and passes the completed
+        ``guard_config`` (destination filled in); storage stays engine-agnostic.
+        """
+        with self._Session() as session:
+            row = session.get(RepairAttempt, repair_id)
+            if row is None or row.guard_config is None:
+                return None
+            if row.status != "proposed":
+                raise ValueError(f"Repair is already {row.status}.")
+            row.proposed_workflow = self._encode(proposed_workflow)
+            row.guard_config = self._encode(guard_config)
+            session.commit()
+            return row.to_dict(include_workflows=True)
 
     def get_repair(
         self, repair_id: int, include_workflows: bool = False
@@ -1363,6 +1447,91 @@ class Storage:
             ).scalars()
             return [row.to_dict() for row in rows]
 
+    def _execution_run_nodes(self, execution_id: int) -> Optional[set]:
+        """The set of node names that actually produced a run in an ingested execution,
+        or None if the execution is unknown."""
+        with self._Session() as session:
+            execution = session.get(Execution, execution_id)
+            if execution is None:
+                return None
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return set()
+        run_data = (
+            ((raw.get("data") or {}).get("resultData") or {}).get("runData") or {}
+        )
+        return {name for name, runs in run_data.items() if runs}
+
+    def record_guard_verification(
+        self, case_id: int, kind: str, execution_id: int
+    ) -> Dict[str, Any]:
+        """Record one guardrail prevention probe against a REAL ingested execution.
+
+        ``kind`` is ``malformed_rejected`` or ``valid_passed``. The execution's runData
+        must actually show the expected routing — malformed input must reach the rejection
+        destination and NOT the guarded consumer; valid input must reach the consumer.
+        This is what makes the reliability case verified evidence, not a checkbox.
+        Raises ValueError with the reason on any mismatch; returns the updated case.
+        """
+        if kind not in ("malformed_rejected", "valid_passed"):
+            raise ValueError("kind must be 'malformed_rejected' or 'valid_passed'.")
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                raise ValueError("Unknown reliability case id.")
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = repair.to_dict().get("guard_config") if repair else None
+            if not guard:
+                raise ValueError("This reliability case is not a guardrail case.")
+
+        run_nodes = self._execution_run_nodes(execution_id)
+        if run_nodes is None:
+            raise ValueError("Unknown execution id — ingest the probe execution first.")
+
+        consumer = guard.get("failing_node")
+        destination = guard.get("destination_node_name")
+        if kind == "malformed_rejected":
+            if destination not in run_nodes:
+                raise ValueError(
+                    f"Rejection destination {destination!r} did not run — malformed "
+                    "input was not rejected by the guard in this execution."
+                )
+            if consumer in run_nodes:
+                raise ValueError(
+                    f"Guarded consumer {consumer!r} still ran — malformed input reached "
+                    "the business path despite the guard."
+                )
+        else:  # valid_passed
+            if consumer not in run_nodes:
+                raise ValueError(
+                    f"Guarded consumer {consumer!r} did not run — valid input did not "
+                    "reach the business path through the guard."
+                )
+            if destination in run_nodes:
+                raise ValueError(
+                    f"Rejection destination {destination!r} ran on a valid input — the "
+                    "guard rejected input it should have passed."
+                )
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if kind == "malformed_rejected":
+                case.guard_malformed_rejected_execution_id = execution_id
+                case.guard_malformed_rejected_at = now
+            else:
+                case.guard_valid_passed_execution_id = execution_id
+                case.guard_valid_passed_at = now
+            case.updated_at = now
+            session.commit()
+            return case.to_dict()
+
+    def _is_guardrail_case(self, case: "ReliabilityCase") -> bool:
+        with self._Session() as session:
+            repair = session.get(RepairAttempt, case.repair_id)
+            return bool(repair and repair.guard_config)
+
     def conclude_reliability_case(
         self, case_id: int, outcome: str, note: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -1382,6 +1551,15 @@ class Storage:
                 if case.recurrence_count:
                     raise ValueError(
                         "A recurring case cannot be recorded as prevented."
+                    )
+                if self._is_guardrail_case(case) and not (
+                    case.guard_malformed_rejected_execution_id
+                    and case.guard_valid_passed_execution_id
+                ):
+                    raise ValueError(
+                        "A guardrail can only be recorded as prevented after both "
+                        "verification probes are recorded: a malformed input rejected "
+                        "and a valid input passed through the installed guard."
                     )
             now = datetime.now(timezone.utc).isoformat()
             case.status = outcome

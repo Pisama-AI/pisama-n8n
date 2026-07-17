@@ -84,7 +84,7 @@ lifecycle stage asserted. Fail = keep working; do not ask the user; fix and re-r
 
 - [x] Audit: read current repair endpoints/storage/reliability fields; record exact shapes in Notes.
 - [x] Engine: `observed_required_paths` + destination builders + `insert_guard_into_workflow` + tests (19 guardrail tests; generated JS executed under real node: Object.hasOwn semantics, zero-preserved, all-missing flagged).
-- [ ] Server: guardrail proposal endpoint + destination endpoint + apply integration + `assert_safe_guardrail_diff` + reliability-case guard-verification endpoint + tests (all no-mocks, per repo convention).
+- [x] Server: guardrail proposal endpoint + destination endpoint + apply integration + `assert_safe_guardrail_diff` + reliability-case guard-verification endpoint + tests (all no-mocks, per repo convention).
 - [ ] Dashboard: guard panel + destination selector + verification display; tsc + build green.
 - [ ] Harness: `scripts/run_guardrail_lifecycle.py` + dogfood-gate lane; run it against a real local n8n and paste the stage results into Notes.
 - [ ] Verify: full verification command green; record numbers in Notes.
@@ -115,3 +115,16 @@ clean; generated JS exercised under real node.
 ## Final status
 
 Output DONE only when every box is checked and the verification command passes.
+
+
+**Server layer DONE:** storage — guard_config on repair_attempts + 4 guard-verification
+fields on reliability_cases (+ _ADDED_COLUMNS catch-up), create_guardrail_proposal /
+set_guardrail_destination / record_guard_verification (real routing check vs runData) /
+conclude gate (prevented refused on a guardrail without both probes). app — POST
+/n8n/guardrail (derives paths from evidence + confirms vs recorded input; free repair, no
+paid gate), POST /n8n/repairs/{id}/destination (server-enforced choice; builds guarded
+workflow), apply refuses null-destination guardrail + runs assert_safe_guardrail_diff,
+POST /reliability-cases/{id}/guard-verification. engine — assert_safe_guardrail_diff +
+observed_consumer_input. Verifier GREEN: server 50 passed/9 skipped (5 new guardrail
+tests), engine 97, parity 7/7, ruff clean. Fixed a stale paid-gate test (apply gate now
+keys on guard_config, not the endpoint).

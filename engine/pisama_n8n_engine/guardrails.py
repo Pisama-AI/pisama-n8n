@@ -177,6 +177,53 @@ return $input.all().map((item) => {{
     }
 
 
+def assert_safe_guardrail_diff(
+    baseline: dict[str, Any],
+    mutated: dict[str, Any],
+    fragment_node_names: Sequence[str],
+) -> None:
+    """Guard a guardrail-mutated workflow before it is written to live n8n.
+
+    Even though the mutated workflow is server-generated, this is defense in depth: the
+    ONLY node changes allowed are ADDING exactly ``fragment_node_names`` (the guard +
+    destination). No existing node may be removed, retyped, or have its credentials
+    changed. Raises GuardrailInsertionError on any violation.
+    """
+    expected_added = set(fragment_node_names)
+
+    def _by_name(wf: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {
+            n.get("name"): n
+            for n in (wf.get("nodes") or [])
+            if isinstance(n, dict) and n.get("name")
+        }
+
+    base = _by_name(baseline)
+    mut = _by_name(mutated)
+    added = set(mut) - set(base)
+    removed = set(base) - set(mut)
+    if removed:
+        raise GuardrailInsertionError(
+            f"guardrail apply may not remove nodes (removed={sorted(removed)})"
+        )
+    if added != expected_added:
+        raise GuardrailInsertionError(
+            f"guardrail apply added unexpected nodes "
+            f"(added={sorted(added)}, expected={sorted(expected_added)})"
+        )
+    for name, bnode in base.items():
+        mnode = mut[name]
+        for field in ("type", "typeVersion"):
+            if mnode.get(field) != bnode.get(field):
+                raise GuardrailInsertionError(
+                    f"guardrail apply may not change existing node {name!r} {field}"
+                )
+        if mnode.get("credentials") != bnode.get("credentials"):
+            raise GuardrailInsertionError(
+                f"guardrail apply may not change existing node {name!r} credentials"
+            )
+
+
 def input_schema_guardrail_recommendation() -> str:
     """Return the customer-facing remediation that names the reusable control."""
     return (
@@ -212,6 +259,35 @@ def property_read_leaf(message: Any) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def observed_consumer_input(execution: Any, consumer_node: str) -> Any:
+    """The item json a consumer node received in a recorded execution, or None.
+
+    In n8n runData a node's input is its source node's output; the run record carries a
+    ``source`` back-reference. The guard is spliced onto this same edge, so this is
+    exactly the shape the guard would inspect — which is what lets a required path be
+    CONFIRMED against real evidence rather than assumed.
+    """
+    if not isinstance(execution, dict):
+        return None
+    run_data = (
+        ((execution.get("data") or {}).get("resultData") or {}).get("runData") or {}
+    )
+    runs = run_data.get(consumer_node)
+    if not runs or not isinstance(runs[0], dict):
+        return None
+    source = runs[0].get("source") or []
+    prev = source[0].get("previousNode") if source and isinstance(source[0], dict) else None
+    if not prev:
+        return None
+    prev_runs = run_data.get(prev)
+    if not prev_runs or not isinstance(prev_runs[0], dict):
+        return None
+    main = ((prev_runs[0].get("data") or {}).get("main")) or []
+    items = main[0] if main and isinstance(main[0], list) else []
+    first = items[0] if items and isinstance(items[0], dict) else None
+    return first.get("json") if isinstance(first, dict) else None
 
 
 def _value_at_path(value: Any, path: str) -> Any:

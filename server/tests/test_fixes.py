@@ -50,12 +50,21 @@ def test_paid_features_gated_without_cloud_key(tmp_path, monkeypatch):
         c.post("/api/v1/n8n/fix", headers=h, json={"detection_id": did}).status_code
         == 402
     )
+    # Applying a MODEL-generated repair (guard_config is None) requires the paid cloud.
+    # A guardrail repair, by contrast, is free — so the gate keys on guard_config, not the
+    # endpoint. Create a model-fix proposal directly and confirm apply is paid-gated.
+    import pisama_n8n_server.app as appmod
+
+    ctx = appmod.get_storage().get_detection_context(did)
+    repair = appmod.get_storage().create_repair_proposal(
+        detection_id=did,
+        workflow_id=ctx["workflow_id"] or "wf",
+        baseline_workflow=ctx["workflow"] or {"nodes": [], "connections": {}},
+        suggestion={"explanation": "x", "patch_ops": [], "mutated_workflow": {"nodes": []}},
+    )
+    assert repair.get("guard_config") is None  # a model-fix proposal, not a guardrail
     assert (
-        c.post(
-            "/api/v1/n8n/apply",
-            headers=h,
-            json={"workflow_id": "x", "mutated_workflow": {}},
-        ).status_code
+        c.post("/api/v1/n8n/apply", headers=h, json={"repair_id": repair["id"]}).status_code
         == 402
     )
 
