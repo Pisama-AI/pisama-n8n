@@ -152,14 +152,21 @@ fingerprint to have at least one observation from that revision. A server report
 
 ### Withheld detector modes
 
-`n8n_retry_exhausted` is withheld from rollout and release gates. Controlled HTTP retries
-in both n8n `1.70.0` and `1.91.3` made two actual requests, while each caller execution
-exported one node run and no authoritative retry-attempt link. Pisama therefore ships
-only `n8n_retry_not_observed` for this surface until a real n8n telemetry source can
-prove retry exhaustion without confusing it with an ordinary repeated node run.
-A separate real `Loop Over Items` capture retained two normal runs of one retry-enabled
-node, one successful and one failed. It must also produce no retry claim, because those
-are loop iterations rather than evidence that a retry budget was exhausted.
+The entire `retry_recovery` detector is withheld from rollout and release gates (both
+`n8n_retry_exhausted` and `n8n_retry_not_observed`). Controlled HTTP retries in both n8n
+`1.70.0` and `1.91.3` made two actual requests, while each caller execution exported
+exactly one node run and no authoritative retry-attempt link. Because the exported
+`attempt_count` is therefore always `1`, the detector cannot distinguish "retry
+configured but did not run" from "retry ran and n8n collapsed the run record": its
+ambiguity gate never trips, so `n8n_retry_not_observed` fired at MODERATE/0.95 on
+essentially every retry-enabled failure and told the user to "verify retry support"
+regardless of the real outcome. Both fingerprints are held until a real n8n telemetry
+source can prove a retry outcome without confusing it with an ordinary single node run.
+The detector still exists and is documented, but `N8NRetryRecoveryDetector.release_gate`
+is `False`, so it never emits `detected=True` by default. A separate real `Loop Over
+Items` capture retained two normal runs of one retry-enabled node, one successful and one
+failed; it must also produce no retry claim, because those are loop iterations, not
+evidence about a retry budget.
 
 `n8n_duplicate_side_effect_risk` is also withheld from rollout and release gates.
 Two real, intentional `Loop Over Items` POST iterations reached a controlled receiver
@@ -168,11 +175,16 @@ from one business event retried twice. Pisama therefore does not emit a generic
 duplicate-side-effect finding until it can correlate durable event identity, delivered
 request headers, and receiver outcomes for the same action.
 
-`n8n_agent_tool_recovery` and `n8n_agent_output_validation` are withheld as well. The
-local lane has no real AI-node execution, and exported n8n `runData` order alone cannot
-prove that a later model turn recovered from a specific tool failure. Re-enable these
-only after real agent/tool and parser captures establish the supported telemetry shape,
-event ordering, and agent-to-tool relationship.
+`n8n_agent_tool_recovery` and `n8n_agent_output_validation` are enabled for the narrow
+Claude Messages protocol exercised by the local n8n lane. Their contract is deliberately
+smaller than generic n8n AI-agent coverage: n8n must retain `executionIndex`, direct
+source links, an initial Claude `tool_use` ID, a matching failed `tool_result`, and a
+later source-linked Claude response. Tool-recovery findings fire only when the failed
+result has no such later response. Output-validation findings require the direct Claude
+response to feed a Code node whose recorded `JSON.parse` error matches n8n's actual
+invalid-JSON shape. Missing order, missing IDs, mismatched IDs, ordinary loops, and
+successful tool calls are inconclusive. Native `@n8n/n8n-nodes-langchain.agent`
+telemetry has not yet been captured and is not covered by these claims.
 
 The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
 The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so

@@ -49,8 +49,8 @@ for d in report.fired:
 ```
 
 Evidence-gated detector suite: cycle, resource, timeout, classified error, complexity,
-runtime data contracts, AI output truncation, retry recovery, missing error workflows,
-duplicate-side-effect risk, and AI-agent diagnostics when trace evidence exists. (The old static schema detector
+runtime data contracts, AI output truncation, and missing error workflows, surfaced only
+when execution evidence supports them. (The old static schema detector
 ships in the package, but its static path is deliberately disabled because it cannot be
 made precise against n8n's dynamic JSON data model; it never fires.) Runtime detectors
 run only on parsed execution evidence via

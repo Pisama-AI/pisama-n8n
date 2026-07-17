@@ -42,6 +42,43 @@ from sqlalchemy.orm import (
 
 DEFAULT_DATABASE_URL = "sqlite:///pisama_n8n.db"
 
+_SECRET_KEYS = {
+    "apikey",
+    "authorization",
+    "authtoken",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _secret_key(name: Any) -> bool:
+    """Whether an execution-payload field names credential material."""
+    normalized = "".join(char for char in str(name).lower() if char.isalnum())
+    return normalized in _SECRET_KEYS or normalized.endswith("apikey")
+
+
+def redact_execution_payload(value: Any) -> Any:
+    """Return a persistence-safe execution copy without credentials.
+
+    n8n includes a workflow snapshot in execution exports. HTTP Request nodes can
+    therefore carry header values such as ``x-api-key`` even after the transient
+    workflow itself has been deleted. Detection runs against the in-memory payload;
+    only the locally retained audit copy is redacted.
+    """
+    if isinstance(value, list):
+        return [redact_execution_payload(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    header_name = value.get("name")
+    result: Dict[str, Any] = {}
+    for key, item in value.items():
+        if _secret_key(key) or (key == "value" and _secret_key(header_name)):
+            result[key] = "[redacted]"
+        else:
+            result[key] = redact_execution_payload(item)
+    return result
+
 
 class Base(DeclarativeBase):
     pass
@@ -596,7 +633,7 @@ class Storage:
     ) -> int:
         """Persist the raw payload + every detection in the report. Returns exec id."""
         try:
-            raw = json.dumps(execution_data, default=str)
+            raw = json.dumps(redact_execution_payload(execution_data), default=str)
         except (TypeError, ValueError):
             raw = str(execution_data)
 

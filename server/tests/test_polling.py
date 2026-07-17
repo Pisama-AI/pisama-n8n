@@ -655,8 +655,10 @@ def test_poll_detects_real_runtime_payload_growth(tmp_path, monkeypatch):
 def test_poll_records_when_n8n_hides_retry_attempts(tmp_path, monkeypatch):
     """n8n 1.91 retries the request but retains one caller runData record.
 
-    The detector must surface that evidence gap, not invent an exhausted-retry or
-    duplicate-side-effect claim from the two sink executions.
+    Because the caller exports exactly one node run, retry_recovery cannot tell a
+    non-retry from an observed retry, so the whole detector is withheld: it must not
+    invent a retry-not-observed, exhausted-retry, or duplicate-side-effect claim from
+    the two sink executions.
     """
     key = _provision_key()
     sink_id, caller_id = _run_retrying_post_to_disposable_sink(key)
@@ -668,19 +670,16 @@ def test_poll_records_when_n8n_hides_retry_attempts(tmp_path, monkeypatch):
         caller_fired = _fired_for_workflow(detections, caller_id)
         sink_executions = _execution_ids_for_workflow(detections, sink_id)
         retry_findings = _retry_results_for_workflow(detections, caller_id)
-        assert ("retry_recovery", "n8n_retry_not_observed") in caller_fired
+        assert ("retry_recovery", "n8n_retry_not_observed") not in caller_fired
         assert ("retry_recovery", "n8n_retry_exhausted") not in caller_fired
         assert ("idempotency", "n8n_duplicate_side_effect_risk") not in caller_fired
         assert len(sink_executions) >= 2
         assert len(retry_findings) == 1
         retry_result = retry_findings[0]
-        assert retry_result["failure_mode"] == "n8n_retry_not_observed"
-        assert retry_result["detector_version"] == "1.1"
-        assert retry_result["evidence"] == {
-            "nodes": ["Unsafe retrying POST"],
-            "recorded_node_runs": 1,
-            "retry_observed": False,
-        }
+        assert retry_result["detected"] is False
+        assert retry_result["failure_mode"] is None
+        assert retry_result["detector_version"] == "1.2"
+        assert "withheld" in retry_result["explanation"]
     finally:
         _delete_workflows(key, [caller_id, sink_id])
 
@@ -705,8 +704,8 @@ def test_poll_withholds_retry_claim_for_repeated_loop_runs(tmp_path, monkeypatch
         retry_result = retry_results[0]
         assert retry_result["detected"] is False
         assert retry_result["failure_mode"] is None
-        assert retry_result["detector_version"] == "1.1"
-        assert "exhausted-retry detection is withheld" in retry_result["explanation"]
+        assert retry_result["detector_version"] == "1.2"
+        assert "withheld" in retry_result["explanation"]
     finally:
         _delete_workflows(key, [workflow_id])
 

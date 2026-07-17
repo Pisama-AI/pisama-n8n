@@ -48,8 +48,8 @@ const DETECTORS = [
   },
   {
     icon: AlertTriangle,
-    name: 'Recovery safeguards',
-    desc: 'Observed retries, missing error workflows, and repeated unsafe HTTP actions are surfaced only when execution evidence supports them.',
+    name: 'Error routing',
+    desc: 'A failed execution with no error workflow, or an error route that cannot receive the incident, is surfaced only when the recorded failure proves it.',
   },
 ]
 

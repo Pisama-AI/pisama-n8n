@@ -29,12 +29,20 @@ MANIFEST = [
     ("detection/truncation.py", "detect/truncation.py"),
     ("detection/n8n/__init__.py", "detect/structural/__init__.py"),
     ("detection/n8n/cycle_detector.py", "detect/structural/cycle_detector.py"),
-    ("detection/n8n/schema_detector.py", "detect/structural/schema_detector.py"),
     ("detection/n8n/resource_detector.py", "detect/structural/resource_detector.py"),
-    ("detection/n8n/timeout_detector.py", "detect/structural/timeout_detector.py"),
-    ("detection/n8n/error_detector.py", "detect/structural/error_detector.py"),
     ("detection/n8n/complexity_detector.py", "detect/structural/complexity_detector.py"),
 ]
+
+# Locally owned in pisama-n8n and deliberately NOT re-extracted. These structural
+# detectors were rewired to import pisama_n8n_engine.detect.runtime (n8n-specific
+# runtime classification: classify_error / remediation_for / recorded_timeout), which
+# has no monorepo counterpart. Re-extracting them would revert that wiring and break the
+# import, so they are excluded from MANIFEST above and the --check drift gate below.
+LOCAL_OVERRIDES = (
+    "detect/structural/schema_detector.py",
+    "detect/structural/timeout_detector.py",
+    "detect/structural/error_detector.py",
+)
 
 # import-path rewrites (longest-prefix first)
 REWRITES = [

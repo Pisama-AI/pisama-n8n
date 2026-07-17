@@ -1,4 +1,6 @@
-# VENDORED from the pisama monorepo by scripts/extract_from_monorepo.py — do not edit here.
+# LOCALLY OWNED in pisama-n8n (diverged from the monorepo; n8n-specific runtime
+# classification lives here). Not re-extracted by scripts/extract_from_monorepo.py:
+# this file imports pisama_n8n_engine.detect.runtime, which has no monorepo counterpart.
 """
 F14: Error Handling Detection for n8n
 =====================================

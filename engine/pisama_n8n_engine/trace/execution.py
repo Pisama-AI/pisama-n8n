@@ -111,6 +111,95 @@ def _configured_request_timeout_ms(
     return timeout_ms if timeout_ms > 0 else None
 
 
+def _run_order(run: Dict[str, Any], fallback: int) -> Tuple[int, int, int]:
+    """Return n8n's recorded execution order, or an explicitly weaker fallback.
+
+    ``runData`` is grouped by node name, so dictionary iteration is not a temporal
+    contract. Real n8n executions retain ``executionIndex`` for the agent traces
+    captured by the dogfood lane. A detector that needs causality must require this
+    strong tier rather than infer it from grouped ``runData`` order.
+    """
+    try:
+        return (0, int(run["executionIndex"]), fallback)
+    except (KeyError, TypeError, ValueError):
+        pass
+    try:
+        return (1, int(run["startTime"]), fallback)
+    except (KeyError, TypeError, ValueError):
+        return (2, fallback, fallback)
+
+
+def _source_nodes(run: Dict[str, Any]) -> List[str]:
+    """Return recorded immediate predecessor names without graph inference."""
+    source = run.get("source") or []
+    return [
+        str(item["previousNode"])
+        for item in source
+        if isinstance(item, dict) and item.get("previousNode")
+    ]
+
+
+def _tool_result_values(value: Any) -> List[Dict[str, Any]]:
+    """Read explicit Anthropic tool-result objects from an n8n node output."""
+    if isinstance(value, dict):
+        direct = value.get("tool_result")
+        if isinstance(direct, dict):
+            return [direct]
+        if value.get("type") == "tool_result":
+            return [value]
+        messages = value.get("messages")
+        if isinstance(messages, list):
+            values: List[Dict[str, Any]] = []
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, list):
+                    values.extend(
+                        block
+                        for block in content
+                        if isinstance(block, dict)
+                        and block.get("type") == "tool_result"
+                    )
+            return values
+    return []
+
+
+def _agent_facts(output_data: Any) -> Dict[str, Any]:
+    """Extract only the provider facts proven by real Claude n8n output shapes."""
+    if not isinstance(output_data, list):
+        return {"is_claude_message": False, "tool_use_ids": [], "tool_results": []}
+    tool_use_ids: List[str] = []
+    tool_results: List[Dict[str, Any]] = []
+    is_claude_message = False
+    for item in output_data:
+        payload = item.get("json") if isinstance(item, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        model = payload.get("model")
+        content = payload.get("content")
+        if (
+            isinstance(model, str)
+            and model.lower().startswith("claude")
+            and payload.get("role") == "assistant"
+            and isinstance(content, list)
+        ):
+            is_claude_message = True
+            tool_use_ids.extend(
+                str(block["id"])
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("id")
+            )
+        tool_results.extend(_tool_result_values(payload))
+    return {
+        "is_claude_message": is_claude_message,
+        "tool_use_ids": tool_use_ids,
+        "tool_results": tool_results,
+    }
+
+
 def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     """Build the per-node runtime turns from a captured execution's runData."""
     execution_data = _normalized(execution_data)
@@ -136,14 +225,22 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     seq = 0
     base_time = started_at or datetime.now()
 
+    flattened_runs = []
+    fallback = 0
     for node_name, node_runs in run_data.items():
-        if not node_runs:
+        if not isinstance(node_runs, list):
             continue
+        for run in node_runs:
+            if isinstance(run, dict):
+                flattened_runs.append((_run_order(run, fallback), node_name, run))
+                fallback += 1
+
+    for order, node_name, run in sorted(flattened_runs, key=lambda item: item[0]):
         ndef = node_defs.get(node_name, {})
         node_type = ndef.get("type", "unknown")
         node_params = ndef.get("parameters", {})
         retry_on_fail = bool(ndef.get("retryOnFail"))
-        retry_attempts = len(node_runs)
+        retry_attempts = len(run_data.get(node_name, []))
         configured_timeout_ms = _configured_request_timeout_ms(node_params, node_type)
         is_ai = is_ai_node_type(node_type)
 
@@ -164,84 +261,90 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
             on_error = "continueRegularOutput"
         continue_on_fail = on_error in ("continueErrorOutput", "continueRegularOutput")
 
-        for run in node_runs:
-            execution_time_ms = run.get("executionTime", 0)
-            execution_status = run.get("executionStatus", "unknown")
-            error_info = run.get("error")
-            # Real n8n emits degenerate shapes here: `data: null` on some errored runs,
-            # `main: []` (no output branches) and `main: [null]` (a null branch placeholder).
-            # Index blindly and the whole execution's ingest crashes.
-            main_branches = (run.get("data") or {}).get("main") or []
-            output_data = (main_branches[0] if main_branches else None) or []
+        execution_time_ms = run.get("executionTime", 0)
+        execution_status = run.get("executionStatus", "unknown")
+        error_info = run.get("error")
+        # Real n8n emits degenerate shapes here: `data: null` on some errored runs,
+        # `main: []` (no output branches) and `main: [null]` (a null branch placeholder).
+        # Index blindly and the whole execution's ingest crashes.
+        main_branches = (run.get("data") or {}).get("main") or []
+        output_data = (main_branches[0] if main_branches else None) or []
 
-            # A node with continue-on-fail that actually failed leaves NO `run.error` and
-            # keeps `executionStatus="success"` — the failure is only visible as the error
-            # branch carrying items (continueErrorOutput) or an `error` key inside the
-            # regular output item (continueRegularOutput). Surface that swallowed failure
-            # so the error detector can see it. Gated on the node's own `onError` config,
-            # so a healthy node whose data merely contains a field named "error" is unaffected.
-            swallowed = None if error_info else _swallowed_error(run, on_error)
-            error_message, http_status = _error_details(error_info, swallowed)
-            finish_reason = extract_stop_reason(main_branches)
+        # A node with continue-on-fail that actually failed leaves NO `run.error` and
+        # keeps `executionStatus="success"` — the failure is only visible as the error
+        # branch carrying items (continueErrorOutput) or an `error` key inside the
+        # regular output item (continueRegularOutput). Surface that swallowed failure
+        # so the error detector can see it. Gated on the node's own `onError` config,
+        # so a healthy node whose data merely contains a field named "error" is unaffected.
+        swallowed = None if error_info else _swallowed_error(run, on_error)
+        error_message, http_status = _error_details(error_info, swallowed)
+        finish_reason = extract_stop_reason(main_branches)
 
-            content_parts = [f"Node: {node_name} (type: {node_type})"]
-            if output_data:
-                try:
-                    content_parts.append(json.dumps(output_data, default=str))
-                except (TypeError, ValueError):
-                    content_parts.append(str(output_data))
-            if error_info:
-                msg = (
-                    error_info.get("message", "")
-                    if isinstance(error_info, dict)
-                    else str(error_info)
-                )
-                content_parts.append(f"ERROR: {msg}")
-            elif swallowed:
-                content_parts.append(
-                    f"ERROR (continue-on-fail, swallowed): {swallowed}"
-                )
-
-            start_time = run.get("startTime")
-            if start_time:
-                try:
-                    timestamp = datetime.fromtimestamp(start_time / 1000)
-                except (ValueError, TypeError, OSError):
-                    timestamp = base_time + timedelta(milliseconds=seq * 1000)
-            else:
-                timestamp = base_time + timedelta(milliseconds=seq * 1000)
-
-            turns.append(
-                TurnSnapshot(
-                    turn_number=seq,
-                    participant_type="node",
-                    participant_id=node_name,
-                    content="\n".join(content_parts),
-                    turn_metadata={
-                        "node_type": node_type,
-                        "timestamp": timestamp.isoformat(),
-                        "execution_time_ms": execution_time_ms,
-                        "parameters": node_params,
-                        "status": execution_status,
-                        "has_error": error_info is not None or swallowed is not None,
-                        "error_message": error_message,
-                        "http_status": http_status,
-                        "continue_on_fail": continue_on_fail,
-                        "retry_on_fail": retry_on_fail,
-                        "attempt_count": retry_attempts,
-                        "configured_timeout_ms": configured_timeout_ms,
-                        "is_ai_node": is_ai,
-                        "finish_reason": finish_reason,
-                        # Structured per-run output item count, so detectors don't have to
-                        # re-derive it from the rendered content string (which leads with a
-                        # "Node: ..." header and defeats naive JSON parsing).
-                        "items_out": len(output_data)
-                        if isinstance(output_data, list)
-                        else 0,
-                    },
-                )
+        content_parts = [f"Node: {node_name} (type: {node_type})"]
+        if output_data:
+            try:
+                content_parts.append(json.dumps(output_data, default=str))
+            except (TypeError, ValueError):
+                content_parts.append(str(output_data))
+        if error_info:
+            msg = (
+                error_info.get("message", "")
+                if isinstance(error_info, dict)
+                else str(error_info)
             )
-            seq += 1
+            content_parts.append(f"ERROR: {msg}")
+        elif swallowed:
+            content_parts.append(
+                f"ERROR (continue-on-fail, swallowed): {swallowed}"
+            )
+
+        start_time = run.get("startTime")
+        if start_time:
+            try:
+                timestamp = datetime.fromtimestamp(start_time / 1000)
+            except (ValueError, TypeError, OSError):
+                timestamp = base_time + timedelta(milliseconds=seq * 1000)
+        else:
+            timestamp = base_time + timedelta(milliseconds=seq * 1000)
+
+        agent_facts = _agent_facts(output_data)
+        turns.append(
+            TurnSnapshot(
+                turn_number=seq,
+                participant_type="node",
+                participant_id=node_name,
+                content="\n".join(content_parts),
+                turn_metadata={
+                    "node_type": node_type,
+                    "timestamp": timestamp.isoformat(),
+                    "execution_time_ms": execution_time_ms,
+                    "parameters": node_params,
+                    "status": execution_status,
+                    "has_error": error_info is not None or swallowed is not None,
+                    "error_message": error_message,
+                    "http_status": http_status,
+                    "continue_on_fail": continue_on_fail,
+                    "retry_on_fail": retry_on_fail,
+                    "attempt_count": retry_attempts,
+                    "configured_timeout_ms": configured_timeout_ms,
+                    "is_ai_node": is_ai,
+                    "finish_reason": finish_reason,
+                    # Structured per-run output item count, so detectors don't have to
+                    # re-derive it from the rendered content string (which leads with a
+                    # "Node: ..." header and defeats naive JSON parsing).
+                    "items_out": len(output_data)
+                    if isinstance(output_data, list)
+                    else 0,
+                    # P3 agent diagnostics require the strong, n8n-recorded order
+                    # tier. A missing execution index is intentionally inconclusive.
+                    "execution_order_tier": order[0],
+                    "execution_index": order[1] if order[0] == 0 else None,
+                    "source_nodes": _source_nodes(run),
+                    **agent_facts,
+                },
+            )
+        )
+        seq += 1
 
     return turns
 

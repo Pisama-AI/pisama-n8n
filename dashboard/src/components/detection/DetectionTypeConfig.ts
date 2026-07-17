@@ -46,10 +46,8 @@ export const detectionTypeConfig: Record<string, { label: string; color: string;
   error: { label: 'Node Error', color: 'text-red-500', icon: AlertTriangle, category: 'Workflow' },
   complexity: { label: 'Excess Complexity', color: 'text-violet-400', icon: GitBranch, category: 'Workflow' },
   truncation: { label: 'AI Output Truncated', color: 'text-orange-500', icon: FileWarning, category: 'AI workflow' },
-  retry_recovery: { label: 'Retry Recovery', color: 'text-yellow-400', icon: RefreshCw, category: 'Workflow' },
   error_workflow: { label: 'Missing Error Workflow', color: 'text-red-500', icon: AlertTriangle, category: 'Workflow' },
-  idempotency: { label: 'Duplicate Side-Effect Risk', color: 'text-red-500', icon: Shield, category: 'Workflow' },
-  agent_diagnostics: { label: 'AI Agent Output Validation', color: 'text-orange-400', icon: Activity, category: 'AI workflow' },
+  agent_diagnostics: { label: 'Claude Tool or Output Failure', color: 'text-orange-400', icon: Activity, category: 'AI workflow' },
 }
 
 export { severityConfig } from '@/lib/severity-config'
@@ -96,8 +94,6 @@ export const plainEnglishLabels: Record<string, string> = {
   error: 'A node errored out',
   complexity: 'Workflow too complex',
   truncation: 'AI response was cut short',
-  retry_recovery: 'Retry path needs attention',
   error_workflow: 'No failure alert workflow',
-  idempotency: 'A retry could repeat an external action',
-  agent_diagnostics: 'AI agent output needs validation',
+  agent_diagnostics: 'Claude tool recovery or output validation needs attention',
 }

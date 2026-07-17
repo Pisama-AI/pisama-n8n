@@ -24,6 +24,7 @@ from pisama_n8n_engine.detect.runtime import (
     N8NErrorWorkflowDetector,
     N8NRetryRecoveryDetector,
     N8NTruncationDetector,
+    N8NAgentDiagnosticsDetector,
 )
 
 # Detectors whose production semantic is static workflow-structure analysis.
@@ -40,6 +41,7 @@ _EXECUTION = {
     "truncation": N8NTruncationDetector,
     "retry_recovery": N8NRetryRecoveryDetector,
     "error_workflow": N8NErrorWorkflowDetector,
+    "agent_diagnostics": N8NAgentDiagnosticsDetector,
 }
 
 

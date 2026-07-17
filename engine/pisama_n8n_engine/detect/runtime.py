@@ -340,18 +340,213 @@ class N8NTruncationDetector(TurnAwareDetector):
             detector_version=self.version,
         )
 
-class N8NRetryRecoveryDetector(TurnAwareDetector):
-    """Flag a retry-enabled failure when n8n cannot prove its retry outcome."""
 
-    name = "N8NRetryRecoveryDetector"
-    version = "1.1"
-    supported_failure_modes = ["F14"]
+def _ordered_agent_turns(turns: Iterable[TurnSnapshot]) -> List[TurnSnapshot]:
+    """Return only agent facts whose order n8n recorded explicitly."""
+    ordered = [
+        turn
+        for turn in turns
+        if (turn.turn_metadata or {}).get("execution_order_tier") == 0
+        and isinstance((turn.turn_metadata or {}).get("execution_index"), int)
+    ]
+    return sorted(ordered, key=lambda turn: turn.turn_metadata["execution_index"])
+
+
+def _matching_failed_tool_result(
+    turns: List[TurnSnapshot], tool_turn: TurnSnapshot
+) -> Optional[TurnSnapshot]:
+    """Find a later, source-linked failed result for a recorded Claude tool call."""
+    tool_ids = set((tool_turn.turn_metadata or {}).get("tool_use_ids") or [])
+    if not tool_ids:
+        return None
+    for turn in turns:
+        metadata = turn.turn_metadata or {}
+        if metadata["execution_index"] <= tool_turn.turn_metadata["execution_index"]:
+            continue
+        if tool_turn.participant_id not in (metadata.get("source_nodes") or []):
+            continue
+        for result in metadata.get("tool_results") or []:
+            if (
+                isinstance(result, dict)
+                and result.get("tool_use_id") in tool_ids
+                and result.get("is_error") is True
+            ):
+                return turn
+    return None
+
+
+def _recovery_response(
+    turns: List[TurnSnapshot], result_turn: TurnSnapshot
+) -> Optional[TurnSnapshot]:
+    """Return a direct Claude response after the failed result, if n8n recorded one."""
+    for turn in turns:
+        metadata = turn.turn_metadata or {}
+        if metadata["execution_index"] <= result_turn.turn_metadata["execution_index"]:
+            continue
+        if result_turn.participant_id not in (metadata.get("source_nodes") or []):
+            continue
+        if metadata.get("is_claude_message"):
+            return turn
+    return None
+
+
+def _json_validation_error(turn: TurnSnapshot) -> bool:
+    """Match the real n8n Code-node JSON.parse error contract, narrowly."""
+    metadata = turn.turn_metadata or {}
+    if not metadata.get("has_error"):
+        return False
+    if metadata.get("node_type") != "n8n-nodes-base.code":
+        return False
+    code = str((metadata.get("parameters") or {}).get("jsCode") or "")
+    message = str(metadata.get("error_message") or "").lower()
+    return "json.parse" in code.lower() and "unexpected token" in message and "valid json" in message
+
+
+class N8NAgentDiagnosticsDetector(TurnAwareDetector):
+    """Detect unhandled Claude Messages tool failures and output validation faults.
+
+    This intentionally covers the observed n8n HTTP Request + Claude Messages protocol,
+    not n8n's native AI Agent nodes. Every finding is source-linked and ordered by n8n's
+    ``executionIndex``; incomplete or unordered telemetry is inconclusive.
+    """
+
+    name = "N8NAgentDiagnosticsDetector"
+    version = "1.0"
+    supported_failure_modes = [
+        "n8n_agent_tool_recovery",
+        "n8n_agent_output_validation",
+    ]
 
     def detect(
         self,
         turns: List[TurnSnapshot],
         conversation_metadata: Optional[Dict[str, Any]] = None,
     ) -> TurnAwareDetectionResult:
+        ordered = _ordered_agent_turns(turns)
+        validation = self._output_validation(ordered)
+        if validation is not None:
+            return validation
+        recovery = self._unhandled_tool_failure(ordered)
+        if recovery is not None:
+            return recovery
+        return _clear(
+            self.name,
+            "No source-linked Claude Messages tool failure or JSON validation fault was recorded.",
+        )
+
+    def _output_validation(
+        self, turns: List[TurnSnapshot]
+    ) -> Optional[TurnAwareDetectionResult]:
+        for turn in turns:
+            if not _json_validation_error(turn):
+                continue
+            sources = set((turn.turn_metadata or {}).get("source_nodes") or [])
+            predecessor = next(
+                (
+                    candidate
+                    for candidate in turns
+                    if candidate.participant_id in sources
+                    and candidate.turn_metadata.get("is_claude_message")
+                    and candidate.turn_metadata["execution_index"]
+                    < turn.turn_metadata["execution_index"]
+                ),
+                None,
+            )
+            if predecessor is None:
+                continue
+            return TurnAwareDetectionResult(
+                detected=True,
+                severity=TurnAwareSeverity.MODERATE,
+                confidence=0.95,
+                failure_mode="n8n_agent_output_validation",
+                explanation=(
+                    "A Claude Messages response flowed directly into a JSON.parse Code node, "
+                    "which n8n recorded as invalid JSON. Add an explicit structured-output "
+                    "contract or validation fallback before parsing."
+                ),
+                affected_turns=[predecessor.turn_number, turn.turn_number],
+                evidence={
+                    "response_node": predecessor.participant_id,
+                    "response_execution_index": predecessor.turn_metadata["execution_index"],
+                    "validator_node": turn.participant_id,
+                    "validator_execution_index": turn.turn_metadata["execution_index"],
+                },
+                suggested_fix="Request schema-conformant output and route JSON validation failures to a bounded repair or fallback path.",
+                detector_name=self.name,
+                detector_version=self.version,
+            )
+        return None
+
+    def _unhandled_tool_failure(
+        self, turns: List[TurnSnapshot]
+    ) -> Optional[TurnAwareDetectionResult]:
+        for tool_turn in turns:
+            if not (tool_turn.turn_metadata or {}).get("tool_use_ids"):
+                continue
+            result_turn = _matching_failed_tool_result(turns, tool_turn)
+            if result_turn is None:
+                continue
+            if _recovery_response(turns, result_turn) is not None:
+                continue
+            return TurnAwareDetectionResult(
+                detected=True,
+                severity=TurnAwareSeverity.MODERATE,
+                confidence=0.95,
+                failure_mode="n8n_agent_tool_recovery",
+                explanation=(
+                    "n8n recorded a Claude tool call and a matching failed tool result, "
+                    "but no source-linked Claude recovery response followed it."
+                ),
+                affected_turns=[tool_turn.turn_number, result_turn.turn_number],
+                evidence={
+                    "tool_request_node": tool_turn.participant_id,
+                    "tool_request_execution_index": tool_turn.turn_metadata["execution_index"],
+                    "failed_result_node": result_turn.participant_id,
+                    "failed_result_execution_index": result_turn.turn_metadata["execution_index"],
+                },
+                suggested_fix="Pass the recorded failed tool result back to the Claude Messages call and add a bounded fallback for repeated tool failures.",
+                detector_name=self.name,
+                detector_version=self.version,
+            )
+        return None
+
+class N8NRetryRecoveryDetector(TurnAwareDetector):
+    """Flag a retry-enabled failure when n8n cannot prove its retry outcome.
+
+    Withheld by default (``release_gate = False``). n8n ``1.70`` and ``1.91`` export
+    exactly one node run for a retried node, so ``attempt_count`` is always ``1`` and
+    the ambiguity gate in ``_retry_outcome_is_ambiguous`` never trips. The detector
+    therefore cannot distinguish "retry configured but did not run" from "retry ran and
+    n8n collapsed the run record", which made ``n8n_retry_not_observed`` fire at
+    MODERATE/0.95 on essentially every retry-enabled failure. Rather than ship that
+    false-positive, the whole detector is held behind ``release_gate`` until a real n8n
+    telemetry source can prove a retry outcome without confusing it with an ordinary
+    single node run. The detector still exists and its logic is retained for when that
+    telemetry lands; it simply does not emit ``detected=True`` by default. See
+    ``docs/dogfooding.md`` (Withheld detector modes) and
+    ``scripts/audit_dogfood_corpus.py``.
+    """
+
+    name = "N8NRetryRecoveryDetector"
+    version = "1.2"
+    supported_failure_modes = ["F14"]
+    # Honest withholding: the single-node-run export limitation makes every positive an
+    # unverifiable guess, so the detector is gated off. Flip only when real n8n telemetry
+    # can prove a retry outcome (then re-validate against dogfood before rollout).
+    release_gate = False
+
+    def detect(
+        self,
+        turns: List[TurnSnapshot],
+        conversation_metadata: Optional[Dict[str, Any]] = None,
+    ) -> TurnAwareDetectionResult:
+        if not self.release_gate:
+            return _clear(
+                self.name,
+                "Retry-recovery detection is withheld: n8n exports one node run for a "
+                "retried node, so a retry-enabled failure cannot be distinguished from a "
+                "retry that ran. See docs/dogfooding.md.",
+            )
         retry_enabled_failures = _retry_enabled_error_turns(turns)
         if not retry_enabled_failures:
             return _clear(

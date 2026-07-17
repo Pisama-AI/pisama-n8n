@@ -66,6 +66,22 @@ def test_explicit_run_error_marks_turn():
     assert "ERROR: exploded" in turn.content
 
 
+def test_execution_index_orders_grouped_n8n_run_data_and_keeps_agent_facts():
+    """n8n groups runData by node, while real agent causality uses executionIndex."""
+    raw = execution_doc(
+        {
+            "Later": [_run(executionIndex=2, output=[{"json": {"tool_result": {"type": "tool_result", "tool_use_id": "toolu-real", "is_error": True}}}])],
+            "Claude": [_run(executionIndex=1, output=[{"json": {"model": "claude-haiku-4-5-20251001", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu-real"}]}}])],
+        }
+    )
+    raw["data"]["resultData"]["runData"]["Later"][0]["source"] = [{"previousNode": "Claude"}]
+    turns, _ = execution_to_turns_and_metadata(raw)
+    assert [turn.participant_id for turn in turns] == ["Claude", "Later"]
+    assert turns[0].turn_metadata["tool_use_ids"] == ["toolu-real"]
+    assert turns[1].turn_metadata["tool_results"][0]["tool_use_id"] == "toolu-real"
+    assert turns[1].turn_metadata["source_nodes"] == ["Claude"]
+
+
 class TestSwallowedContinueOnFail:
     """continue-on-fail leaves executionStatus=success and no run.error; the failure is
     only visible in the item payload. Surfacing it is gated on the node's OWN onError

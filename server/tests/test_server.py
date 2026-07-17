@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, text
 
 from pisama_n8n_server.app import app, get_storage
-from pisama_n8n_server.storage import Storage
+from pisama_n8n_server.storage import Storage, redact_execution_payload
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -42,6 +42,29 @@ def _fired(response_json: dict, detector: str) -> bool:
     return any(
         d["detector"] == detector and d["detected"] for d in response_json["detections"]
     )
+
+
+def test_execution_persistence_redacts_http_credential_headers():
+    payload = {
+        "workflowData": {
+            "nodes": [
+                {
+                    "parameters": {
+                        "headerParameters": {
+                            "parameters": [
+                                {"name": "x-api-key", "value": "secret-value"},
+                                {"name": "accept", "value": "application/json"},
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    }
+    redacted = redact_execution_payload(payload)
+    headers = redacted["workflowData"]["nodes"][0]["parameters"]["headerParameters"]["parameters"]
+    assert headers[0]["value"] == "[redacted]"
+    assert headers[1]["value"] == "application/json"
 
 
 # 1. Runtime lane: each failure fixture fires its matching detection; healthy fires none.

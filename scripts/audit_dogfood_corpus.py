@@ -61,7 +61,11 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
         release_gate=False,
     ),
     EvidenceTarget(
-        "P1", "Retry configuration gap", "retry_recovery", "n8n_retry_not_observed"
+        "P1",
+        "Retry configuration gap (withheld: n8n exports one node run per retried node)",
+        "retry_recovery",
+        "n8n_retry_not_observed",
+        release_gate=False,
     ),
     EvidenceTarget(
         "P2", "Missing error workflow", "error_workflow", "n8n_missing_error_workflow"
@@ -92,17 +96,15 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
     EvidenceTarget("P3", "Workflow cycle configuration (static)", "cycle", "F11"),
     EvidenceTarget(
         "P3",
-        "Agent tool recovery (withheld pending real telemetry)",
+        "Claude Messages unhandled tool recovery",
         "agent_diagnostics",
         "n8n_agent_tool_recovery",
-        release_gate=False,
     ),
     EvidenceTarget(
         "P3",
-        "Agent output validation (withheld pending real telemetry)",
+        "Claude Messages output validation",
         "agent_diagnostics",
         "n8n_agent_output_validation",
-        release_gate=False,
     ),
 )
 
