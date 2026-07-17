@@ -37,7 +37,24 @@ fi
 echo '[dogfood] current-build core gate'
 python3 scripts/audit_dogfood_corpus.py \
   --server-url "$PISAMA_SERVER_URL" --api-key "$PISAMA_API_KEY" \
-  --require-profile core --require-current-build --output "$OUT/audit.json"
+  --require-profile core --require-current-build \
+  --require agent_diagnostics:n8n_native_structured_parser_rejection \
+  --output "$OUT/audit.json"
+
+if [[ "${REQUIRE_REPAIR_EVIDENCE:-1}" == 1 ]]; then
+  python3 - "$PISAMA_SERVER_URL" "$PISAMA_API_KEY" <<'PY'
+import json, sys, urllib.request
+url, key = sys.argv[1:]
+r = urllib.request.Request(url.rstrip('/') + '/api/v1/operations/summary',
+                           headers={'Authorization': 'Bearer ' + key})
+with urllib.request.urlopen(r, timeout=20) as response:
+    summary = json.load(response)
+statuses = summary.get('repairs_by_status', {})
+if not statuses.get('rolled_back'):
+    raise SystemExit('repair evidence missing: run detect -> review -> apply -> observe -> rollback')
+print('[dogfood] repair lifecycle evidence present:', statuses)
+PY
+fi
 
 if [[ "${RUN_UPGRADE_GATE:-1}" == 1 ]]; then
   echo '[dogfood] SQLite upgrade/backup/restore gate'
