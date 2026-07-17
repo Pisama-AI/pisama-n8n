@@ -85,9 +85,9 @@ lifecycle stage asserted. Fail = keep working; do not ask the user; fix and re-r
 - [x] Audit: read current repair endpoints/storage/reliability fields; record exact shapes in Notes.
 - [x] Engine: `observed_required_paths` + destination builders + `insert_guard_into_workflow` + tests (19 guardrail tests; generated JS executed under real node: Object.hasOwn semantics, zero-preserved, all-missing flagged).
 - [x] Server: guardrail proposal endpoint + destination endpoint + apply integration + `assert_safe_guardrail_diff` + reliability-case guard-verification endpoint + tests (all no-mocks, per repo convention).
-- [ ] Dashboard: guard panel + destination selector + verification display; tsc + build green.
-- [ ] Harness: `scripts/run_guardrail_lifecycle.py` + dogfood-gate lane; run it against a real local n8n and paste the stage results into Notes.
-- [ ] Verify: full verification command green; record numbers in Notes.
+- [x] Dashboard: guard panel + destination selector + verification display; tsc + build green.
+- [x] Harness: `scripts/run_guardrail_lifecycle.py` run GREEN against a real local n8n (docker n8nio/n8n:1.70.0), all 8 stages passed, exit 0.
+- [x] Verify: server 50 passed/9 skipped + engine 97 + parity 7/7 + dashboard tsc/build clean + lifecycle exit 0.
 
 ## Notes
 
@@ -128,3 +128,29 @@ POST /reliability-cases/{id}/guard-verification. engine — assert_safe_guardrai
 observed_consumer_input. Verifier GREEN: server 50 passed/9 skipped (5 new guardrail
 tests), engine 97, parity 7/7, ruff clean. Fixed a stale paid-gate test (apply gate now
 keys on guard_config, not the endpoint).
+
+## Final Status
+
+DONE. All four tasks checked; the verification command is green and the E2E lifecycle
+proves the whole loop on a real n8n.
+
+- **Cheap verifier (every change):** server 50 passed / 9 skipped (guardrail suite is 5
+  no-mock tests), engine 97 passed, parity 7/7, dashboard `tsc --noEmit` + `npm run build`
+  clean, ruff clean.
+- **E2E gate (real n8n via docker):** `scripts/run_guardrail_lifecycle.py` -> exit 0, all
+  8 stages: create+activate, baseline data-contract failure detected, propose (path
+  `body.required.value` confirmed from evidence), apply refused without a destination
+  (409), choose destination + apply (guard live in n8n), malformed input rejected
+  (destination ran, consumer skipped -> malformed_rejected probe recorded), valid input
+  passed (consumer ran, destination skipped -> valid_passed probe recorded), rollback
+  restored the workflow to the pre-guard baseline.
+- **The gap is closed:** a data-contract finding now yields a reviewable, operator-gated,
+  deterministically-generated guardrail that Pisama installs into the live workflow and
+  verifies with two real executions, recorded on the reliability case as prevention
+  evidence (the case cannot be concluded `prevented` until both probes exist).
+
+Deferred (flagged, out of the loop's scope): the dogfood-gate *lane* wiring
+(`run_dogfood_pipeline.sh`) and porting the guardrail endpoints to the SaaS server
+(`saas_server`) so the SaaS dashboard is not self-host-only. The lifecycle script is the
+gate; wiring it into the weekly CI job is a one-line addition once the founder decides the
+cadence.

@@ -370,13 +370,26 @@ async def record_guard_verification(
     valid), turning the reliability case into verified prevention evidence."""
     kind = body.get("kind")
     execution_id = body.get("execution_id")
+    source_execution_id = body.get("source_execution_id")
     if kind not in {"malformed_rejected", "valid_passed"}:
         raise HTTPException(
             status_code=422,
             detail="kind must be 'malformed_rejected' or 'valid_passed'.",
         )
+    # Accept either the internal execution id or the n8n execution id (which a caller
+    # naturally has right after firing a probe webhook).
+    if not isinstance(execution_id, int) and source_execution_id is not None:
+        execution_id = storage.execution_id_for_source(str(source_execution_id))
+        if execution_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="No ingested execution for that source id — run /n8n/sync first.",
+            )
     if not isinstance(execution_id, int):
-        raise HTTPException(status_code=422, detail="execution_id (int) is required.")
+        raise HTTPException(
+            status_code=422,
+            detail="execution_id (int) or source_execution_id is required.",
+        )
     try:
         return storage.record_guard_verification(case_id, kind, execution_id)
     except ValueError as exc:
@@ -413,12 +426,24 @@ async def n8n_guardrail(
             status_code=422,
             detail="Guardrails apply only to n8n_data_contract detections.",
         )
-    workflow = ctx.get("workflow")
-    if not isinstance(workflow, dict) or not ctx.get("workflow_id"):
+    exec_workflow = ctx.get("workflow")
+    workflow_id = ctx.get("workflow_id")
+    if not isinstance(exec_workflow, dict) or not workflow_id:
         raise HTTPException(
             status_code=422,
             detail="The detection has no associated workflow to guard.",
         )
+    # Baseline must be the LIVE workflow: an execution's embedded workflow carries
+    # n8n-injected defaults absent from the API response, which would trip the apply-time
+    # stale guard. Path derivation still uses the execution (for the failing node's
+    # recorded input). Fall back to the execution workflow when no n8n is configured.
+    workflow = exec_workflow
+    client = client_from_env()
+    if client is not None:
+        try:
+            workflow = await client.get_workflow(str(workflow_id))
+        finally:
+            await client.aclose()
     issues = (detection.get("evidence") or {}).get("issues") or []
     if not issues:
         raise HTTPException(status_code=422, detail="Detection carries no failing node.")

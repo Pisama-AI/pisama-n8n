@@ -8,11 +8,13 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { formatConfidencePct } from '@/lib/utils'
 import { detectionTypeConfig, plainEnglishLabels, severityConfig } from '@/components/detection/DetectionTypeConfig'
 import { FixPanel } from '@/components/detection/FixPanel'
+import { GuardPanel } from '@/components/detection/GuardPanel'
 import { FeedbackPanel } from '@/components/detection/FeedbackPanel'
 import { RepairVerificationPanel } from '@/components/detection/RepairVerificationPanel'
 import { TraceView } from '@/components/detection/TraceView'
 import { useDetection } from '@/hooks/useDetections'
 import { N8N_BASE_URL } from '@/lib/flags'
+import { IS_SAAS } from '@/lib/saas'
 
 function confidenceTier(confidence: number): string {
   if (confidence >= 0.8) return 'HIGH'
@@ -207,8 +209,20 @@ export function DetectionDetailClient({ id }: { id: string }) {
                   <FeedbackPanel detectionId={id} initialFeedback={detection.feedback} />
                 )}
 
-                {detection.detected && (
-                  <FixPanel detectionId={id} onRepairApplied={() => void refetch()} />
+                {detection.detected && detection.failure_mode === 'n8n_data_contract' ? (
+                  IS_SAAS ? (
+                    <Card padding="lg">
+                      <p className="text-sm text-ink-3">
+                        Guardrail repair is available in self-hosted deployments.
+                      </p>
+                    </Card>
+                  ) : (
+                    <GuardPanel detectionId={id} onRepairApplied={() => void refetch()} />
+                  )
+                ) : (
+                  detection.detected && (
+                    <FixPanel detectionId={id} onRepairApplied={() => void refetch()} />
+                  )
                 )}
 
                 {detection.reliability_case && (

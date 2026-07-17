@@ -36,12 +36,54 @@ function statusCopy(caseRecord: ReliabilityCase): string {
   return 'Pisama is collecting later real executions. A successful run shows exposure after the change, not prevention by itself.'
 }
 
+// Guard-specific verification fields. These live on the reliability case
+// object for a guardrail repair (see ReliabilityCase in detections.ts for the
+// canonical shape once the server adds them); passed as an optional prop
+// rather than fetched here so this panel never issues its own network call.
+export interface GuardVerification {
+  guardMalformedRejectedExecutionId: number | null
+  guardValidPassedExecutionId: number | null
+}
+
+function GuardVerificationRow({ guard }: { guard: GuardVerification }) {
+  const malformedRejected = guard.guardMalformedRejectedExecutionId !== null
+  const validPassed = guard.guardValidPassedExecutionId !== null
+  return (
+    <div className="mt-4 border-t border-rule pt-4">
+      <span className="text-xs uppercase tracking-wide text-ink-3">Guard verification</span>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-xs text-ink-3">
+        <span className="inline-flex items-center gap-1.5">
+          {malformedRejected ? (
+            <Check size={13} className="text-evidence" />
+          ) : (
+            <CircleDot size={13} className="text-ink-4" />
+          )}
+          Malformed input rejected {malformedRejected ? '' : '(pending)'}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          {validPassed ? (
+            <Check size={13} className="text-evidence" />
+          ) : (
+            <CircleDot size={13} className="text-ink-4" />
+          )}
+          Valid input passed through {validPassed ? '' : '(pending)'}
+        </span>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-ink-3">
+        A guardrail repair can be concluded prevented only once both checks above are observed.
+      </p>
+    </div>
+  )
+}
+
 export function RepairVerificationPanel({
   initialCase,
   onUpdated,
+  guardVerification,
 }: {
   initialCase: ReliabilityCase
   onUpdated?: () => void
+  guardVerification?: GuardVerification
 }) {
   const [caseRecord, setCaseRecord] = useState(initialCase)
   const [pending, setPending] = useState<PendingOutcome>(null)
@@ -198,6 +240,8 @@ export function RepairVerificationPanel({
           )}
         </div>
       )}
+
+      {guardVerification && <GuardVerificationRow guard={guardVerification} />}
 
       {caseRecord.outcome_note && (
         <p className="mt-4 border-l-2 border-rule pl-3 text-sm leading-relaxed text-ink-3">

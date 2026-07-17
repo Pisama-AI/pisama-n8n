@@ -1447,6 +1447,21 @@ class Storage:
             ).scalars()
             return [row.to_dict() for row in rows]
 
+    def execution_id_for_source(self, source_execution_id: str) -> Optional[int]:
+        """The internal execution id for an ingested n8n execution, or None.
+
+        Lets a caller that knows the n8n execution id (e.g. after firing a webhook)
+        reference the right ingested execution without it having produced a detection.
+        """
+        with self._Session() as session:
+            row = (
+                session.query(Execution)
+                .filter(Execution.source_execution_id == str(source_execution_id))
+                .order_by(Execution.id.desc())
+                .first()
+            )
+            return row.id if row else None
+
     def _execution_run_nodes(self, execution_id: int) -> Optional[set]:
         """The set of node names that actually produced a run in an ingested execution,
         or None if the execution is unknown."""
