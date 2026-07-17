@@ -173,7 +173,13 @@ def _free_port() -> int:
 
 
 def _n8n_environment(version: str, lane: Lane) -> Dict[str, str]:
+    """Build an environment for a local lane without Cloud project scoping."""
     environment = os.environ.copy()
+    # The Cloud corpus uses an isolated n8n project. Its filter is invalid for
+    # this freshly provisioned local n8n instance and must never leak into the
+    # upgrade/restore server's polling configuration.
+    environment.pop("PISAMA_N8N_PROJECT_ID", None)
+    environment.pop("PISAMA_DOGFOOD_N8N_PROJECT_ID", None)
     environment.update(
         {
             "N8N_VERSION": version,
@@ -457,6 +463,7 @@ def _start_pisama(
             "PISAMA_DOGFOOD_N8N_API_KEY": n8n_key,
             "PISAMA_DOGFOOD_API_KEY": server_key,
             "PISAMA_DOGFOOD_POLL_INTERVAL": "0",
+            "PISAMA_DOGFOOD_N8N_PROJECT_ID": "",
             "PISAMA_BUILD_REVISION": revision,
         }
     )
