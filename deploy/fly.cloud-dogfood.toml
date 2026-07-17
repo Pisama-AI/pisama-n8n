@@ -1,0 +1,37 @@
+# Isolated n8n Cloud dogfood server. This app never shares the production server's
+# SQLite volume or API key. Set all credentials as Fly secrets, never in this file.
+app = "pisama-n8n-cloud-dogfood"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile.server"
+
+[env]
+  # Keep the dedicated Cloud corpus current without polling another project.
+  # PISAMA_N8N_PROJECT_ID is supplied as a Fly secret and constrains the poller.
+  PISAMA_POLL_INTERVAL = "300"
+  PISAMA_PUBLIC_READ = "0"
+  PISAMA_CORS_ORIGINS = "https://app.n8n.pisama.ai"
+  DATABASE_URL = "sqlite:////data/pisama-cloud-dogfood.db"
+
+[[mounts]]
+  source = "pisama_n8n_cloud_dogfood_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8400
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
