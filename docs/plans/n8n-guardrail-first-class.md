@@ -149,8 +149,14 @@ proves the whole loop on a real n8n.
   verifies with two real executions, recorded on the reliability case as prevention
   evidence (the case cannot be concluded `prevented` until both probes exist).
 
-Deferred (flagged, out of the loop's scope): the dogfood-gate *lane* wiring
-(`run_dogfood_pipeline.sh`) and porting the guardrail endpoints to the SaaS server
-(`saas_server`) so the SaaS dashboard is not self-host-only. The lifecycle script is the
-gate; wiring it into the weekly CI job is a one-line addition once the founder decides the
-cadence.
+Dogfood-gate lane: WIRED (2026-07-17). `scripts/run_guardrail_lifecycle_gate.sh` stands up
+a throwaway docker n8n + a fresh local Pisama server (auto-picked free ports, own owner/API
+key, own SQLite DB), runs the full lifecycle, and tears everything down; it is deliberately
+self-contained so it neither touches the founder's n8n Cloud nor pollutes the deployed
+server DB. `run_dogfood_pipeline.sh` calls it as a per-run gate (`RUN_GUARDRAIL_GATE`, default
+1) before the final PASS, so every dogfood run exercises propose/apply/verify/rollback and a
+regression fails red. Verified: gate exit 0 ("full guardrail lifecycle verified"), both
+scripts `bash -n` clean.
+
+Still deferred (flagged, out of the loop's scope): porting the guardrail endpoints to the
+SaaS server (`saas_server`) so the SaaS dashboard is not self-host-only.

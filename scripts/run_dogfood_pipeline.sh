@@ -62,4 +62,15 @@ if [[ "${RUN_UPGRADE_GATE:-1}" == 1 ]]; then
   python3 scripts/verify_n8n_upgrade_restore.py > "$OUT/upgrade-restore.json"
 fi
 
+if [[ "${RUN_GUARDRAIL_GATE:-1}" == 1 ]]; then
+  # A PER-RUN detect -> propose -> apply -> verify -> rollback proof for the
+  # deterministic input-schema guardrail. Self-contained (its own throwaway n8n +
+  # fresh Pisama server), so it neither touches the founder's n8n Cloud nor pollutes
+  # the deployed server's DB. Unlike the cumulative repairs_by_status check above
+  # (which only asserts a historical rollback ever happened), this exercises the whole
+  # guardrail lifecycle every run, so a regression in propose/apply/rollback fails red.
+  echo '[dogfood] guardrail install/verify/rollback lifecycle gate'
+  bash scripts/run_guardrail_lifecycle_gate.sh
+fi
+
 echo "[dogfood] PASS: evidence written to $OUT"
