@@ -393,12 +393,12 @@ def _http_failure_workflow(
 
 def _credential_workflow() -> Dict[str, Any]:
     """Create one real 401 without storing a credential or credential value."""
-    # httpbin validates these fixed, public test credentials. Sending no Authorization
+    # httpbingo validates these fixed, public test credentials. Sending no Authorization
     # header makes this an actual HTTP 401, rather than a fabricated node error.
     return _http_failure_workflow(
         "credential-failure",
         "Observed credential rejection",
-        "https://httpbin.org/basic-auth/pisama/dogfood",
+        "https://httpbingo.org/basic-auth/pisama/dogfood",
     )
 
 
@@ -590,7 +590,7 @@ def _capture_core_workflows(credential: Dict[str, str]) -> Dict[str, Dict[str, A
         "timeout": lambda: _http_failure_workflow(
             "timeout",
             "Observed timeout",
-            "https://httpbin.org/delay/5",
+            "https://httpbingo.org/delay/5",
             {"timeout": 500},
         ),
         "data_contract": _data_contract_workflow,
