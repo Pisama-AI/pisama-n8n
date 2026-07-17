@@ -24,6 +24,9 @@ from pisama_n8n_engine.detect.n8n_utils import is_ai_node_type
 from pisama_n8n_engine.detect.truncation import extract_stop_reason
 
 
+_NATIVE_AI_AGENT_TYPE = "@n8n/n8n-nodes-langchain.agent"
+
+
 def _normalized(execution_data: Any) -> Dict[str, Any]:
     normalized = normalize_execution(execution_data)
     if normalized is None:
@@ -200,6 +203,102 @@ def _agent_facts(output_data: Any) -> Dict[str, Any]:
     }
 
 
+def _native_agent_facts(node_type: str, output_data: Any) -> Dict[str, Any]:
+    """Read the observed native AI Agent action shape without exposing inputs.
+
+    n8n 1.91 records native agent actions in the Agent node's ``main`` output as
+    ``json.intermediateSteps``. The paired tool run has no runtime source link, so
+    the detector needs only the tool name, whether n8n supplied a tool-call ID, and
+    the Agent's recorded observation for a strict error correlation. Raw tool input,
+    tool-call IDs, and model output are deliberately not copied into metadata.
+    """
+    if node_type != _NATIVE_AI_AGENT_TYPE or not isinstance(output_data, list):
+        return {"native_agent_actions": []}
+    actions: List[Dict[str, Any]] = []
+    for item in output_data:
+        payload = item.get("json") if isinstance(item, dict) else None
+        steps = payload.get("intermediateSteps") if isinstance(payload, dict) else None
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            action = step.get("action") if isinstance(step, dict) else None
+            observation = step.get("observation") if isinstance(step, dict) else None
+            tool = action.get("tool") if isinstance(action, dict) else None
+            tool_call_id = (
+                action.get("toolCallId") if isinstance(action, dict) else None
+            )
+            actions.append(
+                {
+                    "tool": tool if isinstance(tool, str) else None,
+                    "has_tool_call_id": bool(
+                        isinstance(tool_call_id, str) and tool_call_id.strip()
+                    ),
+                    # This stays internal to the parser/detector correlation. The
+                    # detector evidence below never emits observations or tool input.
+                    "observation": observation
+                    if isinstance(observation, str) and observation
+                    else None,
+                }
+            )
+    return {"native_agent_actions": actions}
+
+
+def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Dict[str, List[str]]]:
+    """Return direct native-Agent tool/model edges from the workflow snapshot.
+
+    Native n8n nested runs currently carry ``source: [null]``. This records only a
+    literal direct ``ai_tool`` or ``ai_languageModel`` workflow edge, never a graph
+    path. Keeping both directions lets the runtime detector reject shared tool/model
+    nodes rather than attributing an error across an ambiguous agent graph.
+    """
+    native_agents = {
+        str(node["name"])
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict)
+        and node.get("name")
+        and node.get("type") == _NATIVE_AI_AGENT_TYPE
+    }
+    agent_edges: Dict[str, Dict[str, List[str]]] = {
+        name: {"tool_nodes": [], "model_nodes": []} for name in native_agents
+    }
+    source_edges: Dict[str, Dict[str, List[str]]] = {}
+    connections = workflow.get("connections") or {}
+    if not isinstance(connections, dict):
+        return {"agent_edges": agent_edges, "source_edges": source_edges}
+
+    for source, outputs in connections.items():
+        if not isinstance(source, str) or not isinstance(outputs, dict):
+            continue
+        for connection_type, agent_key, source_key in (
+            ("ai_tool", "tool_nodes", "tool_agents"),
+            ("ai_languageModel", "model_nodes", "model_agents"),
+        ):
+            branches = outputs.get(connection_type)
+            if not isinstance(branches, list):
+                continue
+            for branch in branches:
+                if not isinstance(branch, list):
+                    continue
+                for edge in branch:
+                    if (
+                        not isinstance(edge, dict)
+                        or edge.get("type") != connection_type
+                    ):
+                        continue
+                    target = edge.get("node")
+                    if not isinstance(target, str) or target not in native_agents:
+                        continue
+                    targets = source_edges.setdefault(
+                        source, {"tool_agents": [], "model_agents": []}
+                    )[source_key]
+                    if target not in targets:
+                        targets.append(target)
+                    sources = agent_edges[target][agent_key]
+                    if source not in sources:
+                        sources.append(source)
+    return {"agent_edges": agent_edges, "source_edges": source_edges}
+
+
 def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     """Build the per-node runtime turns from a captured execution's runData."""
     execution_data = _normalized(execution_data)
@@ -212,6 +311,7 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     node_defs = {
         n.get("name"): n for n in wf_nodes if isinstance(n, dict) and n.get("name")
     }
+    native_topology = _native_agent_topology(workflow)
 
     started_at = None
     started_at_str = execution_data.get("startedAt")
@@ -294,9 +394,7 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
             )
             content_parts.append(f"ERROR: {msg}")
         elif swallowed:
-            content_parts.append(
-                f"ERROR (continue-on-fail, swallowed): {swallowed}"
-            )
+            content_parts.append(f"ERROR (continue-on-fail, swallowed): {swallowed}")
 
         start_time = run.get("startTime")
         if start_time:
@@ -307,7 +405,16 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
         else:
             timestamp = base_time + timedelta(milliseconds=seq * 1000)
 
-        agent_facts = _agent_facts(output_data)
+        agent_facts = {
+            **_agent_facts(output_data),
+            **_native_agent_facts(node_type, output_data),
+        }
+        agent_edges = native_topology["agent_edges"].get(
+            node_name, {"tool_nodes": [], "model_nodes": []}
+        )
+        source_edges = native_topology["source_edges"].get(
+            node_name, {"tool_agents": [], "model_agents": []}
+        )
         turns.append(
             TurnSnapshot(
                 turn_number=seq,
@@ -340,6 +447,13 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
                     "execution_order_tier": order[0],
                     "execution_index": order[1] if order[0] == 0 else None,
                     "source_nodes": _source_nodes(run),
+                    # Native Agent runs lack nested runtime source links. Preserve
+                    # only literal workflow edges so the P3 detector can require an
+                    # unambiguous one-tool / one-model topology.
+                    "native_agent_tool_nodes": agent_edges["tool_nodes"],
+                    "native_agent_model_nodes": agent_edges["model_nodes"],
+                    "native_ai_tool_target_agents": source_edges["tool_agents"],
+                    "native_ai_model_target_agents": source_edges["model_agents"],
                     **agent_facts,
                 },
             )

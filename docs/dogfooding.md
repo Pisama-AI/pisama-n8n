@@ -10,7 +10,7 @@ in this repository own disposable internal data only.
 | --- | --- | --- |
 | Docker SQLite | `deploy/docker-compose.dogfood.yml` | Default self-host n8n install, webhook execution, and API polling. |
 | Docker Postgres | Base compose plus `docker-compose.dogfood.postgres.yml` | n8n backed by Postgres, including restart and data persistence. |
-| Version sweep | Set `N8N_VERSION` before startup | Compatibility with each explicitly supported n8n release. |
+| Version sweep | Set `N8N_VERSION` before startup | Compatibility evidence for explicitly supported releases, currently `1.70.0` and `1.91.3`. |
 | n8n Cloud | A dedicated non-production Cloud project | API polling and webhook ingestion over the hosted API. Set `PISAMA_N8N_PROJECT_ID` so polling never reads another project. |
 
 Start a disposable SQLite n8n target:
@@ -32,6 +32,20 @@ docker compose -p pisama-n8n-dogfood -f deploy/docker-compose.dogfood.yml \
 For Postgres, add `-f deploy/docker-compose.dogfood.postgres.yml`. Use a distinct
 Compose project name for every lane so volumes, ports, and upgrade evidence cannot
 cross-contaminate.
+
+Keep a separate Pisama server sidecar for each retained lane. Never point a shared
+server database at two n8n targets. The sidecar gets its own `dogfood_pisama_data`
+volume, a unique bearer key, and a unique n8n API key. Bind the local server port to
+`127.0.0.1` and start it with `--no-deps` so the n8n target is neither recreated nor
+restarted. n8n `1.91.3` keys must use only Workflow and execution read scopes. n8n
+`1.70.0` has no scoped-key endpoint, so its short-lived legacy key is safe only inside
+the dedicated disposable lane.
+
+The intended sustained matrix is a current SQLite lane, a current Postgres lane, a
+`1.70.0` SQLite lane, and the dedicated Cloud lane. The upgrade/restore harness is an
+ephemeral scheduled gate rather than a permanent polling target: it proves a real
+persisted-database transition without mixing pre-upgrade evidence into a long-lived
+corpus.
 
 ## Cloud lane
 
@@ -183,8 +197,31 @@ later source-linked Claude response. Tool-recovery findings fire only when the f
 result has no such later response. Output-validation findings require the direct Claude
 response to feed a Code node whose recorded `JSON.parse` error matches n8n's actual
 invalid-JSON shape. Missing order, missing IDs, mismatched IDs, ordinary loops, and
-successful tool calls are inconclusive. Native `@n8n/n8n-nodes-langchain.agent`
-telemetry has not yet been captured and is not covered by these claims.
+successful tool calls are inconclusive.
+
+`n8n_native_agent_tool_recovery` is enabled separately for the native
+`@n8n/n8n-nodes-langchain.agent` protocol captured on n8n `1.91.3`. It is not a generic
+native-Agent detector. It requires exactly one Agent run, one `intermediateSteps`
+action with a tool-call ID, one direct `ai_tool` workflow edge, one direct
+`ai_languageModel` edge, one failed tool run, one model run before that failure, and
+the exact tool error in the Agent's recorded observation. It fires only when no later
+run of that same direct model node exists. A recovered tool error is also excluded from
+the broad error detector only under this exact contract. Multiple agents, tools,
+models, repeated runs, missing indexes, shared nodes, and native output parsers are
+inconclusive. Run the live corpus refresh with:
+
+```bash
+export ANTHROPIC_API_KEY='your-dogfood-only-key'
+export PISAMA_N8N_API_KEY='your-disposable-n8n-key'
+export PISAMA_API_KEY='your-local-pisama-key'
+python scripts/capture_native_agent_evidence.py
+```
+
+The harness creates a real successful tool call, a real recovered tool error, and a
+real unhandled tool error using native n8n nodes. It validates their retained n8n
+execution shapes and the detector's positive and negative controls, then deletes its
+temporary workflow and credential. The raw executions remain in n8n and Pisama's
+internal corpus.
 
 The catalog separately labels `cycle:F11` as static workflow-configuration evidence.
 The current n8n orchestrator does not yet feed runtime turns to its cycle detector, so
@@ -260,10 +297,13 @@ current release decision.
   controlled execution was ingested, deduplication returned zero new executions on the
   next sync, and the error detector fired `F14`. The local Cloud-lane database was reset
   after an earlier unscoped startup, then verified to contain only the dedicated workflow.
-- Cloud apply and rollback mechanics were exercised against that controlled workflow. A
-  code-node repair applied and the workflow was restored; a deliberate post-apply human
-  edit was rejected as stale before rollback. The next Cloud execution could not be
-  observed because this Cloud instance reported its execution quota was exhausted.
+- The first Cloud apply exercise exhausted its execution quota before a post-repair run
+  could be observed. A separate Fly deployment now polls the dedicated Cloud project
+  with its own encrypted volume, webhook secret, n8n key, and revocable dogfood-only
+  `PISAMA_CLOUD_KEY`. It detected a real controlled Code-node failure, proposed a
+  reviewable one-node patch, applied it after review, ingested the next successful Cloud
+  execution, and rolled the workflow back exactly to the original failure. One success
+  is retained as observation evidence only; it does not claim prevention.
 - A fresh SQLite n8n `1.70.0` volume with an active controlled-failure workflow was
   backed up, started successfully on `1.91.3`, then restored from that pre-upgrade backup
   into a fresh `1.91.3` start. The workflow remained active and its webhook returned the
@@ -328,7 +368,14 @@ current release decision.
   polling and updated both `observing` cases. Pisama correctly refused to label a single
   success as prevention, then restored the controls in reverse order and retained their
   rolled-back audit records.
-- No real LLM token-limit or AI-agent tool/output-validation execution has yet been
-  captured in this lane. Truncation remains enabled but cannot pass its P0 gate without
-  a real capture; the unproven AI-agent modes are withheld rather than presented as
-  validated coverage.
+- At the earlier `468ccdb` exercise, no real LLM token-limit or AI-agent
+  tool/output-validation execution had been captured in this lane. Truncation still
+  cannot pass its P0 gate without a real capture; any unproven AI-agent mode remains
+  withheld rather than presented as validated coverage.
+- Native n8n AI Agent telemetry has now been captured separately from native Agent,
+  Anthropic Chat Model, and Code Tool nodes. The three real executions retained a
+  healthy tool call, a failed tool followed by a later model recovery, and a failed tool
+  without a later model call. The new narrow native detector is positive only on the
+  last shape. The generic error detector stays silent on the recovered control under the
+  same exact contract. Native output-parser, multi-tool, and multi-Agent protocols
+  remain unsupported rather than generalized from these three captures.

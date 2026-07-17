@@ -106,6 +106,12 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
         "agent_diagnostics",
         "n8n_agent_output_validation",
     ),
+    EvidenceTarget(
+        "P3",
+        "Native AI Agent one-tool recovery",
+        "agent_diagnostics",
+        "n8n_native_agent_tool_recovery",
+    ),
 )
 
 

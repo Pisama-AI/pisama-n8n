@@ -8,10 +8,16 @@ tool arguments, credential values, or invented provider traces.
 
 from pisama_n8n_engine.detect.base import TurnSnapshot
 from pisama_n8n_engine.detect.runtime import N8NAgentDiagnosticsDetector
+from pisama_n8n_engine.orchestrator import analyze
+from pisama_n8n_engine.trace.execution import execution_to_turns_and_metadata
+
+from conftest import execution_doc, make_node
 
 
 def _turn(number, name, **metadata):
-    return TurnSnapshot(number, "node", name, "real n8n capture contract", turn_metadata=metadata)
+    return TurnSnapshot(
+        number, "node", name, "real n8n capture contract", turn_metadata=metadata
+    )
 
 
 def _tool_use(index=1, tool_id="toolu-real"):
@@ -35,7 +41,9 @@ def _failed_result(index=3, tool_id="toolu-real"):
         execution_index=index,
         is_claude_message=False,
         tool_use_ids=[],
-        tool_results=[{"type": "tool_result", "tool_use_id": tool_id, "is_error": True}],
+        tool_results=[
+            {"type": "tool_result", "tool_use_id": tool_id, "is_error": True}
+        ],
         source_nodes=["Claude tool request"],
     )
 
@@ -85,7 +93,9 @@ def test_real_recovery_is_a_negative_control():
 
 
 def test_mismatched_tool_id_is_not_attributed():
-    result = N8NAgentDiagnosticsDetector().detect([_tool_use(), _failed_result(tool_id="other")])
+    result = N8NAgentDiagnosticsDetector().detect(
+        [_tool_use(), _failed_result(tool_id="other")]
+    )
     assert result.detected is False
 
 
@@ -141,3 +151,256 @@ def test_real_json_parse_validation_fault_is_reported():
     result = N8NAgentDiagnosticsDetector().detect([response, validator])
     assert result.detected is True
     assert result.failure_mode == "n8n_agent_output_validation"
+
+
+# These are secret-free reductions of local n8n 1.91.3 executions 90 (healthy tool),
+# 91 (tool failure with a later native model recovery), and 92 (tool failure without
+# a later model turn). They keep the actual native node types, connection labels,
+# execution ordering, ``source: [null]`` child-run shape, and Agent intermediate step.
+_NATIVE_AGENT = "@n8n/n8n-nodes-langchain.agent"
+_NATIVE_MODEL = "@n8n/n8n-nodes-langchain.lmChatAnthropic"
+_NATIVE_TOOL = "@n8n/n8n-nodes-langchain.toolCode"
+_NATIVE_ERROR = "Pisama native controlled tool failure for native-tool-unhandled"
+
+
+def _native_run(index, data, status="success", error=None, source=None):
+    run = {
+        "executionIndex": index,
+        "executionStatus": status,
+        "data": data,
+        "source": [None] if source is None else source,
+    }
+    if error is not None:
+        run["error"] = {"message": error}
+    return run
+
+
+def _native_execution(
+    *,
+    failed_tool=True,
+    model_indexes=(2,),
+    action_tool="status_lookup",
+    observation=None,
+    connections=None,
+    extra_runs=None,
+):
+    """Return a reduced real native-Agent execution shape with no provider content."""
+    observation = observation or f'There was an error: "{_NATIVE_ERROR}"'
+    run_data = {
+        "Native agent webhook": [
+            _native_run(0, {"main": [[{"json": {"ok": True}}]]}, source=[])
+        ],
+        "Native AI Agent": [
+            _native_run(
+                1,
+                {
+                    "main": [
+                        [
+                            {
+                                "json": {
+                                    "intermediateSteps": [
+                                        {
+                                            "action": {
+                                                "tool": action_tool,
+                                                "toolCallId": "redacted-real-tool-call-id",
+                                                "toolInput": {"redacted": True},
+                                            },
+                                            "observation": observation,
+                                        }
+                                    ],
+                                    "output": "redacted",
+                                }
+                            }
+                        ]
+                    ]
+                },
+                source=[{"previousNode": "Native agent webhook"}],
+            )
+        ],
+        "Native Anthropic Chat Model": [
+            _native_run(index, {"ai_languageModel": [[{"json": {}}]]})
+            for index in model_indexes
+        ],
+        "status_lookup": [
+            _native_run(
+                3,
+                {"ai_tool": [[{"json": {"query": "redacted"}}]]},
+                status="error" if failed_tool else "success",
+                error=_NATIVE_ERROR if failed_tool else None,
+            )
+        ],
+    }
+    if extra_runs:
+        run_data.update(extra_runs)
+    nodes = [
+        make_node("Native agent webhook", "n8n-nodes-base.webhook"),
+        make_node("Native AI Agent", _NATIVE_AGENT),
+        make_node("Native Anthropic Chat Model", _NATIVE_MODEL),
+        make_node("status_lookup", _NATIVE_TOOL),
+    ]
+    document = execution_doc(
+        run_data,
+        nodes=nodes,
+        status="success",
+        finished=True,
+    )
+    document["workflowData"]["connections"] = connections or {
+        "Native agent webhook": {
+            "main": [[{"node": "Native AI Agent", "type": "main", "index": 0}]]
+        },
+        "Native Anthropic Chat Model": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "Native AI Agent",
+                        "type": "ai_languageModel",
+                        "index": 0,
+                    }
+                ]
+            ]
+        },
+        "status_lookup": {
+            "ai_tool": [
+                [
+                    {
+                        "node": "Native AI Agent",
+                        "type": "ai_tool",
+                        "index": 0,
+                    }
+                ]
+            ]
+        },
+    }
+    return document
+
+
+def _native_result(document):
+    turns, _ = execution_to_turns_and_metadata(document)
+    return N8NAgentDiagnosticsDetector().detect(turns), turns
+
+
+def test_native_agent_unhandled_tool_contract_is_reported():
+    result, turns = _native_result(_native_execution())
+    assert result.detected is True
+    assert result.failure_mode == "n8n_native_agent_tool_recovery"
+    assert result.confidence == 0.90
+    assert result.evidence == {
+        "agent_node": "Native AI Agent",
+        "agent_execution_index": 1,
+        "tool_node": "status_lookup",
+        "tool_execution_index": 3,
+        "model_node": "Native Anthropic Chat Model",
+        "model_execution_index": 2,
+    }
+    assert _NATIVE_ERROR not in str(result.evidence)
+    assert "toolInput" not in str(result.evidence)
+    agent = next(turn for turn in turns if turn.participant_id == "Native AI Agent")
+    tool = next(turn for turn in turns if turn.participant_id == "status_lookup")
+    model = next(
+        turn for turn in turns if turn.participant_id == "Native Anthropic Chat Model"
+    )
+    assert agent.turn_metadata["native_agent_tool_nodes"] == ["status_lookup"]
+    assert agent.turn_metadata["native_agent_model_nodes"] == [
+        "Native Anthropic Chat Model"
+    ]
+    assert tool.turn_metadata["native_ai_tool_target_agents"] == ["Native AI Agent"]
+    assert model.turn_metadata["native_ai_model_target_agents"] == ["Native AI Agent"]
+    assert tool.turn_metadata["source_nodes"] == []
+    assert model.turn_metadata["source_nodes"] == []
+
+
+def test_native_recovery_and_success_are_negative_controls():
+    recovered, _ = _native_result(_native_execution(model_indexes=(2, 4)))
+    successful, _ = _native_result(
+        _native_execution(failed_tool=False, model_indexes=(2, 4))
+    )
+    assert recovered.detected is False
+    assert successful.detected is False
+
+
+def test_native_recovered_tool_error_is_not_a_generic_error_incident():
+    turns, metadata = execution_to_turns_and_metadata(
+        _native_execution(model_indexes=(2, 4))
+    )
+    report = analyze(turns=turns, metadata=metadata)
+    fired = {detection.detector for detection in report.fired}
+    assert "error" not in fired
+    assert "agent_diagnostics" not in fired
+
+    unhandled_turns, unhandled_metadata = execution_to_turns_and_metadata(
+        _native_execution()
+    )
+    unhandled = analyze(turns=unhandled_turns, metadata=unhandled_metadata)
+    assert {detection.detector for detection in unhandled.fired} >= {
+        "error",
+        "agent_diagnostics",
+    }
+
+
+def test_native_agent_contract_rejects_ambiguous_or_incomplete_telemetry():
+    missing_order = _native_execution()
+    missing_order["data"]["resultData"]["runData"]["status_lookup"][0].pop(
+        "executionIndex"
+    )
+    mismatched_tool = _native_execution(action_tool="other_tool")
+    mismatched_edge = _native_execution(
+        connections={
+            "Native Anthropic Chat Model": {
+                "ai_languageModel": [
+                    [
+                        {
+                            "node": "Native AI Agent",
+                            "type": "ai_languageModel",
+                            "index": 0,
+                        }
+                    ]
+                ]
+            },
+            "status_lookup": {
+                "main": [[{"node": "Native AI Agent", "type": "main", "index": 0}]]
+            },
+        }
+    )
+    missing_error_observation = _native_execution(observation="tool response redacted")
+    repeated_tool = _native_execution()
+    repeated_tool["data"]["resultData"]["runData"]["status_lookup"].append(
+        _native_run(
+            5,
+            {"ai_tool": [[{"json": {"query": "redacted"}}]]},
+            status="error",
+            error=_NATIVE_ERROR,
+        )
+    )
+    for document in (
+        missing_order,
+        mismatched_tool,
+        mismatched_edge,
+        missing_error_observation,
+        repeated_tool,
+    ):
+        result, _ = _native_result(document)
+        assert result.detected is False
+
+
+def test_native_agent_contract_rejects_unrelated_model_or_agent_loop():
+    unrelated_model = _native_execution(
+        extra_runs={
+            "Unrelated Native Model": [
+                _native_run(4, {"ai_languageModel": [[{"json": {}}]]})
+            ]
+        }
+    )
+    unrelated_model["workflowData"]["nodes"].append(
+        make_node("Unrelated Native Model", _NATIVE_MODEL)
+    )
+    repeated_agent = _native_execution()
+    repeated_agent["data"]["resultData"]["runData"]["Native AI Agent"].append(
+        _native_run(
+            5,
+            {"main": [[{"json": {"intermediateSteps": []}}]]},
+            source=[{"previousNode": "Native agent webhook"}],
+        )
+    )
+    for document in (unrelated_model, repeated_agent):
+        result, _ = _native_result(document)
+        assert result.detected is False

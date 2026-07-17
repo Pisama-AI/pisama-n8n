@@ -40,6 +40,8 @@ _PROVIDER_MARKERS = (
     "gateway timeout",
 )
 _N8N_ABORTED_CONNECTION = "connection was aborted"
+_NATIVE_AI_AGENT_TYPE = "@n8n/n8n-nodes-langchain.agent"
+_NATIVE_LANGUAGE_MODEL_PREFIX = "@n8n/n8n-nodes-langchain.lm"
 
 
 def recorded_timeout(turn: TurnSnapshot) -> bool:
@@ -423,22 +425,177 @@ def _json_validation_error(turn: TurnSnapshot) -> bool:
         return False
     code = str((metadata.get("parameters") or {}).get("jsCode") or "")
     message = str(metadata.get("error_message") or "").lower()
-    return "json.parse" in code.lower() and "unexpected token" in message and "valid json" in message
+    return (
+        "json.parse" in code.lower()
+        and "unexpected token" in message
+        and "valid json" in message
+    )
+
+
+def _strongly_ordered(turn: TurnSnapshot) -> bool:
+    """Whether n8n retained the execution order required for causal claims."""
+    metadata = turn.turn_metadata or {}
+    return metadata.get("execution_order_tier") == 0 and isinstance(
+        metadata.get("execution_index"), int
+    )
+
+
+def _single_static_node(metadata: Dict[str, Any], key: str) -> Optional[str]:
+    """Return one literal workflow-edge peer, otherwise mark it ambiguous."""
+    values = metadata.get(key)
+    if (
+        isinstance(values, list)
+        and len(values) == 1
+        and isinstance(values[0], str)
+        and values[0]
+    ):
+        return values[0]
+    return None
+
+
+def _targets_only_agent(metadata: Dict[str, Any], key: str, agent: str) -> bool:
+    """Require a tool/model node's direct AI edge to be exclusive to one Agent."""
+    targets = metadata.get(key)
+    return isinstance(targets, list) and len(targets) == 1 and targets[0] == agent
+
+
+def _native_language_model(turn: TurnSnapshot) -> bool:
+    node_type = str((turn.turn_metadata or {}).get("node_type") or "")
+    return node_type.startswith(_NATIVE_LANGUAGE_MODEL_PREFIX)
+
+
+def _native_tool_failure_context(
+    turns: List[TurnSnapshot],
+) -> Optional[Dict[str, Any]]:
+    """Return the narrow native-Agent failure contract, or ``None`` if ambiguous.
+
+    Native Agent child runs in observed n8n 1.91 telemetry contain no source links.
+    A claim is therefore permitted only for one Agent, one action, one direct tool,
+    and one direct language model. The agent observation must contain the precise
+    error n8n recorded for that tool. Anything more complex is intentionally
+    inconclusive until n8n exposes an authoritative runtime correlation ID.
+    """
+    native_agents = [
+        turn
+        for turn in turns
+        if (turn.turn_metadata or {}).get("node_type") == _NATIVE_AI_AGENT_TYPE
+    ]
+    if len(native_agents) != 1:
+        return None
+    agent = native_agents[0]
+    agent_metadata = agent.turn_metadata or {}
+    if not _strongly_ordered(agent):
+        return None
+
+    actions = agent_metadata.get("native_agent_actions")
+    if not isinstance(actions, list) or len(actions) != 1:
+        return None
+    action = actions[0]
+    if not isinstance(action, dict) or not action.get("has_tool_call_id"):
+        return None
+    tool_name = action.get("tool")
+    observation = action.get("observation")
+    if (
+        not isinstance(tool_name, str)
+        or not tool_name
+        or not isinstance(observation, str)
+    ):
+        return None
+
+    direct_tool = _single_static_node(agent_metadata, "native_agent_tool_nodes")
+    direct_model = _single_static_node(agent_metadata, "native_agent_model_nodes")
+    if tool_name != direct_tool or not direct_model:
+        return None
+
+    tool_turns = [turn for turn in turns if turn.participant_id == tool_name]
+    model_turns = [turn for turn in turns if turn.participant_id == direct_model]
+    native_model_turns = [turn for turn in turns if _native_language_model(turn)]
+    if (
+        len(tool_turns) != 1
+        or not model_turns
+        or len(native_model_turns) != len(model_turns)
+        or not all(_strongly_ordered(turn) for turn in tool_turns + model_turns)
+    ):
+        return None
+
+    tool_turn = tool_turns[0]
+    tool_metadata = tool_turn.turn_metadata or {}
+    if not _targets_only_agent(
+        tool_metadata, "native_ai_tool_target_agents", agent.participant_id
+    ):
+        return None
+    if not all(
+        _targets_only_agent(
+            turn.turn_metadata or {},
+            "native_ai_model_target_agents",
+            agent.participant_id,
+        )
+        for turn in model_turns
+    ):
+        return None
+
+    error = tool_metadata.get("error_message")
+    if (
+        not tool_metadata.get("has_error")
+        or not isinstance(error, str)
+        or not error
+        or error not in observation
+    ):
+        return None
+
+    tool_index = tool_metadata["execution_index"]
+    initial_models = [
+        turn
+        for turn in model_turns
+        if turn.turn_metadata["execution_index"] < tool_index
+    ]
+    if len(initial_models) != 1:
+        return None
+    return {
+        "agent": agent,
+        "tool": tool_turn,
+        "initial_model": initial_models[0],
+        "model_turns": model_turns,
+    }
+
+
+def recovered_native_agent_tool_turns(
+    turns: List[TurnSnapshot],
+) -> List[TurnSnapshot]:
+    """Return the one native tool error n8n proved a later model turn handled.
+
+    This is intentionally narrower than ordinary ``continueOnFail`` handling. It
+    suppresses the broad error detector only when the same strict native-Agent
+    contract proves a later direct model invocation after the tool error.
+    """
+    context = _native_tool_failure_context(turns)
+    if context is None:
+        return []
+    tool = context["tool"]
+    tool_index = tool.turn_metadata["execution_index"]
+    if any(
+        turn.turn_metadata["execution_index"] > tool_index
+        for turn in context["model_turns"]
+    ):
+        return [tool]
+    return []
 
 
 class N8NAgentDiagnosticsDetector(TurnAwareDetector):
-    """Detect unhandled Claude Messages tool failures and output validation faults.
+    """Detect narrow Claude Messages and native n8n AI Agent failure contracts.
 
-    This intentionally covers the observed n8n HTTP Request + Claude Messages protocol,
-    not n8n's native AI Agent nodes. Every finding is source-linked and ordered by n8n's
-    ``executionIndex``; incomplete or unordered telemetry is inconclusive.
+    Claude Messages findings require its observed runtime source links. Native AI Agent
+    findings use a separate, stricter one-Agent/one-tool/one-model contract because
+    observed native child runs have no source links. Missing or more complex telemetry
+    is intentionally inconclusive.
     """
 
     name = "N8NAgentDiagnosticsDetector"
-    version = "1.0"
+    version = "1.1"
     supported_failure_modes = [
         "n8n_agent_tool_recovery",
         "n8n_agent_output_validation",
+        "n8n_native_agent_tool_recovery",
     ]
 
     def detect(
@@ -453,9 +610,12 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
         recovery = self._unhandled_tool_failure(ordered)
         if recovery is not None:
             return recovery
+        native_recovery = self._native_unhandled_tool_failure(turns)
+        if native_recovery is not None:
+            return native_recovery
         return _clear(
             self.name,
-            "No source-linked Claude Messages tool failure or JSON validation fault was recorded.",
+            "No evidence-backed Claude Messages or native AI Agent failure contract was recorded.",
         )
 
     def _output_validation(
@@ -491,7 +651,9 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
                 affected_turns=[predecessor.turn_number, turn.turn_number],
                 evidence={
                     "response_node": predecessor.participant_id,
-                    "response_execution_index": predecessor.turn_metadata["execution_index"],
+                    "response_execution_index": predecessor.turn_metadata[
+                        "execution_index"
+                    ],
                     "validator_node": turn.participant_id,
                     "validator_execution_index": turn.turn_metadata["execution_index"],
                 },
@@ -524,15 +686,63 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
                 affected_turns=[tool_turn.turn_number, result_turn.turn_number],
                 evidence={
                     "tool_request_node": tool_turn.participant_id,
-                    "tool_request_execution_index": tool_turn.turn_metadata["execution_index"],
+                    "tool_request_execution_index": tool_turn.turn_metadata[
+                        "execution_index"
+                    ],
                     "failed_result_node": result_turn.participant_id,
-                    "failed_result_execution_index": result_turn.turn_metadata["execution_index"],
+                    "failed_result_execution_index": result_turn.turn_metadata[
+                        "execution_index"
+                    ],
                 },
                 suggested_fix="Pass the recorded failed tool result back to the Claude Messages call and add a bounded fallback for repeated tool failures.",
                 detector_name=self.name,
                 detector_version=self.version,
             )
         return None
+
+    def _native_unhandled_tool_failure(
+        self, turns: List[TurnSnapshot]
+    ) -> Optional[TurnAwareDetectionResult]:
+        """Report one native tool error only when no later direct model turn exists."""
+        context = _native_tool_failure_context(turns)
+        if context is None:
+            return None
+        model_turns = context["model_turns"]
+        if len(model_turns) != 1:
+            # The same direct model was invoked after the failed tool. That is the
+            # real n8n recovery control, not evidence of an unhandled failure.
+            return None
+        agent = context["agent"]
+        tool = context["tool"]
+        initial_model = context["initial_model"]
+        return TurnAwareDetectionResult(
+            detected=True,
+            severity=TurnAwareSeverity.MODERATE,
+            confidence=0.90,
+            failure_mode="n8n_native_agent_tool_recovery",
+            explanation=(
+                "n8n recorded a native AI Agent tool error in the Agent observation, "
+                "but no later direct language-model turn was retained for recovery."
+            ),
+            affected_turns=sorted(
+                [agent.turn_number, initial_model.turn_number, tool.turn_number]
+            ),
+            evidence={
+                "agent_node": agent.participant_id,
+                "agent_execution_index": agent.turn_metadata["execution_index"],
+                "tool_node": tool.participant_id,
+                "tool_execution_index": tool.turn_metadata["execution_index"],
+                "model_node": initial_model.participant_id,
+                "model_execution_index": initial_model.turn_metadata["execution_index"],
+            },
+            suggested_fix=(
+                "Route native Agent tool errors through a bounded recovery turn or "
+                "explicit fallback, then verify the next real execution."
+            ),
+            detector_name=self.name,
+            detector_version=self.version,
+        )
+
 
 class N8NRetryRecoveryDetector(TurnAwareDetector):
     """Flag a retry-enabled failure when n8n cannot prove its retry outcome.
@@ -577,9 +787,7 @@ class N8NRetryRecoveryDetector(TurnAwareDetector):
                 self.name,
                 "No recorded retry-enabled node failure requires a retry-evidence check.",
             )
-        if _retry_outcome_is_ambiguous(
-            retry_enabled_failures, conversation_metadata
-        ):
+        if _retry_outcome_is_ambiguous(retry_enabled_failures, conversation_metadata):
             return _clear(
                 self.name,
                 "n8n recorded repeated runs or a workflow retry without an authoritative link to this node's retry budget; exhausted-retry detection is withheld.",

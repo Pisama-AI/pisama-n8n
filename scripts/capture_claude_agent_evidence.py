@@ -47,7 +47,10 @@ def _n8n(method: str, path: str, body: Any = None) -> Any:
     return _request(
         method,
         f"{N8N_URL}{path}",
-        {"X-N8N-API-KEY": _required("PISAMA_N8N_API_KEY"), "Content-Type": "application/json"},
+        {
+            "X-N8N-API-KEY": _required("PISAMA_N8N_API_KEY"),
+            "Content-Type": "application/json",
+        },
         body,
     )
 
@@ -112,7 +115,11 @@ def _http_node(
 
 def _webhook(name: str, path: str) -> Dict[str, Any]:
     return {
-        "parameters": {"path": path, "httpMethod": "POST", "responseMode": "onReceived"},
+        "parameters": {
+            "path": path,
+            "httpMethod": "POST",
+            "responseMode": "onReceived",
+        },
         "id": "webhook",
         "name": name,
         "type": "n8n-nodes-base.webhook",
@@ -174,14 +181,25 @@ def _recovery_workflow(
         "const message = failure.message || failure.description || JSON.stringify(failure);"
         "const tool_result = {type:'tool_result',tool_use_id:call.id,content:message,is_error:true};"
         "return [{json:{tool_result,recovery_request:{model:'claude-haiku-4-5-20251001',max_tokens:128,tools:"
-        "[{name:'" + tool_name + "',description:'Controlled reliability tool',input_schema:{type:'object',properties:{order_id:{type:'string'}},required:['order_id']}}],"
+        "[{name:'"
+        + tool_name
+        + "',description:'Controlled reliability tool',input_schema:{type:'object',properties:{order_id:{type:'string'}},required:['order_id']}}],"
         "messages:[{role:'user',content:'Use the tool for this reliability test.'},{role:'assistant',content:initial.content},{role:'user',content:[tool_result]}]}}}];"
     )
     nodes = [
         _webhook("Tool recovery webhook", path),
-        _http_node("agent", "Claude tool request", _tool_request_body(tool_name, order_id), [220, 0], credential),
+        _http_node(
+            "agent",
+            "Claude tool request",
+            _tool_request_body(tool_name, order_id),
+            [220, 0],
+            credential,
+        ),
         {
-            "parameters": {"url": tool_url, "options": {"timeout": timeout} if timeout else {}},
+            "parameters": {
+                "url": tool_url,
+                "options": {"timeout": timeout} if timeout else {},
+            },
             "id": "tool",
             "name": "Real tool HTTP failure",
             "type": "n8n-nodes-base.httpRequest",
@@ -198,7 +216,15 @@ def _recovery_workflow(
             "position": [660, 0],
         },
         *(
-            [_http_node("recovery", "Claude recovery response", "={{$json.recovery_request}}", [880, 0], credential)]
+            [
+                _http_node(
+                    "recovery",
+                    "Claude recovery response",
+                    "={{$json.recovery_request}}",
+                    [880, 0],
+                    credential,
+                )
+            ]
             if recover
             else []
         ),
@@ -223,16 +249,24 @@ def _recovery_workflow(
 
 def _malformed_workflow(credential: Dict[str, str]) -> Dict[str, Any]:
     path = f"pisama-claude-malformed-output-{int(time.time() * 1000)}"
-    prompt = "Reply with exactly this plain sentence and no JSON: the order cannot be found"
+    prompt = (
+        "Reply with exactly this plain sentence and no JSON: the order cannot be found"
+    )
     request_body = "=" + json.dumps(
-        {"model": MODEL, "max_tokens": 64, "messages": [{"role": "user", "content": prompt}]},
+        {
+            "model": MODEL,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": prompt}],
+        },
         separators=(",", ":"),
     )
     nodes = [
         _webhook("Malformed output webhook", path),
         _http_node("agent", "Claude prose output", request_body, [220, 0], credential),
         {
-            "parameters": {"jsCode": "return [{json: JSON.parse($json.content[0].text)}];"},
+            "parameters": {
+                "jsCode": "return [{json: JSON.parse($json.content[0].text)}];"
+            },
             "id": "validate",
             "name": "Validate Claude JSON",
             "type": "n8n-nodes-base.code",
@@ -258,19 +292,27 @@ def _run_workflow(workflow: Dict[str, Any]) -> Dict[str, Any]:
     workflow_id = str(created["id"])
     try:
         _n8n("POST", f"/api/v1/workflows/{workflow_id}/activate")
-        _request("POST", f"{N8N_URL}/webhook/{path}", {"Content-Type": "application/json"}, {})
+        _request(
+            "POST",
+            f"{N8N_URL}/webhook/{path}",
+            {"Content-Type": "application/json"},
+            {},
+        )
         matching = []
         for _ in range(20):
             time.sleep(1)
             executions = _n8n("GET", "/api/v1/executions?limit=100")
             matching = [
-                row for row in executions.get("data", [])
+                row
+                for row in executions.get("data", [])
                 if str(row.get("workflowId")) == workflow_id
             ]
             if matching:
                 break
         if not matching:
-            raise RuntimeError("n8n did not retain an execution for the temporary workflow")
+            raise RuntimeError(
+                "n8n did not retain an execution for the temporary workflow"
+            )
         execution_id = str(matching[0]["id"])
         execution = _n8n("GET", f"/api/v1/executions/{execution_id}?includeData=true")
         run_data = execution.get("data", {}).get("resultData", {}).get("runData", {})
@@ -278,6 +320,7 @@ def _run_workflow(workflow: Dict[str, Any]) -> Dict[str, Any]:
             "workflow_id": workflow_id,
             "execution_id": execution_id,
             "status": execution.get("status"),
+            "finished": execution.get("finished"),
             "nodes": list(run_data),
             "run_data": run_data,
         }
@@ -301,7 +344,9 @@ def main() -> None:
     captures: list[Dict[str, Any]] = []
     credential = _anthropic_credential()
     try:
-        captures = [_run_workflow(_recovery_workflow(index, credential)) for index in range(3)]
+        captures = [
+            _run_workflow(_recovery_workflow(index, credential)) for index in range(3)
+        ]
         captures.append(_run_workflow(_malformed_workflow(credential)))
         captures.append(_run_workflow(_recovery_workflow(0, credential, recover=False)))
         sync = _server_sync()

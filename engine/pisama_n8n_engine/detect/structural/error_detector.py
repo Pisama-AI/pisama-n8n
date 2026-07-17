@@ -19,7 +19,11 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 from pisama_n8n_engine.detect.n8n_utils import build_connection_map
-from pisama_n8n_engine.detect.runtime import classify_error, remediation_for
+from pisama_n8n_engine.detect.runtime import (
+    classify_error,
+    recovered_native_agent_tool_turns,
+    remediation_for,
+)
 from pisama_n8n_engine.detect.base import (
     TurnSnapshot,
     TurnAwareDetector,
@@ -63,9 +67,9 @@ class N8NErrorDetector(TurnAwareDetector):
     """
 
     name = "N8NErrorDetector"
-    # 1.2 emits concrete n8n categories and recognizes n8n's recorded
-    # configured-timeout shape instead of the broad F14 label used historically.
-    version = "1.2"
+    # 1.3 emits concrete n8n categories, recognizes n8n's recorded configured-timeout
+    # shape, and excludes only a strictly proven native Agent tool recovery.
+    version = "1.3"
     supported_failure_modes = ["F14"]
 
     def __init__(
@@ -113,6 +117,21 @@ class N8NErrorDetector(TurnAwareDetector):
 
         return False
 
+    def _effective_error_turns(self, turns: List[TurnSnapshot]) -> List[TurnSnapshot]:
+        """Return error turns excluding a proven native Agent recovery control.
+
+        The broad error detector must keep every ordinary recorded node error. The
+        exception is a native AI tool failure for which n8n's own ordered runtime data
+        proves a later direct model turn received the error. Treating that recovered
+        child error as a workflow incident created a false positive on real capture 91.
+        """
+        recovered = {id(turn) for turn in recovered_native_agent_tool_turns(turns)}
+        return [
+            turn
+            for turn in turns
+            if self._has_error(turn) and id(turn) not in recovered
+        ]
+
     def _is_workflow_successful(self, metadata: Optional[Dict[str, Any]]) -> bool:
         """Check if workflow was marked as successful."""
         if not metadata:
@@ -131,13 +150,13 @@ class N8NErrorDetector(TurnAwareDetector):
         return any(indicator in content_lower for indicator in NULL_DATA_INDICATORS)
 
     def _detect_hidden_failures(
-        self, turns: List[TurnSnapshot], metadata: Optional[Dict[str, Any]]
+        self, failed_turns: List[TurnSnapshot], metadata: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
         """Detect nodes with errors that continued execution."""
         hidden_failures = []
 
-        for turn in turns:
-            if self._has_error(turn) and self._continued_on_fail(turn):
+        for turn in failed_turns:
+            if self._continued_on_fail(turn):
                 hidden_failures.append(
                     {
                         "turn": turn.turn_number,
@@ -162,7 +181,7 @@ class N8NErrorDetector(TurnAwareDetector):
         return None
 
     def _detect_invalid_data_propagation(
-        self, turns: List[TurnSnapshot]
+        self, turns: List[TurnSnapshot], failed_turns: List[TurnSnapshot]
     ) -> Optional[Dict[str, Any]]:
         """Detect downstream nodes receiving invalid data from failed nodes."""
         if not self.check_downstream_data:
@@ -170,9 +189,9 @@ class N8NErrorDetector(TurnAwareDetector):
 
         invalid_data_issues = []
 
-        # Build a map of node execution order
+        failed_ids = {id(turn) for turn in failed_turns}
         for i, turn in enumerate(turns):
-            if self._has_error(turn):
+            if id(turn) in failed_ids:
                 # Check subsequent turns for invalid data
                 for j in range(i + 1, min(i + 5, len(turns))):  # Check next 4 nodes
                     downstream_turn = turns[j]
@@ -198,13 +217,13 @@ class N8NErrorDetector(TurnAwareDetector):
         return None
 
     def _detect_high_error_rate(
-        self, turns: List[TurnSnapshot]
+        self, turns: List[TurnSnapshot], failed_turns: List[TurnSnapshot]
     ) -> Optional[Dict[str, Any]]:
         """Detect if error rate exceeds acceptable threshold."""
         if not turns:
             return None
 
-        error_count = sum(1 for turn in turns if self._has_error(turn))
+        error_count = len(failed_turns)
         error_rate = error_count / len(turns)
 
         if error_rate > self.max_error_rate:
@@ -216,21 +235,21 @@ class N8NErrorDetector(TurnAwareDetector):
                 "error_rate": error_rate,
                 "threshold": self.max_error_rate,
                 "explanation": f"Error rate {error_rate:.1%} exceeds threshold {self.max_error_rate:.1%} ({error_count}/{len(turns)} nodes failed)",
-                "turns": [i for i, turn in enumerate(turns) if self._has_error(turn)],
+                "turns": [turn.turn_number for turn in failed_turns],
             }
 
         return None
 
     def _detect_success_despite_failures(
-        self, turns: List[TurnSnapshot], metadata: Optional[Dict[str, Any]]
+        self,
+        failed_turns: List[TurnSnapshot],
+        metadata: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         """Detect workflow marked successful despite node failures."""
         if not self._is_workflow_successful(metadata):
             return None  # Workflow already marked as failed
 
-        failed_nodes = [
-            (i, turn) for i, turn in enumerate(turns) if self._has_error(turn)
-        ]
+        failed_nodes = failed_turns
 
         if failed_nodes:
             return {
@@ -238,20 +257,22 @@ class N8NErrorDetector(TurnAwareDetector):
                 "type": "success_despite_failures",
                 "failed_nodes": [
                     {
-                        "turn": i,
+                        "turn": turn.turn_number,
                         "node": turn.participant_id,
                         "node_type": turn.turn_metadata.get("node_type", "unknown"),
                     }
-                    for i, turn in failed_nodes
+                    for turn in failed_nodes
                 ],
                 "explanation": f"Workflow marked as successful but {len(failed_nodes)} node(s) failed",
-                "turns": [i for i, _ in failed_nodes],
+                "turns": [turn.turn_number for turn in failed_nodes],
             }
 
         return None
 
     def _detect_execution_failure(
-        self, turns: List[TurnSnapshot], metadata: Optional[Dict[str, Any]]
+        self,
+        failed_turns: List[TurnSnapshot],
+        metadata: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         """The execution itself failed: n8n recorded a workflow-level failure and a node
         errored. Distinct from the hidden-error checks (which target failures n8n HIDES):
@@ -265,9 +286,7 @@ class N8NErrorDetector(TurnAwareDetector):
         """
         if self._is_workflow_successful(metadata):
             return None
-        failed_nodes = [
-            (i, turn) for i, turn in enumerate(turns) if self._has_error(turn)
-        ]
+        failed_nodes = failed_turns
         if not failed_nodes:
             return None
         return {
@@ -275,17 +294,17 @@ class N8NErrorDetector(TurnAwareDetector):
             "type": "execution_failure",
             "failed_nodes": [
                 {
-                    "turn": i,
+                    "turn": turn.turn_number,
                     "node": turn.participant_id,
                     "node_type": turn.turn_metadata.get("node_type", "unknown"),
                 }
-                for i, turn in failed_nodes
+                for turn in failed_nodes
             ],
             "explanation": (
                 f"Execution failed: {len(failed_nodes)} node(s) errored and the "
                 f"workflow stopped"
             ),
-            "turns": [i for i, _ in failed_nodes],
+            "turns": [turn.turn_number for turn in failed_nodes],
         }
 
     def detect(
@@ -304,37 +323,40 @@ class N8NErrorDetector(TurnAwareDetector):
                 detector_name=self.name,
             )
 
+        failed_turns = self._effective_error_turns(turns)
         issues = []
         affected_turns = []
 
         # 1. Detect hidden failures (continueOnFail=true)
-        hidden = self._detect_hidden_failures(turns, conversation_metadata)
+        hidden = self._detect_hidden_failures(failed_turns, conversation_metadata)
         if hidden:
             issues.append(hidden)
             affected_turns.extend(hidden.get("turns", []))
 
         # 2. Detect invalid data propagation
-        invalid_data = self._detect_invalid_data_propagation(turns)
+        invalid_data = self._detect_invalid_data_propagation(turns, failed_turns)
         if invalid_data:
             issues.append(invalid_data)
             affected_turns.extend(invalid_data.get("turns", []))
 
         # 3. Detect high error rate
-        high_error_rate = self._detect_high_error_rate(turns)
+        high_error_rate = self._detect_high_error_rate(turns, failed_turns)
         if high_error_rate:
             issues.append(high_error_rate)
             affected_turns.extend(high_error_rate.get("turns", []))
 
         # 4. Detect success despite failures
         success_despite_failures = self._detect_success_despite_failures(
-            turns, conversation_metadata
+            failed_turns, conversation_metadata
         )
         if success_despite_failures:
             issues.append(success_despite_failures)
             affected_turns.extend(success_despite_failures.get("turns", []))
 
         # 5. Detect loud execution failure (workflow-level error + errored node)
-        execution_failure = self._detect_execution_failure(turns, conversation_metadata)
+        execution_failure = self._detect_execution_failure(
+            failed_turns, conversation_metadata
+        )
         if execution_failure:
             issues.append(execution_failure)
             affected_turns.extend(execution_failure.get("turns", []))
@@ -366,7 +388,6 @@ class N8NErrorDetector(TurnAwareDetector):
         else:
             confidence = 0.80
 
-        failed_turns = [turn for turn in turns if self._has_error(turn)]
         categories = [classify_error(turn) for turn in failed_turns]
         category = next(
             (item for item in categories if item != "node_error"), "node_error"
