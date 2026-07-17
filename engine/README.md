@@ -24,6 +24,19 @@ Detectors: cycle, runtime data contract, resource, timeout, classified error,
 complexity, AI output truncation, retry recovery, missing error workflow,
 duplicate-side-effect risk, and evidence-gated AI-agent diagnostics.
 
+For a runtime data-contract finding, use the reusable input-schema guardrail before the
+consumer. It returns a supported n8n Code, IF, and clean/reject subgraph, so invalid items
+can be routed to an error path while validated items reach the business path unchanged.
+
+```python
+from pisama_n8n_engine.guardrails import input_schema_guardrail
+
+guard = input_schema_guardrail(["body.required.value"], position=(220, 0))
+```
+
+See [`docs/input-schema-guardrail.md`](../docs/input-schema-guardrail.md) for wiring and
+data-handling details.
+
 The detectors are vendored from the Pisama monorepo (the single source of truth) via
 `scripts/extract_from_monorepo.py`; a parity check guards against drift. Fair-code
 (Sustainable Use License) — see the repository LICENSE.

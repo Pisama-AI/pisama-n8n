@@ -73,6 +73,10 @@ def test_execution_persistence_redacts_http_credential_headers():
 @pytest.mark.parametrize(
     "rel, detector",
     [
+        (
+            "executions/data_contract/CLOUD-112117-missing-required-value.json",
+            "schema",
+        ),
         ("executions/timeout/TIMEOUT-01.json", "timeout"),
         ("executions/error/ERROR-01-throw.json", "error"),
         ("executions/resource/RESOURCE-01-100x500.json", "resource"),
@@ -93,6 +97,29 @@ def test_healthy_fixture_fires_no_failure_detection(client):
     body = resp.json()
     for detector in ("timeout", "error", "resource"):
         assert not _fired(body, detector), f"{detector} unexpectedly fired: {body}"
+
+
+def test_real_cloud_data_contract_fixture_recommends_the_input_schema_guardrail(client):
+    """Regression for Cloud execution 112117, captured before its workflow was patched."""
+    payload = _load("executions/data_contract/CLOUD-112117-missing-required-value.json")
+    resp = client.post("/api/v1/n8n/webhook", json=payload)
+    assert resp.status_code == 200, resp.text
+
+    schema = next(
+        detection
+        for detection in resp.json()["detections"]
+        if detection["detector"] == "schema"
+    )
+    assert schema["detected"] is True
+    assert schema["failure_mode"] == "n8n_data_contract"
+    assert schema["evidence"]["issues"] == [
+        {
+            "node": "Observed missing field",
+            "turn": 1,
+            "message": "Cannot read properties of undefined (reading 'value') [line 1]",
+        }
+    ]
+    assert "Pisama input-schema guard" in schema["explanation"]
 
 
 # 2. Structural lane: a complexity workflow yields a complexity verdict. Runtime

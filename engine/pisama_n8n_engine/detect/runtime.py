@@ -19,6 +19,7 @@ from pisama_n8n_engine.detect.truncation import (
     TRUNCATION_VALUES,
     extract_configured_max_tokens,
 )
+from pisama_n8n_engine.guardrails import input_schema_guardrail_recommendation
 
 
 _EXPRESSION_MARKERS = (
@@ -122,7 +123,11 @@ def remediation_for(category: str) -> str:
     actions = {
         "rate_limit": "Add bounded retry with backoff and reduce request concurrency before retrying this provider.",
         "credential": "Reconnect or replace the credential and confirm the account has the required scope.",
-        "expression": "Correct the failing expression or Code-node input assumption, then rerun with the observed input shape.",
+        "expression": (
+            "Correct the failing expression or Code-node input assumption, then rerun "
+            "with the observed input shape. "
+            + input_schema_guardrail_recommendation()
+        ),
         "provider": "Check the provider response and endpoint configuration; retry only transient failures with bounded backoff.",
         "timeout": "Set a bounded request timeout and retry policy, then inspect the slow provider or downstream service.",
         "node_error": "Inspect the recorded node error and configuration before applying a workflow change.",
