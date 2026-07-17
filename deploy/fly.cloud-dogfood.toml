@@ -1,5 +1,7 @@
 # Isolated n8n Cloud dogfood server. This app never shares the production server's
 # SQLite volume or API key. Set all credentials as Fly secrets, never in this file.
+# Deploy with ./deploy/deploy-cloud-dogfood.sh so /healthz reports the actual source
+# revision. A bare ``fly deploy`` leaves the Dockerfile build arg as ``unknown``.
 app = "pisama-n8n-cloud-dogfood"
 primary_region = "sjc"
 
