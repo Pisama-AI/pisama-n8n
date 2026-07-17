@@ -585,7 +585,7 @@ def _capture_core_workflows(credential: Dict[str, str]) -> Dict[str, Dict[str, A
             "https://httpbin.org/status/502",
         ),
         "rate_limit": lambda: _http_failure_workflow(
-            "rate-limit", "Observed rate limit", "https://httpbin.org/status/429"
+            "rate-limit", "Observed rate limit", "https://httpbingo.org/status/429"
         ),
         "timeout": lambda: _http_failure_workflow(
             "timeout",
