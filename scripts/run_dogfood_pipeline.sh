@@ -22,16 +22,8 @@ echo '[dogfood] native structured-output and recovery captures'
 python3 scripts/capture_native_agent_evidence.py --extended > "$OUT/native.json"
 
 if [[ "${RUN_CLAUDE_CAPTURE:-1}" == 1 ]]; then
-  echo '[dogfood] Claude tool recovery captures'
-  python3 scripts/capture_claude_agent_evidence.py > "$OUT/claude.json"
-fi
-
-if [[ "${RUN_REAL_CORPUS:-1}" == 1 ]]; then
-  : "${N8N_EVAL_EMAIL:?set the disposable n8n owner email}"
-  : "${N8N_EVAL_PASSWORD:?set the disposable n8n owner password}"
-  : "${N8N_EVAL_KEY:?set the disposable n8n evaluation key}"
-  echo '[dogfood] fresh real P0/P1 corpus'
-  N8N_EVAL_URL="$PISAMA_N8N_URL" python3 eval/generate_real_corpus.py > "$OUT/core-corpus.log"
+  echo '[dogfood] fresh API-only Claude P0/P1 corpus'
+  python3 scripts/capture_claude_agent_evidence.py --core > "$OUT/core-corpus.json"
 fi
 
 echo '[dogfood] current-build core gate'

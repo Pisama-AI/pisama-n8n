@@ -23,8 +23,5 @@ jobs:
           PISAMA_API_KEY: ${{ secrets.PISAMA_DOGFOOD_API_KEY }}
           PISAMA_SERVER_URL: ${{ secrets.PISAMA_DOGFOOD_SERVER_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          N8N_EVAL_EMAIL: ${{ secrets.N8N_DOGFOOD_OWNER_EMAIL }}
-          N8N_EVAL_PASSWORD: ${{ secrets.N8N_DOGFOOD_OWNER_PASSWORD }}
-          N8N_EVAL_KEY: ${{ secrets.N8N_DOGFOOD_EVAL_KEY }}
           PISAMA_BUILD_REVISION: ${{ github.sha }}
         run: bash scripts/run_dogfood_pipeline.sh
