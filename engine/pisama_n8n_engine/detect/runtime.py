@@ -15,7 +15,10 @@ from pisama_n8n_engine.detect.base import (
     TurnAwareSeverity,
     TurnSnapshot,
 )
-from pisama_n8n_engine.detect.truncation import TRUNCATION_VALUES
+from pisama_n8n_engine.detect.truncation import (
+    TRUNCATION_VALUES,
+    extract_configured_max_tokens,
+)
 
 
 _EXPRESSION_MARKERS = (
@@ -299,11 +302,23 @@ def _configured_error_route_result(
 
 
 class N8NTruncationDetector(TurnAwareDetector):
-    """Detect an LLM output explicitly stopped at its token budget."""
+    """Detect an LLM output explicitly stopped at its token budget.
+
+    A max-token stop on a node whose own maxTokens parameter the user set is an
+    INTENTIONAL cap (the output length matches the budget the user chose), so it
+    is reported as configured behavior, never as a silent truncation failure.
+    """
 
     name = "N8NTruncationDetector"
-    version = "1.0"
+    version = "1.1"
     supported_failure_modes = ["F6"]
+
+    @staticmethod
+    def _capped(turn: TurnSnapshot) -> bool:
+        return (
+            extract_configured_max_tokens((turn.turn_metadata or {}).get("parameters"))
+            is not None
+        )
 
     def detect(
         self,
@@ -320,26 +335,51 @@ class N8NTruncationDetector(TurnAwareDetector):
             return _clear(
                 self.name, "No recorded AI-node output reached a token limit."
             )
-        names = ", ".join(dict.fromkeys(turn.participant_id for turn in truncated))
+        unexpected = [turn for turn in truncated if not self._capped(turn)]
+        capped = [turn for turn in truncated if self._capped(turn)]
+        if not unexpected:
+            capped_names = ", ".join(
+                dict.fromkeys(turn.participant_id for turn in capped)
+            )
+            return _clear(
+                self.name,
+                f"{len(capped)} AI node output(s) stopped at their user-configured "
+                f"token cap: {capped_names}. The output hit a configured limit, "
+                "not a silent truncation failure.",
+            )
+        names = ", ".join(dict.fromkeys(turn.participant_id for turn in unexpected))
+        evidence: Dict[str, Any] = {
+            "finish_reasons": [
+                {
+                    "node": turn.participant_id,
+                    "reason": turn.turn_metadata["finish_reason"],
+                }
+                for turn in unexpected
+            ]
+        }
+        if capped:
+            # Suppressed as intentional caps; kept visible for adjudication.
+            evidence["configured_cap_nodes"] = [
+                {
+                    "node": turn.participant_id,
+                    "reason": turn.turn_metadata["finish_reason"],
+                    "max_tokens_configured": extract_configured_max_tokens(
+                        (turn.turn_metadata or {}).get("parameters")
+                    ),
+                }
+                for turn in capped
+            ]
         return TurnAwareDetectionResult(
             detected=True,
             severity=TurnAwareSeverity.MODERATE,
             confidence=0.95,
             failure_mode="n8n_truncation",
             explanation=(
-                f"{len(truncated)} AI node output(s) ended at the provider token limit: {names}. "
+                f"{len(unexpected)} AI node output(s) ended at the provider token limit: {names}. "
                 "Raise the output limit or add an explicit continuation step before using the result."
             ),
-            affected_turns=[turn.turn_number for turn in truncated],
-            evidence={
-                "finish_reasons": [
-                    {
-                        "node": turn.participant_id,
-                        "reason": turn.turn_metadata["finish_reason"],
-                    }
-                    for turn in truncated
-                ]
-            },
+            affected_turns=[turn.turn_number for turn in unexpected],
+            evidence=evidence,
             suggested_fix="Raise the output limit or continue the response in a bounded follow-up call.",
             detector_name=self.name,
             detector_version=self.version,

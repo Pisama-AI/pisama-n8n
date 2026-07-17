@@ -34,6 +34,45 @@ _STOP_KEYS = {"stop_reason", "finish_reason", "finishreason", "stopreason"}
 
 _MAX_DEPTH = 8
 
+# Node-parameter keys that carry a user-configured output-token cap. Structured
+# node settings only -- never parsed out of raw HTTP request bodies, where a
+# cap string is opaque user-authored JSON (and exactly how the truncation
+# instrument induces genuine provider truncation). n8n nests model settings
+# under option bags, and uses -1 for "no limit", so only values > 0 count.
+_MAX_TOKEN_PARAM_KEYS = (
+    "maxTokens",
+    "max_tokens",
+    "maxOutputTokens",
+    "max_output_tokens",
+    "maxTokensToSample",
+)
+_OPTION_BAG_KEYS = ("options", "additionalOptions")
+
+
+def extract_configured_max_tokens(parameters: Any) -> Optional[int]:
+    """User-configured output-token cap from a node's structured parameters.
+
+    Distinguishes an INTENTIONAL cap (the user set maxTokens on the node, so a
+    max-token stop is configured behavior consistent with that cap) from a
+    genuinely unexpected provider truncation. Returns the cap, or None when no
+    explicit positive cap is set.
+    """
+    if not isinstance(parameters, dict):
+        return None
+    bags = [parameters] + [
+        parameters[k] for k in _OPTION_BAG_KEYS if isinstance(parameters.get(k), dict)
+    ]
+    for bag in bags:
+        for key in _MAX_TOKEN_PARAM_KEYS:
+            value = bag.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, str) and value.strip().isdigit():
+                value = int(value)
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value)
+    return None
+
 
 def _iter_stop_reasons(obj: Any, _depth: int = 0) -> Iterator[str]:
     """Yield every stop/finish-reason value found anywhere in ``obj``.

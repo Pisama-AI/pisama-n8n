@@ -104,3 +104,57 @@ def test_small_payload_growth_is_not_a_resource_failure():
     turns, metadata = execution_to_turns_and_metadata(raw_big)
     report = analyze(turns=turns, metadata=metadata)
     assert "resource" in fired_names(report)
+
+
+def test_user_configured_token_cap_is_not_a_silent_truncation():
+    """Adversarial-review fix: a user who deliberately set maxTokens on their LLM
+    node must not be reported as a silent-truncation failure at 0.95. The same
+    max-token stop WITHOUT a configured cap keeps the high-confidence fire."""
+    from conftest import execution_doc, make_node
+
+    def llm_run():
+        return {
+            "executionTime": 5,
+            "executionStatus": "success",
+            "source": [],
+            "data": {"main": [[{"json": {
+                "text": "The sea is", "finish_reason": "length"}}]]},
+        }
+
+    # Cap configured on the node itself (nested in n8n's options bag): suppressed.
+    capped = execution_doc(
+        {"LLM": [llm_run()]},
+        nodes=[make_node(
+            "LLM", "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+            parameters={"options": {"maxTokens": 64}},
+        )],
+        status="success", finished=True,
+    )
+    turns, metadata = execution_to_turns_and_metadata(capped)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "truncation" not in fired_names(report)
+    truncation = next(d for d in report.detections if d.detector == "truncation")
+    assert "user-configured token cap" in truncation.explanation
+
+    # No configured cap: the genuinely unexpected truncation still fires.
+    uncapped = execution_doc(
+        {"LLM": [llm_run()]},
+        nodes=[make_node("LLM", "@n8n/n8n-nodes-langchain.lmChatOpenAi")],
+        status="success", finished=True,
+    )
+    turns, metadata = execution_to_turns_and_metadata(uncapped)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "truncation" in fired_names(report)
+
+    # n8n's maxTokens=-1 means "no limit" and must not count as a configured cap.
+    unlimited = execution_doc(
+        {"LLM": [llm_run()]},
+        nodes=[make_node(
+            "LLM", "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+            parameters={"options": {"maxTokens": -1}},
+        )],
+        status="success", finished=True,
+    )
+    turns, metadata = execution_to_turns_and_metadata(unlimited)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "truncation" in fired_names(report)
