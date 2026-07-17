@@ -203,6 +203,32 @@ def _agent_facts(output_data: Any) -> Dict[str, Any]:
     }
 
 
+def _native_agent_steps(item: Any) -> List[Any]:
+    """Return one output item's recorded native Agent steps, if present."""
+    payload = item.get("json") if isinstance(item, dict) else None
+    steps = payload.get("intermediateSteps") if isinstance(payload, dict) else None
+    return steps if isinstance(steps, list) else []
+
+
+def _native_agent_action(step: Any) -> Dict[str, Any]:
+    """Reduce one native Agent step without copying tool input or call IDs."""
+    action = step.get("action") if isinstance(step, dict) else None
+    observation = step.get("observation") if isinstance(step, dict) else None
+    tool = action.get("tool") if isinstance(action, dict) else None
+    tool_call_id = action.get("toolCallId") if isinstance(action, dict) else None
+    return {
+        "tool": tool if isinstance(tool, str) else None,
+        "has_tool_call_id": bool(
+            isinstance(tool_call_id, str) and tool_call_id.strip()
+        ),
+        # This stays internal to the parser/detector correlation. The detector
+        # evidence never emits observations or tool input.
+        "observation": observation
+        if isinstance(observation, str) and observation
+        else None,
+    }
+
+
 def _native_agent_facts(node_type: str, output_data: Any) -> Dict[str, Any]:
     """Read the observed native AI Agent action shape without exposing inputs.
 
@@ -216,34 +242,58 @@ def _native_agent_facts(node_type: str, output_data: Any) -> Dict[str, Any]:
         return {"native_agent_actions": []}
     actions: List[Dict[str, Any]] = []
     for item in output_data:
-        payload = item.get("json") if isinstance(item, dict) else None
-        steps = payload.get("intermediateSteps") if isinstance(payload, dict) else None
-        if not isinstance(steps, list):
-            continue
-        for step in steps:
-            action = step.get("action") if isinstance(step, dict) else None
-            observation = step.get("observation") if isinstance(step, dict) else None
-            tool = action.get("tool") if isinstance(action, dict) else None
-            tool_call_id = (
-                action.get("toolCallId") if isinstance(action, dict) else None
-            )
-            actions.append(
-                {
-                    "tool": tool if isinstance(tool, str) else None,
-                    "has_tool_call_id": bool(
-                        isinstance(tool_call_id, str) and tool_call_id.strip()
-                    ),
-                    # This stays internal to the parser/detector correlation. The
-                    # detector evidence below never emits observations or tool input.
-                    "observation": observation
-                    if isinstance(observation, str) and observation
-                    else None,
-                }
-            )
+        actions.extend(_native_agent_action(step) for step in _native_agent_steps(item))
     return {"native_agent_actions": actions}
 
 
-def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Dict[str, List[str]]]:
+def _native_agent_names(workflow: Dict[str, Any]) -> set[str]:
+    """Return named native AI Agent nodes from an executed workflow snapshot."""
+    return {
+        str(node["name"])
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict)
+        and node.get("name")
+        and node.get("type") == _NATIVE_AI_AGENT_TYPE
+    }
+
+
+def _native_agent_target(
+    edge: Any, connection_type: str, native_agents: set[str]
+) -> Optional[str]:
+    """Return one literal native-Agent target from a matching workflow edge."""
+    if not isinstance(edge, dict) or edge.get("type") != connection_type:
+        return None
+    target = edge.get("node")
+    if not isinstance(target, str) or target not in native_agents:
+        return None
+    return target
+
+
+def _direct_native_targets(
+    outputs: Any, connection_type: str, native_agents: set[str]
+) -> List[str]:
+    """Return literal native-Agent targets for one n8n AI edge type."""
+    branches = outputs.get(connection_type) if isinstance(outputs, dict) else None
+    if not isinstance(branches, list):
+        return []
+    targets: List[str] = []
+    for branch in branches:
+        if not isinstance(branch, list):
+            continue
+        for edge in branch:
+            target = _native_agent_target(edge, connection_type, native_agents)
+            if target is not None and target not in targets:
+                targets.append(target)
+    return targets
+
+
+def _append_unique(values: List[str], value: str) -> None:
+    """Append a direct workflow peer once while preserving n8n's edge order."""
+    if value not in values:
+        values.append(value)
+
+
+def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Any]:
     """Return direct native-Agent tool/model edges from the workflow snapshot.
 
     Native n8n nested runs currently carry ``source: [null]``. This records only a
@@ -251,13 +301,7 @@ def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Dict[str, List
     path. Keeping both directions lets the runtime detector reject shared tool/model
     nodes rather than attributing an error across an ambiguous agent graph.
     """
-    native_agents = {
-        str(node["name"])
-        for node in workflow.get("nodes", [])
-        if isinstance(node, dict)
-        and node.get("name")
-        and node.get("type") == _NATIVE_AI_AGENT_TYPE
-    }
+    native_agents = _native_agent_names(workflow)
     agent_edges: Dict[str, Dict[str, List[str]]] = {
         name: {"tool_nodes": [], "model_nodes": []} for name in native_agents
     }
@@ -267,35 +311,20 @@ def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Dict[str, List
         return {"agent_edges": agent_edges, "source_edges": source_edges}
 
     for source, outputs in connections.items():
-        if not isinstance(source, str) or not isinstance(outputs, dict):
+        if not isinstance(source, str):
             continue
         for connection_type, agent_key, source_key in (
             ("ai_tool", "tool_nodes", "tool_agents"),
             ("ai_languageModel", "model_nodes", "model_agents"),
         ):
-            branches = outputs.get(connection_type)
-            if not isinstance(branches, list):
-                continue
-            for branch in branches:
-                if not isinstance(branch, list):
-                    continue
-                for edge in branch:
-                    if (
-                        not isinstance(edge, dict)
-                        or edge.get("type") != connection_type
-                    ):
-                        continue
-                    target = edge.get("node")
-                    if not isinstance(target, str) or target not in native_agents:
-                        continue
-                    targets = source_edges.setdefault(
-                        source, {"tool_agents": [], "model_agents": []}
-                    )[source_key]
-                    if target not in targets:
-                        targets.append(target)
-                    sources = agent_edges[target][agent_key]
-                    if source not in sources:
-                        sources.append(source)
+            for target in _direct_native_targets(
+                outputs, connection_type, native_agents
+            ):
+                targets = source_edges.setdefault(
+                    source, {"tool_agents": [], "model_agents": []}
+                )[source_key]
+                _append_unique(targets, target)
+                _append_unique(agent_edges[target][agent_key], source)
     return {"agent_edges": agent_edges, "source_edges": source_edges}
 
 

@@ -6,6 +6,7 @@ its workflow snapshot.  They do not infer an incident from a workflow's appearan
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
 from pisama_n8n_engine.detect.base import (
@@ -464,17 +465,20 @@ def _native_language_model(turn: TurnSnapshot) -> bool:
     return node_type.startswith(_NATIVE_LANGUAGE_MODEL_PREFIX)
 
 
-def _native_tool_failure_context(
-    turns: List[TurnSnapshot],
-) -> Optional[Dict[str, Any]]:
-    """Return the narrow native-Agent failure contract, or ``None`` if ambiguous.
+@dataclass(frozen=True)
+class _NativeToolFailureContext:
+    """The strict native-Agent facts needed for one recovery decision."""
 
-    Native Agent child runs in observed n8n 1.91 telemetry contain no source links.
-    A claim is therefore permitted only for one Agent, one action, one direct tool,
-    and one direct language model. The agent observation must contain the precise
-    error n8n recorded for that tool. Anything more complex is intentionally
-    inconclusive until n8n exposes an authoritative runtime correlation ID.
-    """
+    agent: TurnSnapshot
+    tool: TurnSnapshot
+    initial_model: TurnSnapshot
+    model_turns: List[TurnSnapshot]
+
+
+def _single_ordered_native_agent(
+    turns: List[TurnSnapshot],
+) -> Optional[TurnSnapshot]:
+    """Return the sole strongly-ordered native Agent run, if unambiguous."""
     native_agents = [
         turn
         for turn in turns
@@ -483,11 +487,12 @@ def _native_tool_failure_context(
     if len(native_agents) != 1:
         return None
     agent = native_agents[0]
-    agent_metadata = agent.turn_metadata or {}
-    if not _strongly_ordered(agent):
-        return None
+    return agent if _strongly_ordered(agent) else None
 
-    actions = agent_metadata.get("native_agent_actions")
+
+def _single_native_agent_action(metadata: Dict[str, Any]) -> Optional[tuple[str, str]]:
+    """Return one native action's tool name and observation, if recorded."""
+    actions = metadata.get("native_agent_actions")
     if not isinstance(actions, list) or len(actions) != 1:
         return None
     action = actions[0]
@@ -495,68 +500,139 @@ def _native_tool_failure_context(
         return None
     tool_name = action.get("tool")
     observation = action.get("observation")
-    if (
-        not isinstance(tool_name, str)
-        or not tool_name
-        or not isinstance(observation, str)
-    ):
+    if not isinstance(tool_name, str) or not tool_name:
         return None
+    if not isinstance(observation, str):
+        return None
+    return tool_name, observation
 
-    direct_tool = _single_static_node(agent_metadata, "native_agent_tool_nodes")
-    direct_model = _single_static_node(agent_metadata, "native_agent_model_nodes")
+
+def _direct_native_model(metadata: Dict[str, Any], tool_name: str) -> Optional[str]:
+    """Return the one direct native model paired with this Agent tool."""
+    direct_tool = _single_static_node(metadata, "native_agent_tool_nodes")
+    direct_model = _single_static_node(metadata, "native_agent_model_nodes")
     if tool_name != direct_tool or not direct_model:
         return None
+    return direct_model
 
-    tool_turns = [turn for turn in turns if turn.participant_id == tool_name]
-    model_turns = [turn for turn in turns if turn.participant_id == direct_model]
-    native_model_turns = [turn for turn in turns if _native_language_model(turn)]
-    if (
-        len(tool_turns) != 1
-        or not model_turns
-        or len(native_model_turns) != len(model_turns)
-        or not all(_strongly_ordered(turn) for turn in tool_turns + model_turns)
-    ):
+
+def _named_turns(turns: List[TurnSnapshot], name: str) -> List[TurnSnapshot]:
+    """Return every recorded run for one n8n node name."""
+    return [turn for turn in turns if turn.participant_id == name]
+
+
+def _single_named_turn(turns: List[TurnSnapshot], name: str) -> Optional[TurnSnapshot]:
+    """Return one recorded node run, rejecting repeated executions as ambiguous."""
+    matches = _named_turns(turns, name)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _only_direct_native_models(
+    turns: List[TurnSnapshot], model_turns: List[TurnSnapshot]
+) -> bool:
+    """Reject executions that contain a second, unrelated native language model."""
+    return sum(_native_language_model(turn) for turn in turns) == len(model_turns)
+
+
+def _strongly_ordered_turns(turns: List[TurnSnapshot]) -> bool:
+    """Whether every retained runtime turn has n8n's execution index."""
+    return all(_strongly_ordered(turn) for turn in turns)
+
+
+def _native_peer_runs(
+    turns: List[TurnSnapshot], tool_name: str, model_name: str
+) -> Optional[tuple[TurnSnapshot, List[TurnSnapshot]]]:
+    """Return the exclusive native tool and model runs, if their order is strong."""
+    tool_turn = _single_named_turn(turns, tool_name)
+    model_turns = _named_turns(turns, model_name)
+    if tool_turn is None or not model_turns:
         return None
+    if not _only_direct_native_models(turns, model_turns):
+        return None
+    if not _strongly_ordered_turns([tool_turn, *model_turns]):
+        return None
+    return tool_turn, model_turns
 
-    tool_turn = tool_turns[0]
-    tool_metadata = tool_turn.turn_metadata or {}
+
+def _exclusive_native_peer_topology(
+    tool: TurnSnapshot, model_turns: List[TurnSnapshot], agent_name: str
+) -> bool:
+    """Require the direct tool and every model run to belong only to this Agent."""
+    tool_metadata = tool.turn_metadata or {}
     if not _targets_only_agent(
-        tool_metadata, "native_ai_tool_target_agents", agent.participant_id
+        tool_metadata, "native_ai_tool_target_agents", agent_name
     ):
-        return None
-    if not all(
+        return False
+    return all(
         _targets_only_agent(
-            turn.turn_metadata or {},
-            "native_ai_model_target_agents",
-            agent.participant_id,
+            turn.turn_metadata or {}, "native_ai_model_target_agents", agent_name
         )
         for turn in model_turns
-    ):
-        return None
+    )
 
-    error = tool_metadata.get("error_message")
-    if (
-        not tool_metadata.get("has_error")
-        or not isinstance(error, str)
-        or not error
-        or error not in observation
-    ):
-        return None
 
-    tool_index = tool_metadata["execution_index"]
+def _recorded_native_tool_error(tool: TurnSnapshot) -> Optional[str]:
+    """Return the non-empty tool error only when n8n recorded a failed run."""
+    metadata = tool.turn_metadata or {}
+    error = metadata.get("error_message")
+    if not metadata.get("has_error") or not isinstance(error, str) or not error:
+        return None
+    return error
+
+
+def _single_model_before_tool(
+    model_turns: List[TurnSnapshot], tool: TurnSnapshot
+) -> Optional[TurnSnapshot]:
+    """Return the sole direct model turn before the recorded tool error."""
+    tool_index = tool.turn_metadata["execution_index"]
     initial_models = [
         turn
         for turn in model_turns
         if turn.turn_metadata["execution_index"] < tool_index
     ]
-    if len(initial_models) != 1:
+    return initial_models[0] if len(initial_models) == 1 else None
+
+
+def _native_tool_failure_context(
+    turns: List[TurnSnapshot],
+) -> Optional[_NativeToolFailureContext]:
+    """Return the narrow native-Agent failure contract, or ``None`` if ambiguous.
+
+    Native Agent child runs in observed n8n 1.91 telemetry contain no source links.
+    A claim is therefore permitted only for one Agent, one action, one direct tool,
+    and one direct language model. The agent observation must contain the precise
+    error n8n recorded for that tool. Anything more complex is intentionally
+    inconclusive until n8n exposes an authoritative runtime correlation ID.
+    """
+    agent = _single_ordered_native_agent(turns)
+    if agent is None:
         return None
-    return {
-        "agent": agent,
-        "tool": tool_turn,
-        "initial_model": initial_models[0],
-        "model_turns": model_turns,
-    }
+    agent_metadata = agent.turn_metadata or {}
+    action = _single_native_agent_action(agent_metadata)
+    if action is None:
+        return None
+    tool_name, observation = action
+    model_name = _direct_native_model(agent_metadata, tool_name)
+    if model_name is None:
+        return None
+    peers = _native_peer_runs(turns, tool_name, model_name)
+    if peers is None:
+        return None
+    tool, model_turns = peers
+    if not _exclusive_native_peer_topology(tool, model_turns, agent.participant_id):
+        return None
+    error = _recorded_native_tool_error(tool)
+    if error is None or error not in observation:
+        return None
+    initial_model = _single_model_before_tool(model_turns, tool)
+    if initial_model is None:
+        return None
+    return _NativeToolFailureContext(
+        agent=agent,
+        tool=tool,
+        initial_model=initial_model,
+        model_turns=model_turns,
+    )
 
 
 def recovered_native_agent_tool_turns(
@@ -571,11 +647,11 @@ def recovered_native_agent_tool_turns(
     context = _native_tool_failure_context(turns)
     if context is None:
         return []
-    tool = context["tool"]
+    tool = context.tool
     tool_index = tool.turn_metadata["execution_index"]
     if any(
         turn.turn_metadata["execution_index"] > tool_index
-        for turn in context["model_turns"]
+        for turn in context.model_turns
     ):
         return [tool]
     return []
@@ -707,14 +783,14 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
         context = _native_tool_failure_context(turns)
         if context is None:
             return None
-        model_turns = context["model_turns"]
+        model_turns = context.model_turns
         if len(model_turns) != 1:
             # The same direct model was invoked after the failed tool. That is the
             # real n8n recovery control, not evidence of an unhandled failure.
             return None
-        agent = context["agent"]
-        tool = context["tool"]
-        initial_model = context["initial_model"]
+        agent = context.agent
+        tool = context.tool
+        initial_model = context.initial_model
         return TurnAwareDetectionResult(
             detected=True,
             severity=TurnAwareSeverity.MODERATE,

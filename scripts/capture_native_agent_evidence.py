@@ -199,38 +199,85 @@ def _index(run: Dict[str, Any]) -> int:
     return value
 
 
-def _assert_capture(capture: Dict[str, Any], *, fails: bool, recovers: bool) -> None:
-    """Validate only the observed n8n native telemetry shape, never model content."""
+def _assert_finished_capture(capture: Dict[str, Any]) -> None:
     if capture.get("status") != "success" or capture.get("finished") is not True:
         raise RuntimeError("native agent execution did not finish successfully")
+
+
+def _capture_runs(
+    capture: Dict[str, Any],
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     agent_runs = _runs(capture, "Native AI Agent")
     model_runs = _runs(capture, "Native Anthropic Chat Model")
     tool_runs = _runs(capture, "status_lookup")
+    return agent_runs, model_runs, tool_runs
+
+
+def _assert_expected_run_shape(
+    agent_runs: List[Dict[str, Any]],
+    model_runs: List[Dict[str, Any]],
+    tool_runs: List[Dict[str, Any]],
+) -> None:
     if len(agent_runs) != 1 or len(tool_runs) != 1 or not model_runs:
         raise RuntimeError(
             "native agent capture did not retain the expected one-agent shape"
         )
-    tool = tool_runs[0]
+
+
+def _assert_tool_outcome(tool: Dict[str, Any], *, fails: bool) -> None:
     if (tool.get("executionStatus") == "error") != fails:
         raise RuntimeError("native Code Tool did not retain the requested outcome")
+
+
+def _assert_model_recovery_shape(
+    tool: Dict[str, Any],
+    model_runs: List[Dict[str, Any]],
+    *,
+    recovers: bool,
+) -> None:
     tool_index = _index(tool)
     model_indexes = [_index(run) for run in model_runs]
-    if len([index for index in model_indexes if index < tool_index]) != 1:
+    before_tool = [index for index in model_indexes if index < tool_index]
+    if len(before_tool) != 1:
         raise RuntimeError("native capture lacks one model turn before the tool call")
-    if bool([index for index in model_indexes if index > tool_index]) != recovers:
+    after_tool = [index for index in model_indexes if index > tool_index]
+    if bool(after_tool) != recovers:
         raise RuntimeError("native capture did not retain the requested recovery shape")
-    output = ((agent_runs[0].get("data") or {}).get("main") or [[]])[0]
-    steps = [
-        step
-        for item in output
-        if isinstance(item, dict) and isinstance(item.get("json"), dict)
-        for step in item["json"].get("intermediateSteps") or []
-        if isinstance(step, dict)
-    ]
-    if len(steps) != 1 or (steps[0].get("action") or {}).get("tool") != "status_lookup":
+
+
+def _agent_intermediate_steps(agent_run: Dict[str, Any]) -> List[Dict[str, Any]]:
+    output = ((agent_run.get("data") or {}).get("main") or [[]])[0]
+    steps: List[Dict[str, Any]] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("json")
+        if not isinstance(result, dict):
+            continue
+        for step in result.get("intermediateSteps") or []:
+            if isinstance(step, dict):
+                steps.append(step)
+    return steps
+
+
+def _assert_agent_tool_step(agent_run: Dict[str, Any]) -> None:
+    steps = _agent_intermediate_steps(agent_run)
+    tool_name = (steps[0].get("action") or {}).get("tool") if len(steps) == 1 else None
+    if len(steps) != 1 or tool_name != "status_lookup":
         raise RuntimeError(
             "native Agent did not retain one status_lookup intermediate step"
         )
+
+
+def _assert_capture(capture: Dict[str, Any], *, fails: bool, recovers: bool) -> None:
+    """Validate only the observed n8n native telemetry shape, never model content."""
+    _assert_finished_capture(capture)
+    agent_runs, model_runs, tool_runs = _capture_runs(capture)
+    _assert_expected_run_shape(agent_runs, model_runs, tool_runs)
+    tool = tool_runs[0]
+    _assert_tool_outcome(tool, fails=fails)
+    _assert_model_recovery_shape(tool, model_runs, recovers=recovers)
+    _assert_agent_tool_step(agent_runs[0])
 
 
 def _summary(captures: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -253,8 +300,7 @@ def _summary(captures: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return summaries
 
 
-def _fired_by_execution(captures: Iterable[Dict[str, Any]]) -> Dict[str, List[str]]:
-    """Return only fired detector fingerprints for the new execution IDs."""
+def _detection_rows() -> List[Any]:
     rows = _request(
         "GET",
         f"{SERVER_URL}/api/v1/detections",
@@ -262,21 +308,37 @@ def _fired_by_execution(captures: Iterable[Dict[str, Any]]) -> Dict[str, List[st
     )
     if not isinstance(rows, list):
         raise RuntimeError("Pisama detections endpoint did not return a list")
+    return rows
+
+
+def _empty_findings(captures: Iterable[Dict[str, Any]]) -> Dict[str, List[str]]:
     execution_ids = {str(capture["execution_id"]) for capture in captures}
-    findings: Dict[str, List[str]] = {
-        execution_id: [] for execution_id in execution_ids
-    }
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("detected"):
-            continue
-        execution_id = str(row.get("n8n_execution_id") or "")
-        if execution_id not in findings:
-            continue
-        detector = row.get("detector")
-        failure_mode = row.get("failure_mode")
-        if isinstance(detector, str) and isinstance(failure_mode, str):
-            findings[execution_id].append(f"{detector}:{failure_mode}")
+    return {execution_id: [] for execution_id in execution_ids}
+
+
+def _record_finding(row: Any, findings: Dict[str, List[str]]) -> None:
+    if not isinstance(row, dict) or not row.get("detected"):
+        return
+    execution_id = str(row.get("n8n_execution_id") or "")
+    if execution_id not in findings:
+        return
+    detector = row.get("detector")
+    failure_mode = row.get("failure_mode")
+    if isinstance(detector, str) and isinstance(failure_mode, str):
+        findings[execution_id].append(f"{detector}:{failure_mode}")
+
+
+def _sorted_findings(findings: Dict[str, List[str]]) -> Dict[str, List[str]]:
     return {key: sorted(value) for key, value in findings.items()}
+
+
+def _fired_by_execution(captures: Iterable[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Return only fired detector fingerprints for the new execution IDs."""
+    rows = _detection_rows()
+    findings = _empty_findings(captures)
+    for row in rows:
+        _record_finding(row, findings)
+    return _sorted_findings(findings)
 
 
 def _assert_detections(captures: List[Dict[str, Any]]) -> Dict[str, List[str]]:
