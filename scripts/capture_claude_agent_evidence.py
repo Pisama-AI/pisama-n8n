@@ -45,7 +45,8 @@ def _request(method: str, url: str, headers: Dict[str, str], body: Any = None) -
     request = Request(url, data=encoded, headers=headers, method=method)
     try:
         with urlopen(request, timeout=30) as response:
-            return json.loads(response.read())
+            response_body = response.read()
+            return json.loads(response_body) if response_body else {}
     except HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:400]
         raise RuntimeError(f"{method} {url} failed: {exc.code} {detail}") from exc
@@ -61,6 +62,22 @@ def _n8n(method: str, path: str, body: Any = None) -> Any:
         },
         body,
     )
+
+
+def _move_to_configured_project(workflow_id: str) -> None:
+    """Move temporary evidence into the isolated project before activation.
+
+    n8n's API creates workflows in the API-key owner's personal project unless
+    they are explicitly transferred. When a dogfood project is configured, moving
+    first keeps both execution polling and credentials scoped to that project.
+    """
+    project_id = os.getenv("PISAMA_N8N_PROJECT_ID", "").strip()
+    if project_id:
+        _n8n(
+            "PUT",
+            f"/api/v1/workflows/{workflow_id}/transfer",
+            {"destinationProjectId": project_id},
+        )
 
 
 def _server_sync() -> Dict[str, Any]:
@@ -414,6 +431,7 @@ def _run_workflow(workflow: Dict[str, Any]) -> Dict[str, Any]:
     created = _n8n("POST", "/api/v1/workflows", workflow)
     workflow_id = str(created["id"])
     try:
+        _move_to_configured_project(workflow_id)
         _n8n("POST", f"/api/v1/workflows/{workflow_id}/activate")
         _request(
             "POST",
