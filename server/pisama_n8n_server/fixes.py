@@ -72,13 +72,17 @@ def workflow_fingerprint(workflow: Dict[str, Any]) -> str:
     )
 
 
-async def apply_fix(
+async def prepare_apply(
     client: Any,
     workflow_id: str,
     baseline_workflow: Dict[str, Any],
     mutated_workflow: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Apply a stored proposal only if the live workflow still matches its baseline."""
+    """Validate a proposal against the live workflow and return the restore snapshot.
+
+    Performs NO mutation: every failure path here (invalid or stale proposal, or an n8n
+    read error) raises before anything is written, so the live workflow is untouched.
+    """
     if workflow_fingerprint(baseline_workflow) == workflow_fingerprint(
         mutated_workflow
     ):
@@ -88,7 +92,32 @@ async def apply_fix(
         raise StaleRepairProposal(
             "The n8n workflow changed after this fix was generated. Review and generate a new fix."
         )
-    applied = await client.update_workflow(workflow_id, mutated_workflow)
+    return snapshot
+
+
+async def commit_apply(
+    client: Any, workflow_id: str, mutated_workflow: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Write the mutated workflow to the live n8n instance — the point of no return.
+
+    The caller MUST have durably persisted the restore snapshot (from ``prepare_apply``)
+    before invoking this, so an interrupted apply stays rollback-eligible.
+    """
+    return await client.update_workflow(workflow_id, mutated_workflow)
+
+
+async def apply_fix(
+    client: Any,
+    workflow_id: str,
+    baseline_workflow: Dict[str, Any],
+    mutated_workflow: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Validate then apply in one step. Prefer ``prepare_apply`` + ``commit_apply`` when
+    you must persist the restore point BEFORE mutating the live workflow."""
+    snapshot = await prepare_apply(
+        client, workflow_id, baseline_workflow, mutated_workflow
+    )
+    applied = await commit_apply(client, workflow_id, mutated_workflow)
     return {"snapshot": snapshot, "applied_workflow": applied}
 
 

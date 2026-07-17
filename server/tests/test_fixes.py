@@ -257,3 +257,69 @@ def test_apply_fix_returns_the_storage_contract_field_names():
     result = run(apply_fix(FakeClient(), "workflow-id", baseline, proposed))
 
     assert result == {"snapshot": baseline, "applied_workflow": proposed}
+
+
+def test_apply_persists_snapshot_before_put_so_a_failed_put_stays_rollbackable(
+    tmp_path, monkeypatch
+):
+    """Regression: a live PUT that raises must NOT strand a possibly-mutated workflow.
+
+    Before the fix the endpoint persisted the snapshot only AFTER the PUT, so any post-PUT
+    failure set status='failed' and claim_repair_rollback (which required 'applied') could
+    never recover it — the customer's workflow was left changed with no rollback. Now the
+    restore point is persisted BEFORE the PUT and a post-PUT failure lands in the
+    rollback-eligible 'apply_unverified' state.
+    """
+    monkeypatch.setenv("PISAMA_CLOUD_KEY", "x")
+    c = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("PISAMA_CLOUD_KEY", "x")
+    detection_id = _seed(c)
+
+    import pisama_n8n_server.app as appmod
+
+    storage = appmod.get_storage()
+    context = storage.get_detection_context(detection_id)
+    baseline = context["workflow"]
+    mutated = deepcopy(baseline)
+    mutated["settings"] = {**(mutated.get("settings") or {}), "executionTimeout": 30}
+    repair = storage.create_repair_proposal(
+        detection_id=detection_id,
+        workflow_id=context["workflow_id"],
+        baseline_workflow=baseline,
+        suggestion={
+            "explanation": "Set a timeout.",
+            "patch_ops": [],
+            "mutated_workflow": mutated,
+        },
+    )
+
+    class ExplodingPutClient:
+        """Stale-guard passes (live == baseline), but the live PUT raises after claim."""
+
+        async def get_workflow(self, _workflow_id):
+            return deepcopy(baseline)
+
+        async def update_workflow(self, _workflow_id, _workflow):
+            raise RuntimeError("n8n write failed / timed out")
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(appmod, "client_from_env", lambda: ExplodingPutClient())
+
+    resp = c.post(
+        "/api/v1/n8n/apply",
+        headers={"Authorization": "Bearer k"},
+        json={"repair_id": repair["id"]},
+    )
+    assert resp.status_code == 502, resp.text
+
+    persisted = storage.get_repair(repair["id"], include_workflows=True)
+    # Rollback-eligible, NOT stranded as 'failed', with a durable restore point.
+    assert persisted["status"] == "apply_unverified"
+    assert persisted["snapshot"] == baseline
+    assert persisted["applied_workflow"] == mutated
+
+    # And it can actually be claimed for rollback — the whole point of the fix.
+    claimed = storage.claim_repair_rollback(repair["id"])
+    assert claimed and claimed["status"] == "rolling_back"

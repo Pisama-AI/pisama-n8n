@@ -17,7 +17,7 @@ import json
 import os
 from math import ceil
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from sqlalchemy import (
     desc,
@@ -952,14 +952,19 @@ class Storage:
         }
 
     def _claim_repair(
-        self, repair_id: int, from_status: str, to_status: str
+        self,
+        repair_id: int,
+        from_status: Union[str, Sequence[str]],
+        to_status: str,
     ) -> Optional[Dict[str, Any]]:
         """Atomically own a repair transition, preventing double-click races."""
+        statuses = (from_status,) if isinstance(from_status, str) else tuple(from_status)
         with self._Session() as session:
             claimed = session.execute(
                 update(RepairAttempt)
                 .where(
-                    RepairAttempt.id == repair_id, RepairAttempt.status == from_status
+                    RepairAttempt.id == repair_id,
+                    RepairAttempt.status.in_(statuses),
                 )
                 .values(status=to_status, failure_reason=None)
             ).rowcount
@@ -974,7 +979,48 @@ class Storage:
         return self._claim_repair(repair_id, "proposed", "applying")
 
     def claim_repair_rollback(self, repair_id: int) -> Optional[Dict[str, Any]]:
-        return self._claim_repair(repair_id, "applied", "rolling_back")
+        # apply_unverified is also rollback-eligible: the live PUT was attempted but its
+        # result could not be confirmed, so the workflow may be mutated.
+        return self._claim_repair(
+            repair_id, ("applied", "apply_unverified"), "rolling_back"
+        )
+
+    def record_repair_snapshot(
+        self, repair_id: int, snapshot: Dict[str, Any], applied_workflow: Dict[str, Any]
+    ) -> None:
+        """Durably persist the restore point BEFORE the live PUT, keeping status 'applying'.
+
+        This is what makes an interrupted apply recoverable: if the process dies or the
+        bookkeeping raises after n8n was mutated, the snapshot (and the intended mutated
+        workflow) are already on the row, so the repair can still be rolled back instead
+        of stranding a changed production workflow.
+        """
+        with self._Session() as session:
+            changed = session.execute(
+                update(RepairAttempt)
+                .where(
+                    RepairAttempt.id == repair_id, RepairAttempt.status == "applying"
+                )
+                .values(
+                    snapshot=self._encode(snapshot),
+                    applied_workflow=self._encode(applied_workflow),
+                )
+            ).rowcount
+            if changed != 1:
+                session.rollback()
+                raise ValueError("Repair state changed concurrently.")
+            session.commit()
+
+    def mark_repair_apply_unverified(self, repair_id: int, reason: str) -> Dict[str, Any]:
+        """The live PUT was attempted but its outcome is unconfirmed — leave the repair
+        rollback-eligible rather than stranding it as 'failed'."""
+        return self._finish_repair(
+            repair_id,
+            "applying",
+            "apply_unverified",
+            failure_reason=reason[:1000],
+            applied_at=datetime.now(timezone.utc).isoformat(),
+        )
 
     def mark_repair_applied(
         self, repair_id: int, snapshot: Dict[str, Any], applied_workflow: Dict[str, Any]

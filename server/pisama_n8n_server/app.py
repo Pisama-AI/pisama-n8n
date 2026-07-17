@@ -435,8 +435,9 @@ async def n8n_apply(
     from pisama_n8n_server.fixes import (
         InvalidRepairProposal,
         StaleRepairProposal,
-        apply_fix,
+        commit_apply,
         is_paid_configured,
+        prepare_apply,
     )
 
     if not is_paid_configured():
@@ -461,22 +462,63 @@ async def n8n_apply(
             status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY)."
         )
     try:
-        result = await apply_fix(
-            client,
-            repair["workflow_id"],
-            repair["baseline_workflow"],
-            repair["proposed_workflow"],
+        # Phase 1 — validate against the live workflow. No mutation happens, so every
+        # failure here leaves the live workflow untouched.
+        try:
+            snapshot = await prepare_apply(
+                client,
+                repair["workflow_id"],
+                repair["baseline_workflow"],
+                repair["proposed_workflow"],
+            )
+        except StaleRepairProposal as exc:
+            storage.mark_repair_stale(repair_id, "applying", str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        except InvalidRepairProposal as exc:
+            storage.mark_repair_failed(repair_id, "applying", str(exc))
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except Exception as exc:
+            storage.mark_repair_failed(repair_id, "applying", str(exc))
+            raise
+
+        # Durably record the restore point BEFORE mutating the live workflow. This is the
+        # fix for the strand-on-failure bug: if the PUT lands but any later step raises,
+        # the snapshot is already persisted, so the repair stays rollback-eligible.
+        storage.record_repair_snapshot(
+            repair_id, snapshot, repair["proposed_workflow"]
         )
-        return {"repair": storage.mark_repair_applied(repair_id, **result)}
-    except StaleRepairProposal as exc:
-        storage.mark_repair_stale(repair_id, "applying", str(exc))
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    except InvalidRepairProposal as exc:
-        storage.mark_repair_failed(repair_id, "applying", str(exc))
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except Exception as exc:
-        storage.mark_repair_failed(repair_id, "applying", str(exc))
-        raise
+
+        # Phase 2 — the point of no return: the live PUT. If it raises, the mutation may
+        # already have landed, so keep the repair rollback-eligible, never 'failed'.
+        try:
+            applied = await commit_apply(
+                client, repair["workflow_id"], repair["proposed_workflow"]
+            )
+        except Exception as exc:
+            storage.mark_repair_apply_unverified(repair_id, str(exc))
+            raise HTTPException(
+                status_code=502,
+                detail="Applied the fix to n8n but could not confirm the result; "
+                "the repair is left rollback-eligible.",
+            ) from None
+
+        # Phase 3 — the PUT succeeded. Bookkeeping must not strand a live mutation: the
+        # snapshot is already persisted, so on failure keep it rollback-eligible.
+        try:
+            return {
+                "repair": storage.mark_repair_applied(
+                    repair_id, snapshot=snapshot, applied_workflow=applied
+                )
+            }
+        except Exception as exc:
+            storage.mark_repair_apply_unverified(
+                repair_id, f"apply bookkeeping failed after n8n write: {exc}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Applied the fix to n8n but could not record it; "
+                "the repair is left rollback-eligible.",
+            ) from None
     finally:
         await client.aclose()
 
