@@ -10,15 +10,18 @@ No model response, tool input, credential, or raw execution is printed. Workflow
 retired inactive and the temporary Anthropic credential is deleted after collection, so
 n8n execution records and the Pisama corpus remain as the real regression evidence.
 
-Required environment variables: ANTHROPIC_API_KEY, PISAMA_N8N_API_KEY,
-PISAMA_API_KEY. Optional: PISAMA_N8N_URL (default localhost:5681),
-PISAMA_SERVER_URL (default localhost:8411).
+Required environment variables: PISAMA_N8N_API_KEY, PISAMA_API_KEY, and either
+ANTHROPIC_API_KEY or a reusable PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID. The reusable
+credential must be an n8n Anthropic credential; its optional display name is set with
+PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_NAME. Optional: PISAMA_N8N_URL (default
+localhost:5681), PISAMA_SERVER_URL (default localhost:8411).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
@@ -43,6 +46,14 @@ _STRUCTURED_PARSER_ERROR = "Model output doesn't fit required format"
 
 def _anthropic_credential() -> Dict[str, str]:
     """Create an ephemeral native Anthropic credential without serializing its key."""
+    reusable_id = os.getenv("PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID", "").strip()
+    if reusable_id:
+        return {
+            "id": reusable_id,
+            "name": os.getenv(
+                "PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_NAME", "Anthropic account"
+            ),
+        }
     created = _n8n(
         "POST",
         "/api/v1/credentials",
@@ -53,6 +64,13 @@ def _anthropic_credential() -> Dict[str, str]:
         },
     )
     return {"id": str(created["id"]), "name": str(created["name"])}
+
+
+def _delete_ephemeral_credential(credential: Dict[str, str]) -> None:
+    """Do not delete the shared credential used by the restricted Cloud key."""
+    if os.getenv("PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID", "").strip():
+        return
+    _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
 
 
 def _webhook(path: str) -> Dict[str, Any]:
@@ -719,7 +737,7 @@ def capture_extended_evidence(labels: Optional[Sequence[str]] = None) -> None:
         )
     finally:
         _retire_captures(captures.values())
-        _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
+        _delete_ephemeral_credential(credential)
 
 
 def main() -> None:
@@ -775,7 +793,7 @@ def main() -> None:
         )
     finally:
         _retire_captures(captures)
-        _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
+        _delete_ephemeral_credential(credential)
 
 
 if __name__ == "__main__":

@@ -6,8 +6,11 @@ result into Pisama, and retires the workflow inactive afterwards so n8n retains 
 actual execution as regression evidence. It prints only a redacted summary; API keys
 and full model content never leave the process.
 
-Required environment variables: ANTHROPIC_API_KEY, PISAMA_N8N_API_KEY,
-PISAMA_API_KEY. Optional: PISAMA_N8N_URL (default localhost:5681),
+Required environment variables: PISAMA_N8N_API_KEY, PISAMA_API_KEY, and either
+``ANTHROPIC_API_KEY`` or a reusable ``PISAMA_CLAUDE_CREDENTIAL_ID``. The reusable
+credential must be an n8n ``httpHeaderAuth`` credential with header name
+``x-api-key``. Its optional display name is set with
+``PISAMA_CLAUDE_CREDENTIAL_NAME``. Optional: PISAMA_N8N_URL (default localhost:5681),
 PISAMA_SERVER_URL (default localhost:8411).
 """
 
@@ -76,7 +79,13 @@ def _headers() -> list[Dict[str, str]]:
 
 
 def _anthropic_credential() -> Dict[str, str]:
-    """Create an ephemeral n8n credential so workflow JSON never holds the key."""
+    """Use a least-privileged reusable credential or create a local ephemeral one."""
+    reusable_id = os.getenv("PISAMA_CLAUDE_CREDENTIAL_ID", "").strip()
+    if reusable_id:
+        return {
+            "id": reusable_id,
+            "name": os.getenv("PISAMA_CLAUDE_CREDENTIAL_NAME", "Pisama dogfood Claude HTTP"),
+        }
     created = _n8n(
         "POST",
         "/api/v1/credentials",
@@ -87,6 +96,13 @@ def _anthropic_credential() -> Dict[str, str]:
         },
     )
     return {"id": str(created["id"]), "name": str(created["name"])}
+
+
+def _delete_ephemeral_credential(credential: Dict[str, str]) -> None:
+    """Leave a project-owned reusable credential untouched after a capture."""
+    if os.getenv("PISAMA_CLAUDE_CREDENTIAL_ID", "").strip():
+        return
+    _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
 
 
 def _http_node(
@@ -606,7 +622,7 @@ def capture_truncation_evidence() -> None:
     finally:
         if capture is not None:
             _retire_captures([capture])
-        _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
+        _delete_ephemeral_credential(credential)
 
 
 def capture_core_evidence() -> None:
@@ -648,7 +664,7 @@ def capture_core_evidence() -> None:
         )
     finally:
         _retire_captures(captures.values())
-        _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
+        _delete_ephemeral_credential(credential)
 
 
 def main() -> None:
@@ -674,7 +690,7 @@ def main() -> None:
         )
     finally:
         _retire_captures(captures)
-        _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
+        _delete_ephemeral_credential(credential)
 
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

@@ -10,8 +10,16 @@ cd "$ROOT"
 : "${PISAMA_N8N_API_KEY:?set the scoped n8n API key}"
 : "${PISAMA_API_KEY:?set the Pisama dogfood API key}"
 : "${PISAMA_SERVER_URL:?set the Pisama dogfood server URL}"
-: "${ANTHROPIC_API_KEY:?set the Anthropic dogfood key}"
 : "${PISAMA_BUILD_REVISION:?set the deployed commit revision}"
+
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${PISAMA_CLAUDE_CREDENTIAL_ID:-}" ]]; then
+  echo 'Set ANTHROPIC_API_KEY or PISAMA_CLAUDE_CREDENTIAL_ID.' >&2
+  exit 2
+fi
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID:-}" ]]; then
+  echo 'Set ANTHROPIC_API_KEY or PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID.' >&2
+  exit 2
+fi
 
 export PYTHONPATH="$ROOT/engine${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "${DOGFOOD_ARTIFACT_DIR:-artifacts/dogfood}"

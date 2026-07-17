@@ -22,6 +22,9 @@ jobs:
           PISAMA_N8N_API_KEY: ${{ secrets.PISAMA_DOGFOOD_N8N_API_KEY }}
           PISAMA_API_KEY: ${{ secrets.PISAMA_DOGFOOD_API_KEY }}
           PISAMA_SERVER_URL: ${{ secrets.PISAMA_DOGFOOD_SERVER_URL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PISAMA_CLAUDE_CREDENTIAL_ID: ${{ secrets.PISAMA_CLAUDE_CREDENTIAL_ID }}
+          PISAMA_CLAUDE_CREDENTIAL_NAME: Pisama dogfood Claude HTTP
+          PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID: ${{ secrets.PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_ID }}
+          PISAMA_NATIVE_ANTHROPIC_CREDENTIAL_NAME: Anthropic account
           PISAMA_BUILD_REVISION: ${{ github.sha }}
         run: bash scripts/run_dogfood_pipeline.sh
