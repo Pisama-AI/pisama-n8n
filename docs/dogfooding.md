@@ -39,7 +39,8 @@ volume, a unique bearer key, and a unique n8n API key. Bind the local server por
 `127.0.0.1` and start it with `--no-deps` so the n8n target is neither recreated nor
 restarted. n8n `1.91.3` keys must use only Workflow and execution read scopes. n8n
 `1.70.0` has no scoped-key endpoint, so its short-lived legacy key is safe only inside
-the dedicated disposable lane.
+the dedicated disposable lane. The Compose services use `restart: unless-stopped` so
+the retained lanes resume after a Docker restart.
 
 The intended sustained matrix is a current SQLite lane, a current Postgres lane, a
 `1.70.0` SQLite lane, and the dedicated Cloud lane. The upgrade/restore harness is an

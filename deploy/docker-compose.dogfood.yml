@@ -9,6 +9,7 @@
 services:
   n8n:
     image: n8nio/n8n:${N8N_VERSION:-1.91.3}
+    restart: unless-stopped
     ports:
       - "${PISAMA_DOGFOOD_N8N_PORT:-5681}:5678"
     environment:
@@ -31,6 +32,7 @@ services:
 
   server:
     profiles: ["server"]
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
