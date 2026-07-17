@@ -6,9 +6,9 @@ one successful native tool call, one tool error followed by a native model recov
 and one tool error with no later model recovery. It uses n8n's native AI Agent,
 Anthropic Chat Model, and Code Tool nodes, then polls the configured Pisama server.
 
-No model response, tool input, credential, or raw execution is printed. Workflows and
-the temporary Anthropic credential are deleted after collection; n8n execution records
-and the Pisama corpus remain as the real regression evidence.
+No model response, tool input, credential, or raw execution is printed. Workflows are
+retired inactive and the temporary Anthropic credential is deleted after collection, so
+n8n execution records and the Pisama corpus remain as the real regression evidence.
 
 Required environment variables: ANTHROPIC_API_KEY, PISAMA_N8N_API_KEY,
 PISAMA_API_KEY. Optional: PISAMA_N8N_URL (default localhost:5681),
@@ -17,12 +17,14 @@ PISAMA_SERVER_URL (default localhost:8411).
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from capture_claude_agent_evidence import (
     SERVER_URL,
+    _retire_captures,
     _n8n,
     _request,
     _required,
@@ -35,6 +37,8 @@ MODEL = "claude-haiku-4-5-20251001"
 _NATIVE_AGENT = "@n8n/n8n-nodes-langchain.agent"
 _NATIVE_MODEL = "@n8n/n8n-nodes-langchain.lmChatAnthropic"
 _NATIVE_TOOL = "@n8n/n8n-nodes-langchain.toolCode"
+_NATIVE_OUTPUT_PARSER = "@n8n/n8n-nodes-langchain.outputParserStructured"
+_STRUCTURED_PARSER_ERROR = "Model output doesn't fit required format"
 
 
 def _anthropic_credential() -> Dict[str, str]:
@@ -142,6 +146,95 @@ def _tool(query: str, fails: bool) -> Dict[str, Any]:
     }
 
 
+def _named_tool(
+    name: str, description: str, code: str, position: List[int]
+) -> Dict[str, Any]:
+    """Build one native Code Tool without copying its runtime inputs into output."""
+    return {
+        "parameters": {
+            "name": name,
+            "description": description,
+            "jsCode": code,
+            "language": "javaScript",
+            "specifyInputSchema": False,
+        },
+        "id": name,
+        "name": name,
+        "type": _NATIVE_TOOL,
+        "typeVersion": 1.2,
+        "position": position,
+    }
+
+
+def _extended_agent(
+    name: str,
+    prompt: str,
+    *,
+    max_iterations: int,
+    has_output_parser: bool,
+) -> Dict[str, Any]:
+    """Build a native Tools Agent for an explicitly bounded evidence experiment."""
+    return {
+        "parameters": {
+            "agent": "toolsAgent",
+            "promptType": "define",
+            "text": prompt,
+            "hasOutputParser": has_output_parser,
+            "options": {
+                "maxIterations": max_iterations,
+                "returnIntermediateSteps": True,
+                "systemMessage": (
+                    "You are a deterministic native n8n dogfood agent. Follow the "
+                    "tool instructions exactly and keep the final answer short."
+                ),
+            },
+        },
+        "id": name,
+        "name": name,
+        "type": _NATIVE_AGENT,
+        "typeVersion": 1.9,
+        "position": [240, 0],
+    }
+
+
+def _structured_output_parser(schema: str) -> Dict[str, Any]:
+    """Build n8n's parser v1 so its real runtime contract is explicit."""
+    return {
+        "parameters": {"jsonSchema": schema},
+        "id": "structured-parser",
+        "name": "Native Structured Output Parser",
+        "type": _NATIVE_OUTPUT_PARSER,
+        "typeVersion": 1,
+        "position": [240, 360],
+    }
+
+
+def _native_edge(target: str, edge_type: str) -> Dict[str, Any]:
+    """Return one direct n8n AI edge to an Agent node."""
+    return {"node": target, "type": edge_type, "index": 0}
+
+
+def _extended_connections(
+    agent: str, tools: List[str], *, has_output_parser: bool
+) -> Dict[str, Any]:
+    """Connect exactly one model, named tools, and optionally one output parser."""
+    connections: Dict[str, Any] = {
+        "Native agent webhook": {
+            "main": [[{"node": agent, "type": "main", "index": 0}]]
+        },
+        "Native Anthropic Chat Model": {
+            "ai_languageModel": [[_native_edge(agent, "ai_languageModel")]]
+        },
+    }
+    for tool in tools:
+        connections[tool] = {"ai_tool": [[_native_edge(agent, "ai_tool")]]}
+    if has_output_parser:
+        connections["Native Structured Output Parser"] = {
+            "ai_outputParser": [[_native_edge(agent, "ai_outputParser")]]
+        }
+    return connections
+
+
 def _connections() -> Dict[str, Any]:
     return {
         "Native agent webhook": {
@@ -182,6 +275,110 @@ def _workflow(
             _tool(query, fails),
         ],
         "connections": _connections(),
+        "settings": {},
+        "_path": path,
+    }
+
+
+def _structured_workflow(
+    name: str, credential: Dict[str, str], schema: str
+) -> Dict[str, Any]:
+    """Create one native output-parser control or rejection experiment.
+
+    The parser receives an explicit JSON schema through n8n's native Agent topology.
+    A valid but unsatisfiable schema is deliberately used only for the rejection
+    captures. It exercises n8n's real parser error path without pretending that a
+    particular model response is malformed.
+    """
+    path = f"pisama-native-structured-{name}-{int(time.time() * 1000)}"
+    agent_name = "Native structured AI Agent"
+    tool_name = "structured_control_tool"
+    tool = _named_tool(
+        tool_name,
+        "A harmless native tool. Do not call it for the structured-output test.",
+        "return 'native structured control';",
+        [240, 540],
+    )
+    prompt = (
+        "Return a JSON object with one answer field containing a short status. "
+        "Do not call the structured_control_tool."
+    )
+    return {
+        "name": f"Pisama temporary native structured parser {name}",
+        "nodes": [
+            _webhook(path),
+            _extended_agent(
+                agent_name,
+                prompt,
+                max_iterations=2,
+                has_output_parser=True,
+            ),
+            _model(credential),
+            tool,
+            _structured_output_parser(schema),
+        ],
+        "connections": _extended_connections(
+            agent_name, [tool_name], has_output_parser=True
+        ),
+        "settings": {},
+        "_path": path,
+    }
+
+
+def _multi_tool_workflow(
+    name: str,
+    credential: Dict[str, str],
+    *,
+    primary_fails: bool,
+    max_iterations: int,
+) -> Dict[str, Any]:
+    """Create a real native two-tool control or bounded recovery execution."""
+    path = f"pisama-native-multi-tool-{name}-{int(time.time() * 1000)}"
+    agent_name = "Native multi-tool AI Agent"
+    primary_name = "primary_lookup"
+    backup_name = "backup_lookup"
+    primary_code = (
+        "throw new Error('Pisama native controlled primary tool failure');"
+        if primary_fails
+        else "return 'native primary lookup completed';"
+    )
+    tools = [
+        _named_tool(
+            primary_name,
+            "Looks up a native dogfood status. Use it first.",
+            primary_code,
+            [160, 360],
+        ),
+        _named_tool(
+            backup_name,
+            "Returns the backup native dogfood status after a primary error.",
+            "return 'native backup lookup completed';",
+            [360, 360],
+        ),
+    ]
+    prompt = (
+        "Use the primary_lookup tool exactly once with query "
+        f"native-multi-tool-{name}. Do not answer before using it. If "
+        "primary_lookup reports an error, use backup_lookup exactly once with the "
+        "same query. After a successful lookup, give one short final answer. Do not "
+        "repeat either tool or call another tool."
+    )
+    return {
+        "name": f"Pisama temporary native multi-tool {name}",
+        "nodes": [
+            _webhook(path),
+            _extended_agent(
+                agent_name,
+                prompt,
+                max_iterations=max_iterations,
+                has_output_parser=False,
+            ),
+            _model(credential),
+            *tools,
+        ],
+        "connections": _extended_connections(
+            agent_name, [primary_name, backup_name], has_output_parser=False
+        ),
         "settings": {},
         "_path": path,
     }
@@ -355,6 +552,176 @@ def _assert_detections(captures: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     return findings
 
 
+def _capture_extended_workflows(
+    credential: Dict[str, str], labels: Optional[Sequence[str]] = None
+) -> Dict[str, Dict[str, Any]]:
+    """Run fresh native parser and two-tool evidence experiments.
+
+    This is deliberately a capture harness, not a detector claim. The first output
+    records the exact n8n execution topology and statuses safely; detector rules are
+    allowed to change only after those real executions have been inspected.
+    """
+    satisfiable_schema = json.dumps(
+        {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+        separators=(",", ":"),
+    )
+    unsatisfiable_schema = '{"not":{}}'
+    builders = (
+        (
+            "structured_control",
+            lambda: _structured_workflow("control", credential, satisfiable_schema),
+        ),
+        (
+            "structured_rejection_one",
+            lambda: _structured_workflow(
+                "rejection-one", credential, unsatisfiable_schema
+            ),
+        ),
+        (
+            "structured_rejection_two",
+            lambda: _structured_workflow(
+                "rejection-two", credential, unsatisfiable_schema
+            ),
+        ),
+        (
+            "multi_tool_healthy",
+            lambda: _multi_tool_workflow(
+                "healthy", credential, primary_fails=False, max_iterations=4
+            ),
+        ),
+        (
+            "multi_tool_recovery",
+            lambda: _multi_tool_workflow(
+                "recovery", credential, primary_fails=True, max_iterations=4
+            ),
+        ),
+        (
+            "multi_tool_unhandled",
+            lambda: _multi_tool_workflow(
+                "unhandled", credential, primary_fails=True, max_iterations=1
+            ),
+        ),
+    )
+    requested = set(labels or ())
+    if requested:
+        builders = tuple(
+            (label, build_workflow)
+            for label, build_workflow in builders
+            if label in requested
+        )
+        if len(builders) != len(requested):
+            raise RuntimeError("unknown native extended evidence label")
+    captures: Dict[str, Dict[str, Any]] = {}
+    try:
+        for label, build_workflow in builders:
+            captures[label] = _run_workflow(build_workflow())
+        return captures
+    except Exception:
+        _retire_captures(captures.values())
+        raise
+
+
+def _safe_run_summary(run: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep execution-shape facts while excluding model and tool payloads."""
+    index = run.get("executionIndex")
+    return {
+        "execution_index": index if isinstance(index, int) else None,
+        "status": run.get("executionStatus"),
+        "has_error": bool(run.get("error")),
+    }
+
+
+def _safe_capture_shape(capture: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize real node topology and order without serializing trace content."""
+    node_runs = {
+        name: [_safe_run_summary(run) for run in runs if isinstance(run, dict)]
+        for name, runs in capture["run_data"].items()
+        if isinstance(name, str) and isinstance(runs, list)
+    }
+    agent_name = next(
+        (
+            name
+            for name in ("Native structured AI Agent", "Native multi-tool AI Agent")
+            if name in node_runs
+        ),
+        None,
+    )
+    action_tools: List[str] = []
+    if agent_name:
+        for run in _runs(capture, agent_name):
+            for step in _agent_intermediate_steps(run):
+                action = step.get("action") if isinstance(step, dict) else None
+                tool = action.get("tool") if isinstance(action, dict) else None
+                if isinstance(tool, str):
+                    action_tools.append(tool)
+    parser_runs = _runs(capture, "Native Structured Output Parser")
+    parser_error_matches_expected = any(
+        isinstance(run.get("error"), dict)
+        and run["error"].get("message") == _STRUCTURED_PARSER_ERROR
+        for run in parser_runs
+    )
+    return {
+        "execution_id": str(capture["execution_id"]),
+        "workflow_status": capture.get("status"),
+        "finished": capture.get("finished"),
+        "node_runs": node_runs,
+        "agent_action_tools": action_tools,
+        "parser_error_matches_expected": parser_error_matches_expected,
+    }
+
+
+def _assert_extended_retention(captures: Dict[str, Dict[str, Any]]) -> None:
+    """Require n8n to retain the real node runs before interpreting them."""
+    for label, capture in captures.items():
+        if not capture.get("stopped_at"):
+            raise RuntimeError(f"native extended capture did not stop: {label}")
+        run_data = capture.get("run_data")
+        if not isinstance(run_data, dict) or not run_data:
+            raise RuntimeError(f"native extended capture has no run data: {label}")
+        required = (
+            "Native structured AI Agent"
+            if label.startswith("structured_")
+            else "Native multi-tool AI Agent"
+        )
+        if not _runs(capture, required):
+            raise RuntimeError(
+                f"native extended capture omitted the Agent run: {label}"
+            )
+
+
+def capture_extended_evidence(labels: Optional[Sequence[str]] = None) -> None:
+    """Capture native structured-parser and two-tool paths from fresh n8n executions."""
+    captures: Dict[str, Dict[str, Any]] = {}
+    credential = _anthropic_credential()
+    try:
+        captures = _capture_extended_workflows(credential, labels)
+        _assert_extended_retention(captures)
+        sync = _server_sync()
+        findings = _fired_by_execution(captures.values())
+        print(
+            json.dumps(
+                {
+                    "captures": {
+                        label: _safe_capture_shape(capture)
+                        for label, capture in captures.items()
+                    },
+                    "sync": sync,
+                    "fired_fingerprints": findings,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    finally:
+        _retire_captures(captures.values())
+        _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
+
+
 def main() -> None:
     captures: List[Dict[str, Any]] = []
     credential = _anthropic_credential()
@@ -407,10 +774,29 @@ def main() -> None:
             )
         )
     finally:
-        for capture in captures:
-            _n8n("DELETE", f"/api/v1/workflows/{capture['workflow_id']}")
+        _retire_captures(captures)
         _n8n("DELETE", f"/api/v1/credentials/{credential['id']}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--extended",
+        action="store_true",
+        help="Capture real native structured-parser and multi-tool evidence.",
+    )
+    mode.add_argument(
+        "--multi-tool-only",
+        action="store_true",
+        help="Capture real native two-tool controls and recovery evidence only.",
+    )
+    args = parser.parse_args()
+    if args.extended:
+        capture_extended_evidence()
+    elif args.multi_tool_only:
+        capture_extended_evidence(
+            ["multi_tool_healthy", "multi_tool_recovery", "multi_tool_unhandled"]
+        )
+    else:
+        main()

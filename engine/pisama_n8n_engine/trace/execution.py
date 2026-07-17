@@ -294,16 +294,17 @@ def _append_unique(values: List[str], value: str) -> None:
 
 
 def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Any]:
-    """Return direct native-Agent tool/model edges from the workflow snapshot.
+    """Return direct native-Agent peer edges from the workflow snapshot.
 
     Native n8n nested runs currently carry ``source: [null]``. This records only a
-    literal direct ``ai_tool`` or ``ai_languageModel`` workflow edge, never a graph
-    path. Keeping both directions lets the runtime detector reject shared tool/model
-    nodes rather than attributing an error across an ambiguous agent graph.
+    literal direct ``ai_tool``, ``ai_languageModel``, or ``ai_outputParser`` workflow
+    edge, never a graph path. Keeping both directions lets runtime detectors reject
+    shared peers rather than attributing an error across an ambiguous agent graph.
     """
     native_agents = _native_agent_names(workflow)
     agent_edges: Dict[str, Dict[str, List[str]]] = {
-        name: {"tool_nodes": [], "model_nodes": []} for name in native_agents
+        name: {"tool_nodes": [], "model_nodes": [], "output_parser_nodes": []}
+        for name in native_agents
     }
     source_edges: Dict[str, Dict[str, List[str]]] = {}
     connections = workflow.get("connections") or {}
@@ -316,12 +317,18 @@ def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Any]:
         for connection_type, agent_key, source_key in (
             ("ai_tool", "tool_nodes", "tool_agents"),
             ("ai_languageModel", "model_nodes", "model_agents"),
+            ("ai_outputParser", "output_parser_nodes", "output_parser_agents"),
         ):
             for target in _direct_native_targets(
                 outputs, connection_type, native_agents
             ):
                 targets = source_edges.setdefault(
-                    source, {"tool_agents": [], "model_agents": []}
+                    source,
+                    {
+                        "tool_agents": [],
+                        "model_agents": [],
+                        "output_parser_agents": [],
+                    },
                 )[source_key]
                 _append_unique(targets, target)
                 _append_unique(agent_edges[target][agent_key], source)
@@ -439,10 +446,16 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
             **_native_agent_facts(node_type, output_data),
         }
         agent_edges = native_topology["agent_edges"].get(
-            node_name, {"tool_nodes": [], "model_nodes": []}
+            node_name,
+            {"tool_nodes": [], "model_nodes": [], "output_parser_nodes": []},
         )
         source_edges = native_topology["source_edges"].get(
-            node_name, {"tool_agents": [], "model_agents": []}
+            node_name,
+            {
+                "tool_agents": [],
+                "model_agents": [],
+                "output_parser_agents": [],
+            },
         )
         turns.append(
             TurnSnapshot(
@@ -481,8 +494,14 @@ def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
                     # unambiguous one-tool / one-model topology.
                     "native_agent_tool_nodes": agent_edges["tool_nodes"],
                     "native_agent_model_nodes": agent_edges["model_nodes"],
+                    "native_agent_output_parser_nodes": agent_edges[
+                        "output_parser_nodes"
+                    ],
                     "native_ai_tool_target_agents": source_edges["tool_agents"],
                     "native_ai_model_target_agents": source_edges["model_agents"],
+                    "native_ai_output_parser_target_agents": source_edges[
+                        "output_parser_agents"
+                    ],
                     **agent_facts,
                 },
             )

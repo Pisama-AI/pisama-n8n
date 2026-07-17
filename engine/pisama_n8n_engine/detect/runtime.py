@@ -43,6 +43,8 @@ _PROVIDER_MARKERS = (
 _N8N_ABORTED_CONNECTION = "connection was aborted"
 _NATIVE_AI_AGENT_TYPE = "@n8n/n8n-nodes-langchain.agent"
 _NATIVE_LANGUAGE_MODEL_PREFIX = "@n8n/n8n-nodes-langchain.lm"
+_NATIVE_OUTPUT_PARSER_TYPE = "@n8n/n8n-nodes-langchain.outputParserStructured"
+_NATIVE_STRUCTURED_PARSER_ERROR = "Model output doesn't fit required format"
 
 
 def recorded_timeout(turn: TurnSnapshot) -> bool:
@@ -465,6 +467,11 @@ def _native_language_model(turn: TurnSnapshot) -> bool:
     return node_type.startswith(_NATIVE_LANGUAGE_MODEL_PREFIX)
 
 
+def _native_structured_output_parser(turn: TurnSnapshot) -> bool:
+    """Whether this is n8n's exact native structured-output parser node."""
+    return (turn.turn_metadata or {}).get("node_type") == _NATIVE_OUTPUT_PARSER_TYPE
+
+
 @dataclass(frozen=True)
 class _NativeToolFailureContext:
     """The strict native-Agent facts needed for one recovery decision."""
@@ -473,6 +480,15 @@ class _NativeToolFailureContext:
     tool: TurnSnapshot
     initial_model: TurnSnapshot
     model_turns: List[TurnSnapshot]
+
+
+@dataclass(frozen=True)
+class _NativeStructuredParserContext:
+    """The exact native nodes n8n recorded for one parser rejection."""
+
+    agent: TurnSnapshot
+    model: TurnSnapshot
+    parser: TurnSnapshot
 
 
 def _single_ordered_native_agent(
@@ -635,6 +651,102 @@ def _native_tool_failure_context(
     )
 
 
+def _native_structured_parser_peers(
+    turns: List[TurnSnapshot], agent: TurnSnapshot
+) -> Optional[tuple[TurnSnapshot, TurnSnapshot]]:
+    """Return one direct model/parser pair only when both runs are unique."""
+    agent_metadata = agent.turn_metadata or {}
+    parser_name = _single_static_node(
+        agent_metadata, "native_agent_output_parser_nodes"
+    )
+    model_name = _single_static_node(agent_metadata, "native_agent_model_nodes")
+    if not parser_name or not model_name:
+        return None
+    parser = _single_named_turn(turns, parser_name)
+    model = _single_named_turn(turns, model_name)
+    if parser is None or model is None:
+        return None
+    return model, parser
+
+
+def _native_structured_parser_topology_is_exclusive(
+    turns: List[TurnSnapshot],
+    agent: TurnSnapshot,
+    model: TurnSnapshot,
+    parser: TurnSnapshot,
+) -> bool:
+    """Require one native model and parser, both directly owned by the Agent."""
+    if not _native_language_model(model) or not _native_structured_output_parser(
+        parser
+    ):
+        return False
+    if sum(_native_language_model(turn) for turn in turns) != 1:
+        return False
+    if sum(_native_structured_output_parser(turn) for turn in turns) != 1:
+        return False
+    if not _targets_only_agent(
+        model.turn_metadata or {}, "native_ai_model_target_agents", agent.participant_id
+    ):
+        return False
+    return _targets_only_agent(
+        parser.turn_metadata or {},
+        "native_ai_output_parser_target_agents",
+        agent.participant_id,
+    )
+
+
+def _recorded_native_structured_parser_error(
+    agent: TurnSnapshot, parser: TurnSnapshot
+) -> bool:
+    """Require the exact error observed in the live structured-parser captures."""
+    agent_metadata = agent.turn_metadata or {}
+    parser_metadata = parser.turn_metadata or {}
+    return bool(
+        agent_metadata.get("has_error")
+        and parser_metadata.get("has_error")
+        and parser_metadata.get("error_message") == _NATIVE_STRUCTURED_PARSER_ERROR
+    )
+
+
+def _native_structured_parser_order_is_recorded(
+    agent: TurnSnapshot, model: TurnSnapshot, parser: TurnSnapshot
+) -> bool:
+    """Require n8n's exact Agent, model, parser execution order."""
+    if not _strongly_ordered_turns([agent, model, parser]):
+        return False
+    agent_index = (agent.turn_metadata or {})["execution_index"]
+    model_index = (model.turn_metadata or {})["execution_index"]
+    parser_index = (parser.turn_metadata or {})["execution_index"]
+    return bool(agent_index < model_index < parser_index)
+
+
+def _native_structured_parser_context(
+    turns: List[TurnSnapshot],
+) -> Optional[_NativeStructuredParserContext]:
+    """Return a direct native parser rejection only when its topology is exclusive.
+
+    Native child runs have no runtime source link, so this contract intentionally
+    supports one Agent, one direct model, and one direct structured parser only. It
+    also requires the exact n8n parser error observed in two live rejection captures.
+    A tool run, multiple Agents/models/parsers, repeated node runs, or missing order is
+    inconclusive rather than generalized into a malformed-output diagnosis.
+    """
+    agent = _single_ordered_native_agent(turns)
+    if agent is None:
+        return None
+    peers = _native_structured_parser_peers(turns, agent)
+    if peers is None:
+        return None
+    model, parser = peers
+    if not _native_structured_parser_topology_is_exclusive(turns, agent, model, parser):
+        return None
+    if not _recorded_native_structured_parser_error(agent, parser):
+        return None
+    if not _native_structured_parser_order_is_recorded(agent, model, parser):
+        return None
+    return _NativeStructuredParserContext(agent=agent, model=model, parser=parser)
+
+
 def recovered_native_agent_tool_turns(
     turns: List[TurnSnapshot],
 ) -> List[TurnSnapshot]:
@@ -667,11 +779,12 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
     """
 
     name = "N8NAgentDiagnosticsDetector"
-    version = "1.1"
+    version = "1.2"
     supported_failure_modes = [
         "n8n_agent_tool_recovery",
         "n8n_agent_output_validation",
         "n8n_native_agent_tool_recovery",
+        "n8n_native_structured_parser_rejection",
     ]
 
     def detect(
@@ -689,6 +802,9 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
         native_recovery = self._native_unhandled_tool_failure(turns)
         if native_recovery is not None:
             return native_recovery
+        native_parser = self._native_structured_parser_rejection(turns)
+        if native_parser is not None:
+            return native_parser
         return _clear(
             self.name,
             "No evidence-backed Claude Messages or native AI Agent failure contract was recorded.",
@@ -814,6 +930,46 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
             suggested_fix=(
                 "Route native Agent tool errors through a bounded recovery turn or "
                 "explicit fallback, then verify the next real execution."
+            ),
+            detector_name=self.name,
+            detector_version=self.version,
+        )
+
+    def _native_structured_parser_rejection(
+        self, turns: List[TurnSnapshot]
+    ) -> Optional[TurnAwareDetectionResult]:
+        """Report n8n's exact native structured-parser rejection contract."""
+        context = _native_structured_parser_context(turns)
+        if context is None:
+            return None
+        agent = context.agent
+        model = context.model
+        parser = context.parser
+        return TurnAwareDetectionResult(
+            detected=True,
+            severity=TurnAwareSeverity.MODERATE,
+            confidence=0.98,
+            failure_mode="n8n_native_structured_parser_rejection",
+            explanation=(
+                "n8n recorded its native Structured Output Parser rejecting the "
+                "Agent response. The direct parser edge and recorded parser error "
+                "show that this output contract did not complete."
+            ),
+            affected_turns=sorted(
+                [agent.turn_number, model.turn_number, parser.turn_number]
+            ),
+            evidence={
+                "agent_node": agent.participant_id,
+                "agent_execution_index": agent.turn_metadata["execution_index"],
+                "model_node": model.participant_id,
+                "model_execution_index": model.turn_metadata["execution_index"],
+                "parser_node": parser.participant_id,
+                "parser_execution_index": parser.turn_metadata["execution_index"],
+            },
+            suggested_fix=(
+                "Review the parser JSON Schema and Agent prompt as a pair, then route "
+                "parser rejections to a bounded fallback or human review. Do not "
+                "automatically widen the schema."
             ),
             detector_name=self.name,
             detector_version=self.version,

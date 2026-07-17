@@ -160,7 +160,9 @@ def test_real_json_parse_validation_fault_is_reported():
 _NATIVE_AGENT = "@n8n/n8n-nodes-langchain.agent"
 _NATIVE_MODEL = "@n8n/n8n-nodes-langchain.lmChatAnthropic"
 _NATIVE_TOOL = "@n8n/n8n-nodes-langchain.toolCode"
+_NATIVE_OUTPUT_PARSER = "@n8n/n8n-nodes-langchain.outputParserStructured"
 _NATIVE_ERROR = "Pisama native controlled tool failure for native-tool-unhandled"
+_NATIVE_PARSER_ERROR = "Model output doesn't fit required format"
 
 
 def _native_run(index, data, status="success", error=None, source=None):
@@ -402,5 +404,189 @@ def test_native_agent_contract_rejects_unrelated_model_or_agent_loop():
         )
     )
     for document in (unrelated_model, repeated_agent):
+        result, _ = _native_result(document)
+        assert result.detected is False
+
+
+def _native_parser_execution(
+    *,
+    parser_error=_NATIVE_PARSER_ERROR,
+    connections=None,
+    extra_runs=None,
+):
+    """Reduced, secret-free n8n 1.91 structured-parser rejection capture.
+
+    This retains only observed node types, execution ordering, direct AI edges, and
+    the exact parser error. It deliberately excludes the model response, schema,
+    credential, tool input, and raw parser payload.
+    """
+    parser_fails = parser_error is not None
+    run_data = {
+        "Native agent webhook": [
+            _native_run(0, {"main": [[{"json": {"ok": True}}]]}, source=[])
+        ],
+        "Native structured AI Agent": [
+            _native_run(
+                1,
+                {"main": []},
+                status="error" if parser_fails else "success",
+                error=parser_error,
+                source=[{"previousNode": "Native agent webhook"}],
+            )
+        ],
+        "Native Anthropic Chat Model": [
+            _native_run(2, {"ai_languageModel": [[{"json": {}}]]})
+        ],
+        "Native Structured Output Parser": [
+            _native_run(
+                3,
+                {"ai_outputParser": []},
+                status="error" if parser_fails else "success",
+                error=parser_error,
+            )
+        ],
+    }
+    if extra_runs:
+        run_data.update(extra_runs)
+    nodes = [
+        make_node("Native agent webhook", "n8n-nodes-base.webhook"),
+        make_node("Native structured AI Agent", _NATIVE_AGENT),
+        make_node("Native Anthropic Chat Model", _NATIVE_MODEL),
+        make_node("Native Structured Output Parser", _NATIVE_OUTPUT_PARSER),
+        make_node("structured_control_tool", _NATIVE_TOOL),
+    ]
+    document = execution_doc(
+        run_data,
+        nodes=nodes,
+        status="error" if parser_fails else "success",
+        finished=not parser_fails,
+    )
+    document["workflowData"]["connections"] = connections or {
+        "Native agent webhook": {
+            "main": [
+                [{"node": "Native structured AI Agent", "type": "main", "index": 0}]
+            ]
+        },
+        "Native Anthropic Chat Model": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "Native structured AI Agent",
+                        "type": "ai_languageModel",
+                        "index": 0,
+                    }
+                ]
+            ]
+        },
+        "Native Structured Output Parser": {
+            "ai_outputParser": [
+                [
+                    {
+                        "node": "Native structured AI Agent",
+                        "type": "ai_outputParser",
+                        "index": 0,
+                    }
+                ]
+            ]
+        },
+        "structured_control_tool": {
+            "ai_tool": [
+                [
+                    {
+                        "node": "Native structured AI Agent",
+                        "type": "ai_tool",
+                        "index": 0,
+                    }
+                ]
+            ]
+        },
+    }
+    return document
+
+
+def test_native_structured_parser_rejection_is_reported():
+    result, turns = _native_result(_native_parser_execution())
+    assert result.detected is True
+    assert result.failure_mode == "n8n_native_structured_parser_rejection"
+    assert result.confidence == 0.98
+    assert result.evidence == {
+        "agent_node": "Native structured AI Agent",
+        "agent_execution_index": 1,
+        "model_node": "Native Anthropic Chat Model",
+        "model_execution_index": 2,
+        "parser_node": "Native Structured Output Parser",
+        "parser_execution_index": 3,
+    }
+    assert _NATIVE_PARSER_ERROR not in str(result.evidence)
+    agent = next(
+        turn for turn in turns if turn.participant_id == "Native structured AI Agent"
+    )
+    parser = next(
+        turn
+        for turn in turns
+        if turn.participant_id == "Native Structured Output Parser"
+    )
+    assert agent.turn_metadata["native_agent_output_parser_nodes"] == [
+        "Native Structured Output Parser"
+    ]
+    assert parser.turn_metadata["native_ai_output_parser_target_agents"] == [
+        "Native structured AI Agent"
+    ]
+
+
+def test_native_structured_parser_rejection_keeps_the_generic_error():
+    turns, metadata = execution_to_turns_and_metadata(_native_parser_execution())
+    report = analyze(turns=turns, metadata=metadata)
+    assert {detection.detector for detection in report.fired} >= {
+        "error",
+        "agent_diagnostics",
+    }
+
+
+def test_native_structured_parser_rejects_ambiguous_or_healthy_controls():
+    healthy = _native_parser_execution(parser_error=None)
+    shared_parser = _native_parser_execution(
+        connections={
+            "Native Anthropic Chat Model": {
+                "ai_languageModel": [
+                    [
+                        {
+                            "node": "Native structured AI Agent",
+                            "type": "ai_languageModel",
+                            "index": 0,
+                        }
+                    ]
+                ]
+            },
+            "Native Structured Output Parser": {
+                "ai_outputParser": [
+                    [
+                        {
+                            "node": "Native structured AI Agent",
+                            "type": "ai_outputParser",
+                            "index": 0,
+                        },
+                        {
+                            "node": "Other Native Agent",
+                            "type": "ai_outputParser",
+                            "index": 1,
+                        },
+                    ]
+                ]
+            },
+        }
+    )
+    shared_parser["workflowData"]["nodes"].append(
+        make_node("Other Native Agent", _NATIVE_AGENT)
+    )
+    repeated_parser = _native_parser_execution()
+    repeated_parser["data"]["resultData"]["runData"][
+        "Native Structured Output Parser"
+    ].append(
+        _native_run(
+            4, {"ai_outputParser": []}, status="error", error=_NATIVE_PARSER_ERROR
+        )
+    )
+    for document in (healthy, shared_parser, repeated_parser):
         result, _ = _native_result(document)
         assert result.detected is False

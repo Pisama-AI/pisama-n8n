@@ -112,6 +112,12 @@ EVIDENCE_CATALOG: Tuple[EvidenceTarget, ...] = (
         "agent_diagnostics",
         "n8n_native_agent_tool_recovery",
     ),
+    EvidenceTarget(
+        "P3",
+        "Native structured-parser rejection",
+        "agent_diagnostics",
+        "n8n_native_structured_parser_rejection",
+    ),
 )
 
 
