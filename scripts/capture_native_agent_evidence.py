@@ -707,8 +707,10 @@ def _assert_extended_retention(captures: Dict[str, Dict[str, Any]]) -> None:
             else "Native multi-tool AI Agent"
         )
         if not _runs(capture, required):
+            shape = json.dumps(_safe_capture_shape(capture), sort_keys=True)
             raise RuntimeError(
-                f"native extended capture omitted the Agent run: {label}"
+                "native extended capture omitted the Agent run: "
+                f"{label}; redacted execution shape={shape}"
             )
 
 

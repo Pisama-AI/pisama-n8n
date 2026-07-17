@@ -444,6 +444,13 @@ def _run_workflow(workflow: Dict[str, Any]) -> Dict[str, Any]:
             raise RuntimeError("n8n did not stop the temporary workflow execution")
         execution_id = str(terminal_rows[0]["id"])
         execution = _n8n("GET", f"/api/v1/executions/{execution_id}?includeData=true")
+        error = execution.get("data", {}).get("resultData", {}).get("error", {})
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(message, str) and "execution limit reached" in message.lower():
+            raise RuntimeError(
+                "n8n execution quota is exhausted; wait for the Cloud quota reset "
+                "or increase execution capacity before rerunning dogfood captures"
+            )
         run_data = execution.get("data", {}).get("resultData", {}).get("runData", {})
         return {
             "workflow_id": workflow_id,
