@@ -72,21 +72,27 @@ export interface ReliabilityCase {
   failure_mode: string | null
   status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back'
   outcome: ReliabilityOutcome | 'recurred' | null
-  baseline_execution_count: number
-  baseline_failure_count: number
-  post_repair_execution_count: number
-  post_repair_failure_count: number
-  comparison_minimum_executions: number
-  comparison_ready: boolean
-  baseline_failure_rate: number | null
-  post_repair_failure_rate: number | null
-  recurrence_reduction: number | null
-  successful_execution_count: number
-  recurrence_count: number
-  first_success_execution_id: number | null
-  first_recurrence_execution_id: number | null
-  required_successful_executions: number
+  // Failure-rate window fields — present on an OSS model-fix case; the SaaS
+  // guardrail case is focused on the two routing probes and omits them.
+  baseline_execution_count?: number
+  baseline_failure_count?: number
+  post_repair_execution_count?: number
+  post_repair_failure_count?: number
+  comparison_minimum_executions?: number
+  comparison_ready?: boolean
+  baseline_failure_rate?: number | null
+  post_repair_failure_rate?: number | null
+  recurrence_reduction?: number | null
+  successful_execution_count?: number
+  recurrence_count?: number
+  first_success_execution_id?: number | null
+  first_recurrence_execution_id?: number | null
+  required_successful_executions?: number
   ready_for_outcome_review: boolean
+  // Guardrail prevention probes: the two real executions that prove the installed
+  // guard rejects malformed input and passes valid input. Present on a guardrail case.
+  guard_malformed_rejected_execution_id?: number | null
+  guard_valid_passed_execution_id?: number | null
   outcome_note: string | null
   created_at: string
   updated_at: string
@@ -94,6 +100,7 @@ export interface ReliabilityCase {
 }
 
 export type ReliabilityOutcome = 'prevented' | 'inconclusive'
+export type GuardVerificationKind = 'malformed_rejected' | 'valid_passed'
 
 function severityFromConfidence(confidence: number): string {
   if (confidence >= 0.8) return 'high'
@@ -152,6 +159,22 @@ export function concludeReliabilityCase(
   note?: string,
 ): Promise<ReliabilityCase> {
   return postApi(`/api/v1/reliability-cases/${caseId}/outcome`, { outcome, note })
+}
+
+// Record a guardrail prevention probe against a real ingested execution. The
+// server verifies the routing from the execution's runData (rejection destination
+// ran + guarded consumer skipped for malformed; the inverse for valid) and returns
+// 409 on a mismatch or an execution that has not been ingested yet. Same path on
+// the OSS self-host and SaaS servers.
+export function recordGuardVerification(
+  caseId: number,
+  kind: GuardVerificationKind,
+  sourceExecutionId: string,
+): Promise<ReliabilityCase> {
+  return postApi(`/api/v1/reliability-cases/${caseId}/guard-verification`, {
+    kind,
+    source_execution_id: sourceExecutionId,
+  })
 }
 
 // Per-node execution trace behind a detection (GET /detections/{id}/trace).

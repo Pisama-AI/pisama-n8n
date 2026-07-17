@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { AlertTriangle, Check, CircleDot, ShieldCheck } from 'lucide-react'
-import { Badge, Button, Card, CardHeader, CardTitle } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, CardTitle, Input } from '@/components/ui'
 import {
   concludeReliabilityCase,
+  recordGuardVerification,
+  type GuardVerificationKind,
   type ReliabilityCase,
   type ReliabilityOutcome,
 } from '@/lib/api/detections'
@@ -36,42 +38,128 @@ function statusCopy(caseRecord: ReliabilityCase): string {
   return 'Pisama is collecting later real executions. A successful run shows exposure after the change, not prevention by itself.'
 }
 
-// Guard-specific verification fields. These live on the reliability case
-// object for a guardrail repair (see ReliabilityCase in detections.ts for the
-// canonical shape once the server adds them); passed as an optional prop
-// rather than fetched here so this panel never issues its own network call.
-export interface GuardVerification {
-  guardMalformedRejectedExecutionId: number | null
-  guardValidPassedExecutionId: number | null
-}
+// The two prevention probes a guardrail must pass. Each is recorded against a REAL
+// n8n execution: the operator fires the described input at their workflow, then enters
+// the resulting n8n execution id; the server verifies the routing from its runData.
+const GUARD_PROBES: {
+  kind: GuardVerificationKind
+  label: string
+  hint: string
+}[] = [
+  {
+    kind: 'malformed_rejected',
+    label: 'Malformed input rejected',
+    hint: 'Send input that is MISSING a required field. The guard should reject it (the rejection destination runs, your original node is skipped).',
+  },
+  {
+    kind: 'valid_passed',
+    label: 'Valid input passed through',
+    hint: 'Send WELL-FORMED input. The guard should pass it through to your original workflow logic.',
+  },
+]
 
-function GuardVerificationRow({ guard }: { guard: GuardVerification }) {
-  const malformedRejected = guard.guardMalformedRejectedExecutionId !== null
-  const validPassed = guard.guardValidPassedExecutionId !== null
+// Interactive guard-verification for a guardrail repair. Records each probe via the
+// server, which checks the execution's real routing and refuses a mismatch (409).
+function GuardVerificationSection({
+  caseRecord,
+  onRecorded,
+}: {
+  caseRecord: ReliabilityCase
+  onRecorded: (updated: ReliabilityCase) => void
+}) {
+  const [openKind, setOpenKind] = useState<GuardVerificationKind | null>(null)
+  const [execId, setExecId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const recorded: Record<GuardVerificationKind, boolean> = {
+    malformed_rejected: caseRecord.guard_malformed_rejected_execution_id != null,
+    valid_passed: caseRecord.guard_valid_passed_execution_id != null,
+  }
+  const concluded = caseRecord.status !== 'observing'
+
+  async function submit(kind: GuardVerificationKind) {
+    if (!execId.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      onRecorded(await recordGuardVerification(caseRecord.id, kind, execId.trim()))
+      setOpenKind(null)
+      setExecId('')
+    } catch (caught) {
+      const status = (caught as Error & { status?: number }).status
+      setError(
+        status === 409
+          ? 'That execution did not show the expected routing (or has not been ingested yet). Fire the described input, let Pisama poll it, then try its n8n execution id again.'
+          : 'Could not record the probe. Check your server connection and try again.',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="mt-4 border-t border-rule pt-4">
       <span className="text-xs uppercase tracking-wide text-ink-3">Guard verification</span>
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-xs text-ink-3">
-        <span className="inline-flex items-center gap-1.5">
-          {malformedRejected ? (
-            <Check size={13} className="text-evidence" />
-          ) : (
-            <CircleDot size={13} className="text-ink-4" />
-          )}
-          Malformed input rejected {malformedRejected ? '' : '(pending)'}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          {validPassed ? (
-            <Check size={13} className="text-evidence" />
-          ) : (
-            <CircleDot size={13} className="text-ink-4" />
-          )}
-          Valid input passed through {validPassed ? '' : '(pending)'}
-        </span>
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-ink-3">
-        A guardrail repair can be concluded prevented only once both checks above are observed.
+      <p className="mt-1 text-xs leading-relaxed text-ink-3">
+        Prove the installed guard works with two real executions. A guardrail can be concluded
+        prevented only once both checks are observed.
       </p>
+      <div className="mt-3 space-y-3">
+        {GUARD_PROBES.map((probe) => {
+          const done = recorded[probe.kind]
+          const open = openKind === probe.kind
+          return (
+            <div key={probe.kind}>
+              <div className="flex items-center gap-2 text-sm text-ink-2">
+                {done ? (
+                  <Check size={14} className="shrink-0 text-evidence" />
+                ) : (
+                  <CircleDot size={14} className="shrink-0 text-ink-4" />
+                )}
+                <span>{probe.label}</span>
+                {done ? (
+                  <span className="text-xs text-ink-4">recorded</span>
+                ) : (
+                  !concluded &&
+                  !open && (
+                    <Button variant="ghost" size="sm" onClick={() => { setOpenKind(probe.kind); setExecId(''); setError(null) }}>
+                      Record
+                    </Button>
+                  )
+                )}
+              </div>
+              {!done && open && (
+                <div className="mt-2 space-y-2 rounded-lg border border-rule bg-paper-3/30 p-3">
+                  <p className="text-xs leading-relaxed text-ink-3">{probe.hint}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={execId}
+                      onChange={(e) => setExecId(e.target.value)}
+                      placeholder="n8n execution id"
+                      className="max-w-[200px]"
+                    />
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      isLoading={saving}
+                      disabled={!execId.trim()}
+                      onClick={() => submit(probe.kind)}
+                      leftIcon={<ShieldCheck size={14} />}
+                    >
+                      Verify
+                    </Button>
+                    <Button variant="ghost" size="sm" disabled={saving} onClick={() => setOpenKind(null)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {error && <p className="mt-2 text-xs leading-relaxed text-red-400">{error}</p>}
     </div>
   )
 }
@@ -79,11 +167,9 @@ function GuardVerificationRow({ guard }: { guard: GuardVerification }) {
 export function RepairVerificationPanel({
   initialCase,
   onUpdated,
-  guardVerification,
 }: {
   initialCase: ReliabilityCase
   onUpdated?: () => void
-  guardVerification?: GuardVerification
 }) {
   const [caseRecord, setCaseRecord] = useState(initialCase)
   const [pending, setPending] = useState<PendingOutcome>(null)
@@ -93,14 +179,20 @@ export function RepairVerificationPanel({
   useEffect(() => {
     setCaseRecord(initialCase)
   }, [initialCase])
-  const progress = Math.min(
-    100,
-    Math.round((caseRecord.successful_execution_count / caseRecord.required_successful_executions) * 100),
-  )
+
+  // A guardrail case is verified by the two routing probes, not the failure-rate window.
+  const isGuardrail = caseRecord.failure_mode === 'n8n_data_contract'
+  // The failure-rate window only exists on an OSS model-fix case (SaaS omits it).
+  const hasFailureWindow = caseRecord.required_successful_executions != null
+  const successful = caseRecord.successful_execution_count ?? 0
+  const required = caseRecord.required_successful_executions ?? 0
+  const progress = required > 0 ? Math.min(100, Math.round((successful / required) * 100)) : 0
   const comparisonProgress = Math.min(
     100,
     Math.round(
-      (caseRecord.post_repair_execution_count / Math.max(1, caseRecord.baseline_execution_count)) * 100,
+      ((caseRecord.post_repair_execution_count ?? 0) /
+        Math.max(1, caseRecord.baseline_execution_count ?? 0)) *
+        100,
     ),
   )
 
@@ -137,36 +229,38 @@ export function RepairVerificationPanel({
 
       <p className="text-sm leading-relaxed text-ink-2">{statusCopy(caseRecord)}</p>
 
-      <div className="mt-5 border-y border-rule py-4">
-        <div className="flex items-baseline justify-between gap-4">
-          <span className="text-xs uppercase tracking-wide text-ink-3">Post-repair evidence</span>
-          <span className="font-mono text-xs text-ink-2">
-            {caseRecord.successful_execution_count} / {caseRecord.required_successful_executions} successful
-          </span>
+      {hasFailureWindow && (
+        <div className="mt-5 border-y border-rule py-4">
+          <div className="flex items-baseline justify-between gap-4">
+            <span className="text-xs uppercase tracking-wide text-ink-3">Post-repair evidence</span>
+            <span className="font-mono text-xs text-ink-2">
+              {successful} / {required} successful
+            </span>
+          </div>
+          <div
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-paper-3"
+            role="progressbar"
+            aria-valuenow={successful}
+            aria-valuemin={0}
+            aria-valuemax={required}
+            aria-label="Successful post-repair executions observed"
+          >
+            <div className="h-full rounded-full bg-evidence/70" style={{ width: `${progress}%` }} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-ink-3">
+            <span className="inline-flex items-center gap-1.5">
+              <Check size={13} className="text-evidence" />
+              {successful} successful execution{successful === 1 ? '' : 's'}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <AlertTriangle size={13} className={caseRecord.recurrence_count ? 'text-red-400' : 'text-ink-4'} />
+              {caseRecord.recurrence_count ?? 0} recurrence{(caseRecord.recurrence_count ?? 0) === 1 ? '' : 's'}
+            </span>
+          </div>
         </div>
-        <div
-          className="mt-2 h-1.5 overflow-hidden rounded-full bg-paper-3"
-          role="progressbar"
-          aria-valuenow={caseRecord.successful_execution_count}
-          aria-valuemin={0}
-          aria-valuemax={caseRecord.required_successful_executions}
-          aria-label="Successful post-repair executions observed"
-        >
-          <div className="h-full rounded-full bg-evidence/70" style={{ width: `${progress}%` }} />
-        </div>
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-ink-3">
-          <span className="inline-flex items-center gap-1.5">
-            <Check size={13} className="text-evidence" />
-            {caseRecord.successful_execution_count} successful execution{caseRecord.successful_execution_count === 1 ? '' : 's'}
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <AlertTriangle size={13} className={caseRecord.recurrence_count ? 'text-red-400' : 'text-ink-4'} />
-            {caseRecord.recurrence_count} recurrence{caseRecord.recurrence_count === 1 ? '' : 's'}
-          </span>
-        </div>
-      </div>
+      )}
 
-      {caseRecord.baseline_execution_count > 0 && (
+      {(caseRecord.baseline_execution_count ?? 0) > 0 && (
         <div className="mt-4">
           <div className="flex items-baseline justify-between gap-4">
             <span className="text-xs uppercase tracking-wide text-ink-3">Comparable failure-rate window</span>
@@ -178,11 +272,21 @@ export function RepairVerificationPanel({
             <div className="h-full rounded-full bg-ink-3/50" style={{ width: `${comparisonProgress}%` }} />
           </div>
           <p className="mt-2 text-xs leading-relaxed text-ink-3">
-            {caseRecord.comparison_ready && caseRecord.recurrence_reduction !== null
+            {caseRecord.comparison_ready && caseRecord.recurrence_reduction != null
               ? `Observed failure-rate change: ${Math.round(caseRecord.recurrence_reduction * 100)}%.`
               : `Needs ${caseRecord.comparison_minimum_executions} baseline executions and an equal post-repair window before Pisama calculates a rate change.`}
           </p>
         </div>
+      )}
+
+      {isGuardrail && (
+        <GuardVerificationSection
+          caseRecord={caseRecord}
+          onRecorded={(updated) => {
+            setCaseRecord(updated)
+            onUpdated?.()
+          }}
+        />
       )}
 
       {caseRecord.status === 'observing' && (
@@ -240,8 +344,6 @@ export function RepairVerificationPanel({
           )}
         </div>
       )}
-
-      {guardVerification && <GuardVerificationRow guard={guardVerification} />}
 
       {caseRecord.outcome_note && (
         <p className="mt-4 border-l-2 border-rule pl-3 text-sm leading-relaxed text-ink-3">
