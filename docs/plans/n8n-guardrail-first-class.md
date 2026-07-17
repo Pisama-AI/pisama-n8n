@@ -82,8 +82,8 @@ lifecycle stage asserted. Fail = keep working; do not ask the user; fix and re-r
 
 ## Tasks
 
-- [ ] Audit: read current repair endpoints/storage/reliability fields; record exact shapes in Notes.
-- [ ] Engine: `observed_required_paths` + destination terminal builders + fragment wiring helper (`attach_destination`) + tests (incl. injection: path segments with quotes/backslashes must be safely JSON-encoded into jsCode).
+- [x] Audit: read current repair endpoints/storage/reliability fields; record exact shapes in Notes.
+- [x] Engine: `observed_required_paths` + destination builders + `insert_guard_into_workflow` + tests (19 guardrail tests; generated JS executed under real node: Object.hasOwn semantics, zero-preserved, all-missing flagged).
 - [ ] Server: guardrail proposal endpoint + destination endpoint + apply integration + `assert_safe_guardrail_diff` + reliability-case guard-verification endpoint + tests (all no-mocks, per repo convention).
 - [ ] Dashboard: guard panel + destination selector + verification display; tsc + build green.
 - [ ] Harness: `scripts/run_guardrail_lifecycle.py` + dogfood-gate lane; run it against a real local n8n and paste the stage results into Notes.
@@ -91,7 +91,26 @@ lifecycle stage asserted. Fail = keep working; do not ask the user; fix and re-r
 
 ## Notes
 
-(accumulating state — fill during the loop)
+**Audit (from review inventory):** repair endpoints POST /api/v1/n8n/fix (app.py:368,
+proposal at :415), /n8n/apply :430, /n8n/rollback :526; reliability-cases GET :309/:317 +
+POST .../outcome :329. RepairAttempt fields storage.py:149-207; lifecycle fns :708,
+:1015-1108. ReliabilityCase :233-277. Dashboard FixPanel.tsx / RepairVerificationPanel.tsx;
+API routes lib/api/fixes.ts:44-46. Schema detector emits n8n_data_contract at
+schema_detector.py:141-195 with evidence.issues=[{node,turn,message}] (note: dead code
+:197-280 after return, pre-existing).
+
+**Engine layer DONE (this commit):** guardrails.py gained property_read_leaf /
+observed_required_paths (evidence-grounded; confirmed vs candidates; never invents),
+rejection_destination (error_workflow=stopAndError, alert=httpRequest to operator URL
+carrying ONLY the rejection record, respond_422=respondToWebhook gated on
+responseMode=responseNode), validate_destination_compatibility, and
+insert_guard_into_workflow (single-main-edge splice upstream of the failing consumer —
+consumer-observed paths verbatim, no boundary translation; collision-free prefixing;
+refuses multi-input/unknown nodes). Fragment hardened: Object.hasOwn (fixes __proto__
+bypass — review P3), per-condition IF id (live-import shape). PII redacted from
+CLOUD-112117 fixture (founder IPv6, live webhook URL, resumeToken — review P2; history
+scrub pending founder approval). Verified: engine 97, server 45+9s, parity 7/7, ruff
+clean; generated JS exercised under real node.
 
 ## Final status
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -53,6 +55,7 @@ def input_schema_guardrail(
 function valueAtPath(value, path) {{
   return path.split('.').reduce(
     (current, segment) => current !== null && typeof current === 'object'
+      && Object.hasOwn(current, segment)
       ? current[segment]
       : undefined,
     value,
@@ -119,6 +122,9 @@ return $input.all().map((item) => {{
                         "combinator": "and",
                         "conditions": [
                             {
+                                # Real n8n captures carry a per-condition id; include it
+                                # so a live import matches the shape n8n itself exports.
+                                "id": str(uuid4()),
                                 "operator": {
                                     "type": "boolean",
                                     "operation": "true",
@@ -178,3 +184,298 @@ def input_schema_guardrail_recommendation() -> str:
         "required JSON paths, route its rejected terminal node to a rejection or error "
         "path, and connect only its validated terminal node to the business path."
     )
+
+
+# ── observed-path extraction (evidence-grounded, never invented) ─────────────
+
+# The property-read failures a schema guard can actually prevent. Anything else
+# (ReferenceError typos, syntax errors) is an expression failure the guard cannot help.
+_PROPERTY_READ_PATTERNS = (
+    re.compile(r"Cannot read propert(?:y|ies) of (?:undefined|null) \(reading '([^']+)'\)"),
+    re.compile(r"Cannot read property '([^']+)' of (?:undefined|null)"),
+    re.compile(r"undefined is not an object \(evaluating '[^']*\.([A-Za-z0-9_$]+)'\)"),
+)
+
+# Property chains as a consumer reads them: $json.a.b.c / item.json.a.b / $input.item.json.a
+_CHAIN_PATTERN = re.compile(
+    r"(?:\$json|(?:\$input\.)?item\.json|\$\(['\"][^'\"]+['\"]\)\.item\.json)"
+    r"((?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)"
+)
+
+
+def property_read_leaf(message: Any) -> str | None:
+    """The property whose read failed, from a recorded n8n error message, else None."""
+    if not isinstance(message, str):
+        return None
+    for pattern in _PROPERTY_READ_PATTERNS:
+        match = pattern.search(message)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _value_at_path(value: Any, path: str) -> Any:
+    for segment in path.split("."):
+        if not isinstance(value, dict) or segment not in value:
+            return None
+        value = value[segment]
+    return value
+
+
+def observed_required_paths(
+    failing_node_code: str,
+    error_message: str,
+    observed_input_json: Any = None,
+) -> dict[str, list[str]]:
+    """Derive the guard's required paths from evidence, never inventing them.
+
+    - ``failing_node_code``: the failing consumer's jsCode / expression text.
+    - ``error_message``: the recorded runtime error (gives the failing leaf).
+    - ``observed_input_json``: the item json the consumer actually received (the
+      upstream node's recorded output), when available.
+
+    Returns ``{"confirmed": [...], "candidates": [...]}``. A path is CONFIRMED when the
+    consumer's code reads it, its final segment matches the failing leaf, and walking it
+    through the observed input actually fails (missing or null on the way) — i.e. the
+    guard, inserted immediately upstream of this consumer, would have rejected exactly
+    this input. Chains that match the leaf but cannot be verified against a recorded
+    input are CANDIDATES for the operator to confirm. No match -> both lists empty; the
+    caller must fall back to operator-supplied paths rather than guessing.
+    """
+    leaf = property_read_leaf(error_message)
+    if leaf is None or not isinstance(failing_node_code, str):
+        return {"confirmed": [], "candidates": []}
+
+    chains: list[str] = []
+    for match in _CHAIN_PATTERN.finditer(failing_node_code):
+        path = match.group(1).lstrip(".")
+        segments = path.split(".")
+        if leaf in segments:
+            # Guard up to and including the failing leaf: reads deeper than the leaf
+            # fail at the leaf's level, so requiring beyond it would over-constrain.
+            chains.append(".".join(segments[: segments.index(leaf) + 1]))
+    # de-dup, preserve order
+    chains = list(dict.fromkeys(chains))
+
+    if observed_input_json is None:
+        return {"confirmed": [], "candidates": chains}
+
+    confirmed = [
+        path for path in chains if _value_at_path(observed_input_json, path) is None
+    ]
+    candidates = [path for path in chains if path not in confirmed]
+    return {"confirmed": confirmed, "candidates": candidates}
+
+
+# ── rejection destinations (operator-chosen, workflow-native) ────────────────
+
+DESTINATION_KINDS = ("error_workflow", "alert", "respond_422")
+
+
+class GuardrailDestinationError(ValueError):
+    """The chosen rejection destination is invalid or incompatible with the workflow."""
+
+
+def rejection_destination(
+    kind: str,
+    *,
+    name_prefix: str = "Pisama",
+    position: Sequence[int] = (0, 0),
+    alert_url: str | None = None,
+) -> dict[str, Any]:
+    """Build the terminal node the guard's rejected branch routes into.
+
+    - ``error_workflow``: a Stop and Error node — marks the execution failed and fires
+      the workflow's configured error workflow (n8n's native alerting hook).
+    - ``alert``: an HTTP Request POSTing the rejection record (missing path names only,
+      never payload values) to an operator-supplied URL.
+    - ``respond_422``: a Respond to Webhook node returning 422 with the missing paths.
+      Only valid when the workflow's webhook trigger uses responseMode=responseNode —
+      the caller validates that compatibility.
+    """
+    if kind not in DESTINATION_KINDS:
+        raise GuardrailDestinationError(
+            f"destination must be one of {DESTINATION_KINDS}, got {kind!r}"
+        )
+    x, y = position
+    if kind == "error_workflow":
+        return {
+            "id": str(uuid4()),
+            "name": f"{name_prefix} rejected: stop and error",
+            "type": "n8n-nodes-base.stopAndError",
+            "typeVersion": 1,
+            "position": [x, y],
+            "parameters": {
+                "errorMessage": (
+                    "={{ 'Pisama input-schema guard rejected this input. Missing: ' "
+                    "+ ($json._pisama_input_schema.missing || []).join(', ') }}"
+                ),
+            },
+        }
+    if kind == "alert":
+        if not isinstance(alert_url, str) or not alert_url.startswith(("http://", "https://")):
+            raise GuardrailDestinationError(
+                "alert destination requires an http(s) alert_url"
+            )
+        return {
+            "id": str(uuid4()),
+            "name": f"{name_prefix} rejected: alert",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [x, y],
+            "parameters": {
+                "method": "POST",
+                "url": alert_url,
+                "sendBody": True,
+                "specifyBody": "json",
+                # The rejection record carries only validity + missing path NAMES.
+                "jsonBody": "={{ JSON.stringify($json._pisama_input_schema) }}",
+                "options": {},
+            },
+        }
+    # respond_422
+    return {
+        "id": str(uuid4()),
+        "name": f"{name_prefix} rejected: 422 response",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [x, y],
+        "parameters": {
+            "respondWith": "json",
+            "responseBody": (
+                "={{ JSON.stringify({ error: 'invalid input', "
+                "missing: $json._pisama_input_schema.missing }) }}"
+            ),
+            "options": {"responseCode": 422},
+        },
+    }
+
+
+# ── whole-workflow assembly (deterministic; the repair the server applies) ───
+
+
+class GuardrailInsertionError(ValueError):
+    """The guard cannot be inserted safely into this workflow; reason in the message."""
+
+
+def _webhook_trigger(workflow: dict[str, Any]) -> dict[str, Any] | None:
+    for node in workflow.get("nodes", []):
+        if isinstance(node, dict) and node.get("type") == "n8n-nodes-base.webhook":
+            return node
+    return None
+
+
+def validate_destination_compatibility(workflow: dict[str, Any], kind: str) -> None:
+    """Raise GuardrailDestinationError when the destination cannot work here."""
+    if kind == "respond_422":
+        trigger = _webhook_trigger(workflow)
+        if trigger is None:
+            raise GuardrailDestinationError(
+                "respond_422 requires a webhook-triggered workflow"
+            )
+        if (trigger.get("parameters") or {}).get("responseMode") != "responseNode":
+            raise GuardrailDestinationError(
+                "respond_422 requires the webhook's responseMode to be 'responseNode'; "
+                "changing responseMode would alter the valid path's behavior, so Pisama "
+                "does not flip it automatically"
+            )
+
+
+def insert_guard_into_workflow(
+    workflow: dict[str, Any],
+    required_paths: Sequence[str],
+    failing_node: str,
+    destination: str,
+    *,
+    alert_url: str | None = None,
+    name_prefix: str = "Pisama",
+) -> dict[str, Any]:
+    """Return a mutated deep copy with the guard inserted upstream of ``failing_node``.
+
+    Deterministic, model-free. The guard sees exactly the item shape the failing
+    consumer sees (it is spliced into the consumer's single main-input edge), so the
+    required paths are the consumer-observed paths verbatim — no boundary translation.
+
+    Refuses (GuardrailInsertionError) rather than guessing when: the failing node does
+    not exist, has zero or multiple main-input edges, or a name collision cannot be
+    resolved. Returns ``{"workflow", "fragment_node_names", "destination_node_name",
+    "entry_node", "validated_node", "rejected_node"}``.
+    """
+    validate_destination_compatibility(workflow, destination)
+
+    wf = copy.deepcopy(workflow)
+    nodes_by_name = {
+        n.get("name"): n for n in wf.get("nodes", []) if isinstance(n, dict)
+    }
+    if failing_node not in nodes_by_name:
+        raise GuardrailInsertionError(f"node {failing_node!r} not found in the workflow")
+
+    # Find the single main edge INTO the failing node.
+    inbound: list[tuple[str, int, int]] = []  # (source, output_index, edge_index)
+    for source, outputs in (wf.get("connections") or {}).items():
+        for out_index, edges in enumerate((outputs or {}).get("main") or []):
+            for edge_index, edge in enumerate(edges or []):
+                if isinstance(edge, dict) and edge.get("node") == failing_node:
+                    inbound.append((source, out_index, edge_index))
+    if len(inbound) != 1:
+        raise GuardrailInsertionError(
+            f"guard insertion requires exactly one main input edge into "
+            f"{failing_node!r}; found {len(inbound)}"
+        )
+
+    # Resolve a collision-free prefix (a second guard in the same workflow).
+    prefix = name_prefix
+    attempt = 2
+    def _names(p: str) -> list[str]:
+        return [
+            f"{p} input schema inspection",
+            f"{p} input schema valid?",
+            f"{p} rejected input",
+            f"{p} validated input",
+            f"{p} rejected: stop and error",
+            f"{p} rejected: alert",
+            f"{p} rejected: 422 response",
+        ]
+    while any(name in nodes_by_name for name in _names(prefix)):
+        prefix = f"{name_prefix} ({attempt})"
+        attempt += 1
+        if attempt > 20:
+            raise GuardrailInsertionError("could not find a collision-free name prefix")
+
+    consumer = nodes_by_name[failing_node]
+    cx, cy = (consumer.get("position") or [600, 0])[:2]
+    fragment = input_schema_guardrail(
+        required_paths, name_prefix=prefix, position=(cx - 660, cy)
+    )
+    destination_node = rejection_destination(
+        destination, name_prefix=prefix, position=(cx - 220, cy + 240), alert_url=alert_url
+    )
+
+    wf.setdefault("nodes", []).extend(fragment["nodes"])
+    wf["nodes"].append(destination_node)
+    connections = wf.setdefault("connections", {})
+    # Fragment-internal wiring.
+    for source, outputs in fragment["connections"].items():
+        connections[source] = outputs
+    # Rewire: source -> entry (replacing source -> failing edge).
+    source, out_index, edge_index = inbound[0]
+    connections[source]["main"][out_index][edge_index] = {
+        "node": fragment["entry_node"], "type": "main", "index": 0,
+    }
+    # validated -> failing consumer; rejected -> destination.
+    connections[fragment["validated_node"]] = {
+        "main": [[{"node": failing_node, "type": "main", "index": 0}]]
+    }
+    connections[fragment["rejected_node"]] = {
+        "main": [[{"node": destination_node["name"], "type": "main", "index": 0}]]
+    }
+
+    return {
+        "workflow": wf,
+        "fragment_node_names": [n["name"] for n in fragment["nodes"]]
+        + [destination_node["name"]],
+        "destination_node_name": destination_node["name"],
+        "entry_node": fragment["entry_node"],
+        "validated_node": fragment["validated_node"],
+        "rejected_node": fragment["rejected_node"],
+    }
