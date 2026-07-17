@@ -368,7 +368,7 @@ def _matching_failed_tool_result(
         metadata = turn.turn_metadata or {}
         if metadata["execution_index"] <= tool_turn.turn_metadata["execution_index"]:
             continue
-        if not _tool_result_is_linked(turns, tool_turn, turn):
+        if not _source_linked(turns, tool_turn, turn):
             continue
         for result in metadata.get("tool_results") or []:
             if (
@@ -380,26 +380,30 @@ def _matching_failed_tool_result(
     return None
 
 
-def _tool_result_is_linked(
-    turns: List[TurnSnapshot], tool_turn: TurnSnapshot, result_turn: TurnSnapshot
+def _source_linked(
+    turns: List[TurnSnapshot], origin: TurnSnapshot, downstream: TurnSnapshot
 ) -> bool:
     """Match direct or one-hop n8n source links, never an inferred graph path.
 
-    Real captures place the HTTP tool failure between Claude's ``tool_use`` output
-    and the Code node that converts its recorded error into ``tool_result``. The
-    one-hop allowance models that exact n8n shape without treating an arbitrary
-    later result as belonging to the tool call.
+    Real captures place one intermediate node between linked steps: the HTTP tool
+    failure sits between Claude's ``tool_use`` output and the Code node that
+    converts its recorded error into ``tool_result``, and message-assembly nodes
+    (Set/Code/Merge) sit between a failed ``tool_result`` and the Claude call that
+    recovers from it. The one-hop allowance models that exact n8n shape without
+    treating an arbitrary later turn as linked.
     """
-    sources = set((result_turn.turn_metadata or {}).get("source_nodes") or [])
-    if tool_turn.participant_id in sources:
+    sources = set((downstream.turn_metadata or {}).get("source_nodes") or [])
+    if origin.participant_id in sources:
         return True
-    tool_index = tool_turn.turn_metadata["execution_index"]
-    result_index = result_turn.turn_metadata["execution_index"]
+    origin_index = origin.turn_metadata["execution_index"]
+    downstream_index = downstream.turn_metadata["execution_index"]
     return any(
         candidate.participant_id in sources
-        and tool_turn.participant_id
+        and origin.participant_id
         in (candidate.turn_metadata.get("source_nodes") or [])
-        and tool_index < candidate.turn_metadata["execution_index"] < result_index
+        and origin_index
+        < candidate.turn_metadata["execution_index"]
+        < downstream_index
         for candidate in turns
     )
 
@@ -407,14 +411,19 @@ def _tool_result_is_linked(
 def _recovery_response(
     turns: List[TurnSnapshot], result_turn: TurnSnapshot
 ) -> Optional[TurnSnapshot]:
-    """Return a direct Claude response after the failed result, if n8n recorded one."""
+    """Return a source-linked Claude response after the failed result, if any.
+
+    Accepts the same direct or one-hop chain as the failure side, so a recovery
+    assembled through an intermediate Set/Code/Merge node is not misread as an
+    unhandled tool failure.
+    """
     for turn in turns:
         metadata = turn.turn_metadata or {}
         if metadata["execution_index"] <= result_turn.turn_metadata["execution_index"]:
             continue
-        if result_turn.participant_id not in (metadata.get("source_nodes") or []):
+        if not metadata.get("is_claude_message"):
             continue
-        if metadata.get("is_claude_message"):
+        if _source_linked(turns, result_turn, turn):
             return turn
     return None
 
@@ -779,7 +788,7 @@ class N8NAgentDiagnosticsDetector(TurnAwareDetector):
     """
 
     name = "N8NAgentDiagnosticsDetector"
-    version = "1.2"
+    version = "1.3"
     supported_failure_modes = [
         "n8n_agent_tool_recovery",
         "n8n_agent_output_validation",

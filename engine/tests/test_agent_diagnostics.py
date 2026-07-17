@@ -61,7 +61,7 @@ def _real_tool_failure(index=2):
     )
 
 
-def _recovery(index=4):
+def _recovery(index=4, source="Recorded failed tool result"):
     return _turn(
         index,
         "Claude recovery response",
@@ -70,8 +70,21 @@ def _recovery(index=4):
         is_claude_message=True,
         tool_use_ids=[],
         tool_results=[],
-        source_nodes=["Recorded failed tool result"],
+        source_nodes=[source],
         finish_reason="end_turn",
+    )
+
+
+def _assembly(index=4):
+    return _turn(
+        index,
+        "Assemble recovery message",
+        execution_order_tier=0,
+        execution_index=index,
+        is_claude_message=False,
+        tool_use_ids=[],
+        tool_results=[],
+        source_nodes=["Recorded failed tool result"],
     )
 
 
@@ -90,6 +103,32 @@ def test_real_recovery_is_a_negative_control():
         [_tool_use(), _real_tool_failure(), _failed_result(), _recovery()]
     )
     assert result.detected is False
+
+
+def test_recovery_through_message_assembly_node_is_a_negative_control():
+    result = N8NAgentDiagnosticsDetector().detect(
+        [
+            _tool_use(),
+            _real_tool_failure(),
+            _failed_result(),
+            _assembly(),
+            _recovery(index=5, source="Assemble recovery message"),
+        ]
+    )
+    assert result.detected is False
+
+
+def test_unlinked_later_claude_turn_is_not_a_recovery():
+    result = N8NAgentDiagnosticsDetector().detect(
+        [
+            _tool_use(),
+            _real_tool_failure(),
+            _failed_result(),
+            _recovery(source="Webhook"),
+        ]
+    )
+    assert result.detected is True
+    assert result.failure_mode == "n8n_agent_tool_recovery"
 
 
 def test_mismatched_tool_id_is_not_attributed():
