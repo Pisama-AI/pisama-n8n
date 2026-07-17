@@ -18,10 +18,18 @@ if ! git diff --quiet HEAD -- . 2>/dev/null; then
   echo "WARNING: working tree is dirty — build_revision=$rev will NOT match the deployed code." >&2
 fi
 
-echo "Deploying pisama-n8n-api at build_revision=$rev"
-exec flyctl deploy . \
+app="pisama-n8n-api"
+echo "Deploying $app at build_revision=$rev"
+flyctl deploy . \
   --config deploy/fly.toml \
   --dockerfile deploy/Dockerfile.server \
-  -a pisama-n8n-api \
+  -a "$app" \
   --build-arg PISAMA_BUILD_REVISION="$rev" \
   "$@"
+
+# The deploy changed this app's live SHA, so any deployment snapshot that pins it is now
+# stale. Remind the operator to refresh it (this app's provenance is verifiable any time
+# via `curl https://pisama-n8n-api.fly.dev/healthz`).
+echo
+echo "Deploy complete: $app is now build_revision ${rev:0:7}."
+echo "REMINDER: update your deployment snapshot ($app -> ${rev:0:7})."
