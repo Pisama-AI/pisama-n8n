@@ -161,19 +161,36 @@ export function concludeReliabilityCase(
   return postApi(`/api/v1/reliability-cases/${caseId}/outcome`, { outcome, note })
 }
 
-// Record a guardrail prevention probe against a real ingested execution. The
-// server verifies the routing from the execution's runData (rejection destination
-// ran + guarded consumer skipped for malformed; the inverse for valid) and returns
-// 409 on a mismatch or an execution that has not been ingested yet. Same path on
-// the OSS self-host and SaaS servers.
+// A recent execution of the guarded workflow, annotated with how it routed through
+// this guard. `matches_kind` flags it as a clean probe for one of the two checks;
+// the record endpoint still re-verifies the routing authoritatively.
+export interface CandidateExecution {
+  execution_id: number
+  source_execution_id: string | null
+  received_at: string
+  destination_ran: boolean
+  consumer_ran: boolean
+  matches_kind: GuardVerificationKind | null
+}
+
+export function getCandidateExecutions(caseId: number): Promise<CandidateExecution[]> {
+  return fetchApi(`/api/v1/reliability-cases/${caseId}/candidate-executions`)
+}
+
+// Record a guardrail prevention probe against a real ingested execution — referenced by
+// its internal id (from the picker) or its n8n source id (manual entry). The server
+// verifies the routing from the execution's runData (rejection destination ran + guarded
+// consumer skipped for malformed; the inverse for valid) and returns 409 on a mismatch or
+// an execution that has not been ingested yet. Same path on the OSS and SaaS servers.
 export function recordGuardVerification(
   caseId: number,
   kind: GuardVerificationKind,
-  sourceExecutionId: string,
+  ref: { executionId?: number; sourceExecutionId?: string },
 ): Promise<ReliabilityCase> {
   return postApi(`/api/v1/reliability-cases/${caseId}/guard-verification`, {
     kind,
-    source_execution_id: sourceExecutionId,
+    execution_id: ref.executionId,
+    source_execution_id: ref.sourceExecutionId,
   })
 }
 

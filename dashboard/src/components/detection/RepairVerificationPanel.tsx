@@ -5,7 +5,9 @@ import { AlertTriangle, Check, CircleDot, ShieldCheck } from 'lucide-react'
 import { Badge, Button, Card, CardHeader, CardTitle, Input } from '@/components/ui'
 import {
   concludeReliabilityCase,
+  getCandidateExecutions,
   recordGuardVerification,
+  type CandidateExecution,
   type GuardVerificationKind,
   type ReliabilityCase,
   type ReliabilityOutcome,
@@ -58,8 +60,21 @@ const GUARD_PROBES: {
   },
 ]
 
-// Interactive guard-verification for a guardrail repair. Records each probe via the
-// server, which checks the execution's real routing and refuses a mismatch (409).
+function shortTime(iso: string): string {
+  const m = iso.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/)
+  return m ? `${m[2]}-${m[3]} ${m[4]}` : iso
+}
+
+function routingLabel(c: CandidateExecution): string {
+  if (c.matches_kind === 'malformed_rejected') return 'guard rejected'
+  if (c.matches_kind === 'valid_passed') return 'passed through'
+  if (c.destination_ran && c.consumer_ran) return 'both ran'
+  return 'no guard routing'
+}
+
+// Interactive guard-verification for a guardrail repair. The operator picks the probe
+// execution from a routing-annotated list of the workflow's recent runs (or types an id
+// manually); the server re-verifies the real routing and refuses a mismatch (409).
 function GuardVerificationSection({
   caseRecord,
   onRecorded,
@@ -68,7 +83,9 @@ function GuardVerificationSection({
   onRecorded: (updated: ReliabilityCase) => void
 }) {
   const [openKind, setOpenKind] = useState<GuardVerificationKind | null>(null)
-  const [execId, setExecId] = useState('')
+  const [candidates, setCandidates] = useState<CandidateExecution[] | null>(null)
+  const [loadingCandidates, setLoadingCandidates] = useState(false)
+  const [manualId, setManualId] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -78,19 +95,35 @@ function GuardVerificationSection({
   }
   const concluded = caseRecord.status !== 'observing'
 
-  async function submit(kind: GuardVerificationKind) {
-    if (!execId.trim()) return
+  async function openRecorder(kind: GuardVerificationKind) {
+    setOpenKind(kind)
+    setManualId('')
+    setError(null)
+    if (candidates === null && !loadingCandidates) {
+      setLoadingCandidates(true)
+      try {
+        setCandidates(await getCandidateExecutions(caseRecord.id))
+      } catch {
+        setCandidates([]) // OSS server or fetch error → manual entry only
+      } finally {
+        setLoadingCandidates(false)
+      }
+    }
+  }
+
+  async function submit(kind: GuardVerificationKind, ref: { executionId?: number; sourceExecutionId?: string }) {
     setSaving(true)
     setError(null)
     try {
-      onRecorded(await recordGuardVerification(caseRecord.id, kind, execId.trim()))
+      onRecorded(await recordGuardVerification(caseRecord.id, kind, ref))
       setOpenKind(null)
-      setExecId('')
+      setManualId('')
+      setCandidates(null) // the just-used execution should re-annotate on the next open
     } catch (caught) {
       const status = (caught as Error & { status?: number }).status
       setError(
         status === 409
-          ? 'That execution did not show the expected routing (or has not been ingested yet). Fire the described input, let Pisama poll it, then try its n8n execution id again.'
+          ? 'That execution did not show the expected routing (or has not been ingested yet). Fire the described input, let Pisama poll it, then pick it again.'
           : 'Could not record the probe. Check your server connection and try again.',
       )
     } finally {
@@ -109,6 +142,11 @@ function GuardVerificationSection({
         {GUARD_PROBES.map((probe) => {
           const done = recorded[probe.kind]
           const open = openKind === probe.kind
+          const ranked = candidates
+            ? [...candidates].sort(
+                (a, b) => Number(b.matches_kind === probe.kind) - Number(a.matches_kind === probe.kind),
+              )
+            : []
           return (
             <div key={probe.kind}>
               <div className="flex items-center gap-2 text-sm text-ink-2">
@@ -121,9 +159,8 @@ function GuardVerificationSection({
                 {done ? (
                   <span className="text-xs text-ink-4">recorded</span>
                 ) : (
-                  !concluded &&
-                  !open && (
-                    <Button variant="ghost" size="sm" onClick={() => { setOpenKind(probe.kind); setExecId(''); setError(null) }}>
+                  !concluded && !open && (
+                    <Button variant="ghost" size="sm" onClick={() => void openRecorder(probe.kind)}>
                       Record
                     </Button>
                   )
@@ -132,19 +169,53 @@ function GuardVerificationSection({
               {!done && open && (
                 <div className="mt-2 space-y-2 rounded-lg border border-rule bg-paper-3/30 p-3">
                   <p className="text-xs leading-relaxed text-ink-3">{probe.hint}</p>
-                  <div className="flex flex-wrap items-center gap-2">
+                  {loadingCandidates ? (
+                    <p className="text-xs text-ink-4">Loading recent executions…</p>
+                  ) : ranked.length > 0 ? (
+                    <ul className="space-y-1">
+                      {ranked.map((c) => {
+                        const suggested = c.matches_kind === probe.kind
+                        return (
+                          <li key={c.execution_id}>
+                            <button
+                              type="button"
+                              disabled={saving}
+                              onClick={() => void submit(probe.kind, { executionId: c.execution_id })}
+                              className={`flex w-full items-center justify-between gap-3 rounded border px-2 py-1.5 text-left text-xs transition-colors hover:bg-paper-2 disabled:opacity-50 ${
+                                suggested ? 'border-evidence/50 bg-evidence/5' : 'border-rule'
+                              }`}
+                            >
+                              <span className="font-mono text-ink-2">
+                                {c.source_execution_id ?? `#${c.execution_id}`}
+                              </span>
+                              <span className="flex items-center gap-2 text-ink-4">
+                                <span>{shortTime(c.received_at)}</span>
+                                <span className={suggested ? 'text-evidence' : ''}>{routingLabel(c)}</span>
+                              </span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-ink-4">
+                      No recent executions of this workflow yet. Fire the described input, let
+                      Pisama poll it, then reopen — or enter its n8n execution id below.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
                     <Input
-                      value={execId}
-                      onChange={(e) => setExecId(e.target.value)}
-                      placeholder="n8n execution id"
-                      className="max-w-[200px]"
+                      value={manualId}
+                      onChange={(e) => setManualId(e.target.value)}
+                      placeholder="or n8n execution id"
+                      className="max-w-[180px]"
                     />
                     <Button
-                      variant="primary"
+                      variant="secondary"
                       size="sm"
                       isLoading={saving}
-                      disabled={!execId.trim()}
-                      onClick={() => submit(probe.kind)}
+                      disabled={!manualId.trim()}
+                      onClick={() => void submit(probe.kind, { sourceExecutionId: manualId.trim() })}
                       leftIcon={<ShieldCheck size={14} />}
                     >
                       Verify
