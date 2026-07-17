@@ -1,9 +1,11 @@
+import { IS_SAAS } from '@/lib/saas'
 import { postApi } from './client'
+import type { ApplyResult } from './fixes'
 
-// Input-schema guardrail repair (OSS n8n server only). Deterministic path
-// derivation + destination wiring, distinct from the AI-generated FixPanel
-// flow in fixes.ts. Reuse applyFix/rollbackFix from fixes.ts for the shared
-// apply/rollback lifecycle instead of duplicating those calls here.
+// Input-schema guardrail repair (OSS self-host AND multi-tenant SaaS server).
+// Deterministic path derivation + destination wiring, distinct from the
+// AI-generated FixPanel flow in fixes.ts. Propose + set-destination share one
+// path shape across both products; apply/rollback diverge (see below).
 
 export type GuardDestinationKind = 'error_workflow' | 'alert' | 'respond_422'
 
@@ -79,8 +81,20 @@ export function setGuardrailDestination(
   })
 }
 
-// applyFix / rollbackFix already point at /api/v1/n8n/apply and
-// /api/v1/n8n/rollback on the OSS server (see fixes.ts) and take the same
-// {repair_id} shape the guardrail repair record uses, so GuardPanel imports
-// those directly rather than duplicating them here.
-export { applyFix, rollbackFix } from './fixes'
+// Apply/rollback diverge by product. The OSS self-host server shares one
+// repair-apply endpoint with the AI-fix flow (POST /n8n/apply {repair_id}); the
+// multi-tenant SaaS server exposes the guardrail lifecycle under REST-nested
+// per-repair paths (POST /n8n/repairs/{id}/apply, no body). Same {repair}
+// response either way. In SaaS, apply/rollback are Pro-gated (they write to the
+// tenant's live n8n) and return 402 for a free tenant.
+export function applyGuardrail(repairId: number): Promise<ApplyResult> {
+  return IS_SAAS
+    ? postApi(`/api/v1/n8n/repairs/${repairId}/apply`, {})
+    : postApi('/api/v1/n8n/apply', { repair_id: repairId })
+}
+
+export function rollbackGuardrail(repairId: number): Promise<unknown> {
+  return IS_SAAS
+    ? postApi(`/api/v1/n8n/repairs/${repairId}/rollback`, {})
+    : postApi('/api/v1/n8n/rollback', { repair_id: repairId })
+}

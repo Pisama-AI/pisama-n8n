@@ -7,8 +7,8 @@ import { Card, CardHeader, CardTitle, Button, Input } from '@/components/ui'
 import {
   proposeGuardrail,
   setGuardrailDestination,
-  applyFix,
-  rollbackFix,
+  applyGuardrail,
+  rollbackGuardrail,
   type ProposeGuardrailResponse,
   type SetGuardrailDestinationResponse,
   type GuardDestinationKind,
@@ -25,10 +25,10 @@ function errorMessage(e: unknown, fallback: string): string {
   return err?.message || fallback
 }
 
-// Operator UI for the deterministic input-schema guardrail repair (OSS n8n
-// server). Flow: propose -> pick/confirm required paths -> pick destination
-// -> preview the generated subgraph -> apply (with the same confirm/rollback
-// affordance as FixPanel).
+// Operator UI for the deterministic input-schema guardrail repair (OSS self-host
+// AND multi-tenant SaaS). Flow: propose -> pick/confirm required paths -> pick
+// destination -> preview the generated subgraph -> apply (with the same
+// confirm/rollback affordance as FixPanel). In SaaS, apply is Pro-gated (402).
 export function GuardPanel({
   detectionId,
   onRepairApplied,
@@ -107,12 +107,17 @@ export function GuardPanel({
     setApplyState('applying')
     setError(null)
     try {
-      await applyFix(proposal.repair.id)
+      await applyGuardrail(proposal.repair.id)
       setApplyState('applied')
       await queryClient.invalidateQueries({ queryKey: ['detection', detectionId] })
       onRepairApplied?.()
     } catch (e) {
-      setError(errorMessage(e, 'Apply failed. Review the workflow and propose the guardrail again.'))
+      const status = (e as { status?: number }).status
+      setError(
+        status === 402
+          ? 'Installing a guardrail requires the Pro plan. Upgrade to enable remediation.'
+          : errorMessage(e, 'Apply failed. Review the workflow and propose the guardrail again.'),
+      )
       setApplyState('confirm')
     }
   }
@@ -121,7 +126,7 @@ export function GuardPanel({
     if (!proposal) return
     setApplyState('applying')
     try {
-      await rollbackFix(proposal.repair.id)
+      await rollbackGuardrail(proposal.repair.id)
       setApplyState('idle')
     } catch {
       setError('Rollback failed.')

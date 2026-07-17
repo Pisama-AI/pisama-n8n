@@ -14,7 +14,6 @@ import { RepairVerificationPanel } from '@/components/detection/RepairVerificati
 import { TraceView } from '@/components/detection/TraceView'
 import { useDetection } from '@/hooks/useDetections'
 import { N8N_BASE_URL } from '@/lib/flags'
-import { IS_SAAS } from '@/lib/saas'
 
 function confidenceTier(confidence: number): string {
   if (confidence >= 0.8) return 'HIGH'
@@ -210,15 +209,9 @@ export function DetectionDetailClient({ id }: { id: string }) {
                 )}
 
                 {detection.detected && detection.failure_mode === 'n8n_data_contract' ? (
-                  IS_SAAS ? (
-                    <Card padding="lg">
-                      <p className="text-sm text-ink-3">
-                        Guardrail repair is available in self-hosted deployments.
-                      </p>
-                    </Card>
-                  ) : (
-                    <GuardPanel detectionId={id} onRepairApplied={() => void refetch()} />
-                  )
+                  // The input-schema guardrail works in both products (OSS self-host and
+                  // multi-tenant SaaS); the client picks the right apply/rollback paths.
+                  <GuardPanel detectionId={id} onRepairApplied={() => void refetch()} />
                 ) : (
                   detection.detected && (
                     <FixPanel detectionId={id} onRepairApplied={() => void refetch()} />
