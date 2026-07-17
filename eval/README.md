@@ -36,7 +36,11 @@ no engine imports). The failures are authored by other people: their throws, the
 loops, their data explosions. A parallel sweep mined 31 **wild executions** (execution
 JSONs strangers committed to GitHub, 8 recording genuine production failures).
 
-Corpus: `eval/data/realworld/` (70 committed executions, secret-scanned). Baselines:
+Corpus: `eval/data/realworld/` (70 committed executions mined from public GitHub
+workflow repos). These embed third-party workflow definitions and demo data as they
+appeared upstream; a demo RSA private key that rode along in one tutorial fixture
+(`rw_6c1c2e6a80.json`) has been redacted, and detection never reads key bytes. Do not
+treat these fixtures as scrubbed of all upstream data. Baselines:
 `baseline_realworld.json` (main corpus) + `baseline_realworld_holdout.json`.
 
 ### What the mining found (and fixed)
