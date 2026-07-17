@@ -459,7 +459,10 @@ def _start_pisama(
     environment.update(
         {
             "PISAMA_DOGFOOD_SERVER_PORT": str(lane.server_port),
-            "PISAMA_DOGFOOD_N8N_URL": f"http://host.docker.internal:{lane.n8n_port}",
+            # The server and its disposable n8n are Compose peers. Using the
+            # service address works on Docker Desktop and Linux CI, unlike
+            # host.docker.internal which GitHub-hosted runners do not provide.
+            "PISAMA_DOGFOOD_N8N_URL": "http://n8n:5678",
             "PISAMA_DOGFOOD_N8N_API_KEY": n8n_key,
             "PISAMA_DOGFOOD_API_KEY": server_key,
             "PISAMA_DOGFOOD_POLL_INTERVAL": "0",
