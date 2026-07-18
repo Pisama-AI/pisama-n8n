@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -211,3 +210,33 @@ def test_guard_verification_records_real_routing_and_gates_prevented(tmp_path, m
         json={"kind": "valid_passed", "execution_id": 999999},
     )
     assert r.status_code == 409 and "Unknown execution" in r.json()["detail"]
+
+
+def test_candidate_executions_annotate_routing_for_the_probe_picker(tmp_path, monkeypatch):
+    """The picker's data source: recent executions of the guarded workflow, each classified
+    by how it actually routed through this guard."""
+    appmod, c = _client(tmp_path, monkeypatch)
+    case_id, guard, c = _guarded_case(appmod, c, monkeypatch)
+    consumer = guard["failing_node"]
+    destination = guard["destination_node_name"]
+
+    rejected_exec = _ingest_execution_running(c, [guard["entry_node"], destination])
+    valid_exec = _ingest_execution_running(
+        c, [guard["entry_node"], guard["validated_node"], consumer]
+    )
+    both_exec = _ingest_execution_running(c, [guard["entry_node"], destination, consumer])
+
+    r = c.get(f"/api/v1/reliability-cases/{case_id}/candidate-executions", headers=H)
+    assert r.status_code == 200, r.text
+    by_id = {row["execution_id"]: row for row in r.json()}
+    assert by_id[rejected_exec]["matches_kind"] == "malformed_rejected"
+    assert by_id[rejected_exec]["destination_ran"] is True
+    assert by_id[rejected_exec]["consumer_ran"] is False
+    assert by_id[valid_exec]["matches_kind"] == "valid_passed"
+    # Destination AND consumer both ran — not a clean probe for either check.
+    assert by_id[both_exec]["matches_kind"] is None
+
+    assert (
+        c.get("/api/v1/reliability-cases/999999/candidate-executions", headers=H).status_code
+        == 404
+    )

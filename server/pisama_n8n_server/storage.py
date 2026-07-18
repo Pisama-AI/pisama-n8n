@@ -1447,6 +1447,71 @@ class Storage:
             ).scalars()
             return [row.to_dict() for row in rows]
 
+    def list_candidate_executions(
+        self, case_id: int, limit: int = 20
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Recent ingested executions of the guarded workflow, each annotated with how it
+        routed through THIS guard, so the dashboard can offer a probe picker instead of a
+        raw-id field. ``matches_kind`` classifies an execution as a clean
+        ``malformed_rejected`` probe (the rejection destination ran and the guarded consumer
+        was skipped) or ``valid_passed`` (the inverse); ``record_guard_verification`` still
+        re-checks the routing authoritatively when the probe is recorded. None when the case
+        id is unknown. Only post-apply executions are returned — a pre-guard run has no guard
+        nodes in its runData, so it could never be evidence about the installed guard.
+        """
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                return None
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = repair.to_dict().get("guard_config") if repair else None
+            conditions = [Execution.workflow_id == case.workflow_id]
+            if repair is not None and repair.applied_at:
+                conditions.append(Execution.received_at >= repair.applied_at)
+            rows = (
+                session.execute(
+                    select(Execution)
+                    .where(*conditions)
+                    .order_by(desc(Execution.id))
+                    .limit(limit)
+                )
+                .scalars()
+                .all()
+            )
+            execs = [(e.id, e.source_execution_id, e.received_at, e.raw) for e in rows]
+
+        consumer = (guard or {}).get("failing_node")
+        destination = (guard or {}).get("destination_node_name")
+        out: List[Dict[str, Any]] = []
+        for execution_id, source_execution_id, received_at, raw in execs:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = {}
+            run_data = (
+                ((parsed.get("data") or {}).get("resultData") or {}).get("runData") or {}
+            )
+            ran = {name for name, runs in run_data.items() if runs}
+            destination_ran = bool(destination) and destination in ran
+            consumer_ran = bool(consumer) and consumer in ran
+            matches_kind = None
+            if destination and consumer:
+                if destination_ran and not consumer_ran:
+                    matches_kind = "malformed_rejected"
+                elif consumer_ran and not destination_ran:
+                    matches_kind = "valid_passed"
+            out.append(
+                {
+                    "execution_id": execution_id,
+                    "source_execution_id": source_execution_id,
+                    "received_at": received_at,
+                    "destination_ran": destination_ran,
+                    "consumer_ran": consumer_ran,
+                    "matches_kind": matches_kind,
+                }
+            )
+        return out
+
     def execution_id_for_source(self, source_execution_id: str) -> Optional[int]:
         """The internal execution id for an ingested n8n execution, or None.
 

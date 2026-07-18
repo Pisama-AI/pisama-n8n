@@ -354,6 +354,22 @@ async def conclude_reliability_case(
     return case
 
 
+@app.get(
+    "/api/v1/reliability-cases/{case_id}/candidate-executions",
+    dependencies=[Depends(require_read_auth)],
+)
+async def list_candidate_executions(
+    case_id: int, storage: Storage = Depends(get_storage)
+) -> List[Dict[str, Any]]:
+    """Recent executions of the guarded workflow, annotated with how each routed through
+    this guard, so the dashboard can offer a probe picker rather than a raw-id field. The
+    guard-verification endpoint still re-verifies the routing when a probe is recorded."""
+    rows = storage.list_candidate_executions(case_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Unknown reliability case id.")
+    return rows
+
+
 @app.post(
     "/api/v1/reliability-cases/{case_id}/guard-verification",
     dependencies=[Depends(require_auth)],
