@@ -38,6 +38,7 @@ def test_input_schema_guardrail_rejects_ambiguous_path_configuration(paths):
 from pisama_n8n_engine.guardrails import (  # noqa: E402
     GuardrailDestinationError,
     GuardrailInsertionError,
+    assert_guard_still_wired,
     insert_guard_into_workflow,
     observed_required_paths,
     property_read_leaf,
@@ -192,3 +193,71 @@ def test_generated_validator_ignores_prototype_chain_members():
     fragment = input_schema_guardrail(["body.__proto__"])
     code = fragment["nodes"][0]["parameters"]["jsCode"]
     assert "Object.hasOwn" in code
+
+
+class TestGuardDriftDetection:
+    """An APPLIED guard can be deleted or rewired in the n8n editor at any time. The
+    apply-time checks only run when an operator clicks something, so these assertions
+    are what stand between "applied" and "actually still protecting the workflow"."""
+
+    def _applied(self):
+        """A workflow with the guard spliced in, plus its guard_config."""
+        out = insert_guard_into_workflow(
+            _workflow(), ["required.value"], "Consumer", "error_workflow"
+        )
+        guard_config = {
+            "failing_node": "Consumer",
+            "fragment_node_names": out["fragment_node_names"],
+            "destination_node_name": out["destination_node_name"],
+            "entry_node": out["entry_node"],
+            "validated_node": out["validated_node"],
+            "rejected_node": out["rejected_node"],
+        }
+        return out["workflow"], guard_config
+
+    def test_intact_guard_reports_no_drift(self):
+        wf, guard = self._applied()
+        assert assert_guard_still_wired(wf, guard) == []
+
+    def test_deleted_fragment_node_is_detected(self):
+        wf, guard = self._applied()
+        wf["nodes"] = [n for n in wf["nodes"] if n["name"] != guard["entry_node"]]
+        kinds = {d["kind"] for d in assert_guard_still_wired(wf, guard)}
+        assert "guard_deleted" in kinds
+
+    def test_detached_validated_branch_is_detected(self):
+        wf, guard = self._applied()
+        # Validated output rewired to nothing (someone repointed it elsewhere).
+        wf["connections"][guard["validated_node"]] = {"main": [[]]}
+        kinds = {d["kind"] for d in assert_guard_still_wired(wf, guard)}
+        assert "guard_detached" in kinds
+
+    def test_broken_rejection_path_is_detected(self):
+        wf, guard = self._applied()
+        wf["connections"][guard["rejected_node"]] = {"main": [[]]}
+        kinds = {d["kind"] for d in assert_guard_still_wired(wf, guard)}
+        assert "rejection_path_broken" in kinds
+
+    def test_bypassed_guard_is_detected_though_every_node_survives(self):
+        """THE case a node-set diff cannot see: all guard nodes still present and the
+        validated branch still wired, but the source now ALSO feeds the consumer
+        directly, so malformed input can skip the guard entirely."""
+        wf, guard = self._applied()
+        wf["connections"]["Webhook"]["main"][0].append(
+            {"node": "Consumer", "type": "main", "index": 0}
+        )
+        # Every fragment node still exists and the validated path is intact...
+        names = {n["name"] for n in wf["nodes"]}
+        assert all(n in names for n in guard["fragment_node_names"])
+        drifts = assert_guard_still_wired(wf, guard)
+        kinds = {d["kind"] for d in drifts}
+        assert kinds == {"guard_bypassed"}, drifts
+        assert "Webhook" in drifts[0]["detail"]
+
+    def test_bypass_check_ignores_the_validated_node_itself(self):
+        """The validated node feeding the consumer is the guard working correctly —
+        it must never be reported as a bypass."""
+        wf, guard = self._applied()
+        assert not [
+            d for d in assert_guard_still_wired(wf, guard) if d["kind"] == "guard_bypassed"
+        ]

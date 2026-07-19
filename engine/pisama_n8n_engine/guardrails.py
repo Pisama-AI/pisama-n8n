@@ -555,3 +555,113 @@ def insert_guard_into_workflow(
         "validated_node": fragment["validated_node"],
         "rejected_node": fragment["rejected_node"],
     }
+
+
+# --- drift detection: is an APPLIED guard still doing its job? -------------
+#
+# The apply-time guards (`assert_safe_guardrail_diff`, the stale fingerprint check)
+# only run at the moment an operator clicks something. Between clicks — which is
+# ~100% of elapsed time — nobody is watching, so a guard deleted or rewired in the
+# n8n editor keeps reading as "applied". This is the continuous check.
+#
+# Deliberately NOT an inversion of `assert_safe_guardrail_diff`: that function
+# compares node SETS and node identity and never looks at `connections`, so the
+# likeliest real drift — the guard nodes are all still present but someone rewired
+# the source straight to the consumer — passes it cleanly. Wiring is what matters
+# here, so this walks the edges.
+
+
+def _main_edges(connections: dict, source: str) -> list:
+    """Every main-output edge leaving ``source`` (flattened across output indexes)."""
+    outputs = (connections or {}).get(source) or {}
+    out = []
+    for edges in (outputs.get("main") or []):
+        for edge in (edges or []):
+            if isinstance(edge, dict):
+                out.append(edge)
+    return out
+
+
+def _reaches(connections: dict, source: str, target: str) -> bool:
+    return any(edge.get("node") == target for edge in _main_edges(connections, source))
+
+
+def assert_guard_still_wired(
+    live_workflow: dict, guard_config: dict
+) -> list[dict[str, Any]]:
+    """Report how an applied input-schema guard has drifted in the live workflow.
+
+    Returns a list of ``{"kind": ..., "detail": ...}``; an EMPTY list means the guard
+    is intact. Pure function over two JSON documents — no I/O, no n8n calls — so it is
+    safe to run on every poll.
+
+    Kinds, in escalating order of "the guard is not protecting anything":
+      ``guard_deleted``        one or more fragment nodes are gone
+      ``guard_detached``       validated path no longer reaches the guarded consumer
+      ``rejection_path_broken``rejected path no longer reaches the destination
+      ``guard_bypassed``       something OTHER than the validated node feeds the
+                               consumer directly — input can now skip the guard
+                               entirely. This is the one that matters most, and the
+                               one a node-set comparison cannot see.
+    """
+    drifts: list[dict[str, Any]] = []
+    nodes = {
+        n.get("name")
+        for n in (live_workflow.get("nodes") or [])
+        if isinstance(n, dict)
+    }
+    connections = live_workflow.get("connections") or {}
+
+    fragment = [str(n) for n in (guard_config.get("fragment_node_names") or [])]
+    consumer = guard_config.get("failing_node")
+    validated = guard_config.get("validated_node")
+    rejected = guard_config.get("rejected_node")
+    destination = guard_config.get("destination_node_name")
+
+    missing = [name for name in fragment if name not in nodes]
+    if missing:
+        drifts.append(
+            {
+                "kind": "guard_deleted",
+                "detail": f"guard nodes removed from the workflow: {', '.join(sorted(missing))}",
+            }
+        )
+
+    # A detached/broken path is only meaningful while the node still exists; a deleted
+    # node is already reported above and would otherwise produce duplicate noise.
+    if validated in nodes and consumer and not _reaches(connections, validated, consumer):
+        drifts.append(
+            {
+                "kind": "guard_detached",
+                "detail": f"{validated!r} no longer routes validated input to {consumer!r}",
+            }
+        )
+    if rejected in nodes and destination and not _reaches(connections, rejected, destination):
+        drifts.append(
+            {
+                "kind": "rejection_path_broken",
+                "detail": f"{rejected!r} no longer routes rejected input to {destination!r}",
+            }
+        )
+
+    # The bypass check: exactly the inverse of the single-inbound-edge requirement
+    # `insert_guard_into_workflow` enforces when it splices the guard in.
+    if consumer:
+        bypassers = sorted(
+            {
+                source
+                for source in connections
+                if source != validated and _reaches(connections, source, consumer)
+            }
+        )
+        if bypassers:
+            drifts.append(
+                {
+                    "kind": "guard_bypassed",
+                    "detail": (
+                        f"{consumer!r} can be reached without passing the guard — "
+                        f"direct input from: {', '.join(bypassers)}"
+                    ),
+                }
+            )
+    return drifts

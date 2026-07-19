@@ -70,7 +70,7 @@ export interface ReliabilityCase {
   workflow_id: string
   detector: string
   failure_mode: string | null
-  status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back'
+  status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back' | 'drifted'
   outcome: ReliabilityOutcome | 'recurred' | null
   // Failure-rate window fields — present on an OSS model-fix case; the SaaS
   // guardrail case is focused on the two routing probes and omits them.
@@ -93,6 +93,11 @@ export interface ReliabilityCase {
   // guard rejects malformed input and passes valid input. Present on a guardrail case.
   guard_malformed_rejected_execution_id?: number | null
   guard_valid_passed_execution_id?: number | null
+  // Guard drift: the installed guard is no longer present/wired in the live workflow.
+  // Set by the server's poll-time integrity sweep; blocks concluding 'prevented'.
+  guard_drift_kind?: string | null
+  guard_drift_detected_at?: string | null
+  guard_drift_note?: string | null
   outcome_note: string | null
   created_at: string
   updated_at: string

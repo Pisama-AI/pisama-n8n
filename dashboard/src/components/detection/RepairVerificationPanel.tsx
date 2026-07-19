@@ -15,14 +15,28 @@ import {
 
 type PendingOutcome = ReliabilityOutcome | null
 
+// What each drift kind means for the customer, in their terms. Kinds come from the
+// server's poll-time integrity sweep (engine assert_guard_still_wired).
+const DRIFT_COPY: Record<string, string> = {
+  guard_bypassed:
+    'Something now feeds the guarded step directly, so input can reach it without passing the guard. Every guard node still exists — only the wiring changed.',
+  guard_deleted: 'One or more of the guard’s nodes have been removed from the workflow.',
+  guard_detached: 'The guard no longer passes validated input on to the guarded step.',
+  rejection_path_broken:
+    'Rejected input no longer reaches the destination you chose, so rejections may go nowhere.',
+}
+
 function statusVariant(status: ReliabilityCase['status']) {
   if (status === 'prevented') return 'success'
-  if (status === 'recurred') return 'error'
+  if (status === 'recurred' || status === 'drifted') return 'error'
   if (status === 'observing') return 'info'
   return 'default'
 }
 
 function statusCopy(caseRecord: ReliabilityCase): string {
+  if (caseRecord.status === 'drifted') {
+    return 'This guard is no longer protecting the workflow — it was changed or removed in n8n after Pisama applied it. Until it is restored, this repair is not preventing anything.'
+  }
   if (caseRecord.status === 'recurred') {
     return 'The same failure pattern appeared again after this repair. Review the repair before relying on it.'
   }
@@ -299,6 +313,35 @@ export function RepairVerificationPanel({
       </CardHeader>
 
       <p className="text-sm leading-relaxed text-ink-2">{statusCopy(caseRecord)}</p>
+
+      {caseRecord.status === 'drifted' && (
+        <div className="mt-4 rounded-lg border border-red-400/40 bg-red-400/5 p-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={14} className="shrink-0 text-red-400" />
+            <span className="text-xs font-semibold uppercase tracking-wide text-red-400">
+              Guard no longer active
+            </span>
+            {caseRecord.guard_drift_detected_at && (
+              <span className="ml-auto font-mono text-xs text-ink-4">
+                since {shortTime(caseRecord.guard_drift_detected_at)}
+              </span>
+            )}
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-ink-2">
+            {DRIFT_COPY[caseRecord.guard_drift_kind ?? ''] ??
+              'The installed guard no longer matches what Pisama applied.'}
+          </p>
+          {caseRecord.guard_drift_note && (
+            <p className="mt-1.5 font-mono text-xs leading-relaxed text-ink-3">
+              {caseRecord.guard_drift_note}
+            </p>
+          )}
+          <p className="mt-2 text-xs leading-relaxed text-ink-3">
+            Re-apply the guard from this detection to restore protection. This case cannot be
+            concluded as prevention while the guard is inactive.
+          </p>
+        </div>
+      )}
 
       {hasFailureWindow && (
         <div className="mt-5 border-y border-rule py-4">
