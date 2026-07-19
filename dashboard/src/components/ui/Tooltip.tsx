@@ -104,7 +104,11 @@ const terminology: Record<string, { term: string; definition: string; example?: 
   },
   confidence: {
     term: 'How Certain We Are',
-    definition: 'A percentage showing how sure we are about this finding. 90%+ means we\'re very confident.',
+    // Deliberately NOT a probability: detectors emit a small set of fixed certainty
+    // levels, so any percentage here would imply a calibrated likelihood we do not
+    // measure. Describe the tier in evidence terms instead.
+    definition:
+      'How strong the evidence is for this finding — High, Likely, Possible, or Low. It reflects how much supporting signal the detector found, not a measured probability.',
   },
   diff: {
     term: 'Before/After Comparison',

@@ -5,7 +5,6 @@ import { ArrowLeft, AlertTriangle, ExternalLink } from 'lucide-react'
 import { Layout } from '@/components/common/Layout'
 import { Card, CardHeader, CardTitle, Badge, ConfidenceTierBadge, EmptyState } from '@/components/ui'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { formatConfidencePct } from '@/lib/utils'
 import { detectionTypeConfig, plainEnglishLabels, severityConfig } from '@/components/detection/DetectionTypeConfig'
 import { FixPanel } from '@/components/detection/FixPanel'
 import { GuardPanel } from '@/components/detection/GuardPanel'
@@ -157,15 +156,11 @@ export function DetectionDetailClient({ id }: { id: string }) {
                   <div className="grid grid-cols-2 gap-x-6 gap-y-5 pt-5 border-t border-rule">
                     <Field label="Workflow" value={workflowLabel} />
                     <Field label="Detector" value={detection.detection_type} />
-                    <Field
-                      label="Confidence"
-                      value={
-                        <span>
-                          {formatConfidencePct(detection.confidence)}{' '}
-                          <span className="text-ink-3">· {tierMeaning[tier]}</span>
-                        </span>
-                      }
-                    />
+                    {/* Certainty is a TIER, not a probability. The detectors emit a small
+                        set of fixed levels, so rendering a percentage would imply a
+                        calibrated likelihood we do not measure. The badge above shows the
+                        tier; this states what that tier means in evidence terms. */}
+                    <Field label="Certainty" value={tierMeaning[tier]} />
                     <Field
                       label="Severity"
                       value={

@@ -23,16 +23,10 @@ export function activateOnKey(handler: () => void) {
   }
 }
 
-/**
- * Confidence values arrive on different scales depending on the source
- * (some detectors emit 0–1, some emit 0–100). Normalize to 0–1 so display
- * code can safely multiply by 100. Guards against the "8495%" double-scaling bug.
- */
-export function normalizeConfidence(confidence: number): number {
-  return confidence > 1 ? confidence / 100 : confidence
-}
-
-/** Render a confidence value as a rounded percentage string (e.g. "85%"). */
-export function formatConfidencePct(confidence: number): string {
-  return `${Math.round(normalizeConfidence(confidence) * 100)}%`
-}
+// NOTE: confidence-as-percentage helpers were removed deliberately. Detector
+// confidence is a small lattice of fixed levels (0.95/0.90/0.85/…), not a measured
+// likelihood, so rendering "95%" implied a calibrated probability that is not measured.
+// Confidence is surfaced as a TIER instead — see confidenceTier() in the detection
+// detail view and severityFromConfidence() in lib/api/detections.ts. If a genuine
+// probability is ever needed, it has to come from a fitted calibration, not from
+// formatting the raw constant.

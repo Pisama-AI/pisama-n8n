@@ -70,7 +70,7 @@ export function DetectionsClient() {
               >
                 <option value="newest">Newest first</option>
                 <option value="oldest">Oldest first</option>
-                <option value="confidence">Highest confidence</option>
+                <option value="confidence">Strongest evidence</option>
               </select>
             </div>
           )}
