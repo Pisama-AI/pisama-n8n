@@ -412,6 +412,255 @@ async def record_guard_verification(
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
+@app.post(
+    "/api/v1/reliability-cases/{case_id}/route-verification",
+    dependencies=[Depends(require_auth)],
+)
+async def record_route_verification(
+    case_id: int,
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Record the routed-incident probe for an error-route case: an execution of the
+    TARGET error workflow, produced after the repair was applied. One probe, not the
+    guardrail's two — an error route has no valid-path regression to disprove."""
+    execution_id = body.get("execution_id")
+    source_execution_id = body.get("source_execution_id")
+    if not isinstance(execution_id, int) and source_execution_id is not None:
+        execution_id = storage.execution_id_for_source(str(source_execution_id))
+        if execution_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="No ingested execution for that source id — run /n8n/sync first.",
+            )
+    if not isinstance(execution_id, int):
+        raise HTTPException(
+            status_code=422,
+            detail="execution_id (int) or source_execution_id is required.",
+        )
+    try:
+        return storage.record_route_verification(case_id, execution_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+# --- error-route repair: the second deterministic, operator-gated primitive ---
+
+_ERROR_ROUTE_MODES = {
+    "n8n_error_workflow_target_missing",
+    "n8n_error_workflow_missing_trigger",
+    "n8n_missing_error_workflow",
+}
+
+
+@app.post("/api/v1/n8n/error-route", dependencies=[Depends(require_auth)])
+async def n8n_error_route(
+    body: Dict[str, Any], storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Propose an ERROR-ROUTE repair from a broken-error-workflow detection.
+
+    Pure derivation, no model call, so it is FREE like the input-schema guardrail: the
+    detector already established that the configured error workflow is missing,
+    un-triggered, or absent, and the repair re-points ``settings.errorWorkflow`` at a
+    target the operator picks from their own workflows.
+
+    Deliberately NOT in scope: creating a new error workflow. That needs POST /workflows
+    (absent from the client) plus a notification node whose credentials we cannot invent.
+    """
+    detection_id = body.get("detection_id")
+    if not isinstance(detection_id, int):
+        raise HTTPException(status_code=422, detail="detection_id (int) is required.")
+    ctx = storage.get_detection_context(detection_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Unknown detection_id.")
+    detection = ctx["detection"]
+    if detection.get("failure_mode") not in _ERROR_ROUTE_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail="Error-route repairs apply only to error-workflow detections.",
+        )
+    exec_workflow = ctx.get("workflow")
+    workflow_id = ctx.get("workflow_id")
+    if not isinstance(exec_workflow, dict) or not workflow_id:
+        raise HTTPException(
+            status_code=422,
+            detail="The detection has no associated workflow to repair.",
+        )
+    client = client_from_env()
+    if client is None:
+        raise HTTPException(
+            status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY)."
+        )
+    # Baseline must be the LIVE workflow: an execution's embedded copy carries n8n-injected
+    # defaults absent from the API response, which would trip the apply-time stale guard.
+    try:
+        workflow = await client.get_workflow(str(workflow_id))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not read the workflow from n8n: {exc}"
+        ) from None
+    finally:
+        await client.aclose()
+
+    guard_config = {
+        "kind": "error_route",
+        "target_workflow_id": None,
+        "previous_error_workflow": (workflow.get("settings") or {}).get("errorWorkflow"),
+        "source_failure_mode": detection.get("failure_mode"),
+    }
+    proposal = storage.create_guardrail_proposal(
+        detection_id=detection_id,
+        workflow_id=workflow_id,
+        baseline_workflow=workflow,
+        guard_config=guard_config,
+        explanation=(
+            "Point this workflow's error route at a working error workflow; choose the "
+            "target to apply."
+        ),
+    )
+    return {"repair": proposal}
+
+
+@app.get(
+    "/api/v1/n8n/repairs/{repair_id}/error-targets",
+    dependencies=[Depends(require_read_auth)],
+)
+async def list_error_route_targets(
+    repair_id: int, storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """The instance's workflows as error-route targets, each marked eligible or not.
+
+    n8n's workflow LIST response carries no node arrays, so eligibility (does it have an
+    Error Trigger?) needs a per-candidate fetch. Ineligible candidates are RETURNED with
+    the reason rather than filtered out — an operator who sees "No Error Trigger node"
+    learns what to add, where a silently short list just looks broken."""
+    from pisama_n8n_engine.guardrails import has_error_trigger
+
+    existing = storage.get_repair(repair_id, include_workflows=True)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Unknown repair_id.")
+    if (existing.get("guard_config") or {}).get("kind") != "error_route":
+        raise HTTPException(
+            status_code=422, detail="Repair is not an error-route proposal."
+        )
+    client = client_from_env()
+    if client is None:
+        raise HTTPException(
+            status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY)."
+        )
+    try:
+        listed = await client.list_workflows()
+        targets: List[Dict[str, Any]] = []
+        for item in listed:
+            candidate_id = str(item.get("id"))
+            if candidate_id == str(existing["workflow_id"]):
+                continue  # a workflow cannot be its own error handler
+            try:
+                full = await client.get_workflow(candidate_id)
+            except Exception:
+                targets.append(
+                    {
+                        "id": candidate_id,
+                        "name": item.get("name"),
+                        "eligible": False,
+                        "reason": "Could not read this workflow from n8n.",
+                    }
+                )
+                continue
+            eligible = has_error_trigger(full)
+            targets.append(
+                {
+                    "id": candidate_id,
+                    "name": item.get("name"),
+                    "eligible": eligible,
+                    "reason": None if eligible else "No Error Trigger node.",
+                }
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not list workflows from n8n: {exc}"
+        ) from None
+    finally:
+        await client.aclose()
+    return {"targets": targets}
+
+
+@app.post(
+    "/api/v1/n8n/repairs/{repair_id}/error-target", dependencies=[Depends(require_auth)]
+)
+async def set_error_route_target(
+    repair_id: int, body: Dict[str, Any], storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Record the operator's chosen error-workflow target and build the mutated workflow.
+
+    The apply-time PRECONDITION is asserted here against live n8n: the target must resolve
+    and must contain an Error Trigger. That proves the route is well-formed. It does NOT
+    prove an incident was delivered — that is what the routed-incident probe is for."""
+    from pisama_n8n_engine.guardrails import (
+        ErrorRouteError,
+        build_error_route_repair,
+        has_error_trigger,
+    )
+
+    target_id = body.get("target_workflow_id")
+    if not target_id:
+        raise HTTPException(status_code=422, detail="target_workflow_id is required.")
+    existing = storage.get_repair(repair_id, include_workflows=True)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Unknown repair_id.")
+    guard = existing.get("guard_config") or {}
+    if guard.get("kind") != "error_route":
+        raise HTTPException(
+            status_code=422, detail="Repair is not an error-route proposal."
+        )
+    if existing["status"] != "proposed":
+        raise HTTPException(
+            status_code=409, detail=f"Repair is already {existing['status']}."
+        )
+    client = client_from_env()
+    if client is None:
+        raise HTTPException(
+            status_code=400, detail="n8n API not configured (PISAMA_N8N_URL/KEY)."
+        )
+    try:
+        try:
+            target = await client.get_workflow(str(target_id))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Target workflow {target_id!r} could not be read from n8n: {exc}",
+            ) from None
+    finally:
+        await client.aclose()
+    if not has_error_trigger(target):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Target workflow {target_id!r} has no Error Trigger node, so n8n would "
+                "never invoke it. Add one, then choose it again."
+            ),
+        )
+
+    try:
+        built = build_error_route_repair(existing["baseline_workflow"], str(target_id))
+    except ErrorRouteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    guard = {
+        **guard,
+        "target_workflow_id": str(target_id),
+        "target_workflow_name": target.get("name"),
+        "previous_error_workflow": built["previous_error_workflow"],
+    }
+    try:
+        updated = storage.set_guardrail_destination(repair_id, built["workflow"], guard)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return {"repair": updated}
+
+
 # --- input-schema guardrail: a deterministic, operator-gated repair -------
 
 
@@ -701,10 +950,16 @@ async def n8n_apply(
         )
     # A guardrail cannot be applied until the operator has chosen a rejection destination.
     # Check BEFORE claiming so a null-destination guardrail is never stuck in 'applying'.
-    if guard is not None and guard.get("destination") is None:
+    kind = (guard or {}).get("kind")
+    if kind == "input_schema" and guard.get("destination") is None:
         raise HTTPException(
             status_code=409,
             detail="Choose a rejection destination for this guardrail before applying it.",
+        )
+    if kind == "error_route" and guard.get("target_workflow_id") is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Choose a target error workflow before applying this error-route repair.",
         )
     repair = storage.claim_repair_apply(repair_id)
     if repair is None:
@@ -740,7 +995,25 @@ async def n8n_apply(
         # Guardrail defense in depth: even though the proposal is server-generated, the
         # mutated workflow may only ADD the guard fragment nodes — never remove/retype an
         # existing node. Refuse (and leave the live workflow untouched) otherwise.
-        if guard is not None:
+        if kind == "error_route":
+            # Bound by assert_safe_settings_diff, NOT assert_safe_guardrail_diff — the
+            # latter inspects node deltas only and never looks at settings, so it would
+            # pass a settings-only mutation VACUOUSLY.
+            from pisama_n8n_engine.guardrails import (
+                ErrorRouteError,
+                assert_safe_settings_diff,
+            )
+
+            try:
+                assert_safe_settings_diff(
+                    repair["baseline_workflow"],
+                    repair["proposed_workflow"],
+                    allowed_keys={"errorWorkflow"},
+                )
+            except ErrorRouteError as exc:
+                storage.mark_repair_failed(repair_id, "applying", str(exc))
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+        elif guard is not None:
             from pisama_n8n_engine.guardrails import (
                 GuardrailInsertionError,
                 assert_safe_guardrail_diff,

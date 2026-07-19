@@ -665,3 +665,84 @@ def assert_guard_still_wired(
                 }
             )
     return drifts
+
+
+# --- error-route repair: the second deterministic prevention primitive ------
+#
+# The input-schema guard splices NODES. This one changes exactly one SETTINGS key —
+# `settings.errorWorkflow` — to point a workflow's incident route at an error workflow
+# that actually has an Error Trigger. n8n's PUT whitelist already includes `settings`,
+# so no new client surface is needed.
+#
+# CRITICAL: `assert_safe_guardrail_diff` cannot police this. It compares node SETS and
+# node identity and never inspects `settings`, so a route repair passes it VACUOUSLY
+# (added == expected_added == empty) while the actual mutation goes unchecked. The
+# sibling assertion below is what makes this primitive as bounded as the guardrail.
+
+ERROR_TRIGGER_TYPE = "n8n-nodes-base.errorTrigger"
+
+
+class ErrorRouteError(Exception):
+    """The error-route repair cannot be built or is not safe to apply."""
+
+
+def has_error_trigger(workflow: dict) -> bool:
+    """Whether a workflow can actually serve as an n8n incident route."""
+    return any(
+        isinstance(node, dict) and str(node.get("type") or "") == ERROR_TRIGGER_TYPE
+        for node in (workflow.get("nodes") or [])
+    )
+
+
+def assert_safe_settings_diff(
+    baseline: dict, mutated: dict, allowed_keys: Sequence[str]
+) -> None:
+    """The mutated workflow may differ from the baseline ONLY in ``allowed_keys`` of
+    ``settings``. Nodes and connections must be byte-identical.
+
+    The guardrail's safety comes from a diff bound that a malicious or buggy proposal
+    cannot slip past; a settings repair needs its own, because the node-level assertion
+    is silent about settings.
+    """
+    if (baseline.get("nodes") or []) != (mutated.get("nodes") or []):
+        raise ErrorRouteError("an error-route repair must not change any node")
+    if (baseline.get("connections") or {}) != (mutated.get("connections") or {}):
+        raise ErrorRouteError("an error-route repair must not change any connection")
+
+    before = baseline.get("settings") or {}
+    after = mutated.get("settings") or {}
+    allowed = set(allowed_keys)
+    changed = {
+        key
+        for key in set(before) | set(after)
+        if before.get(key) != after.get(key)
+    }
+    forbidden = sorted(changed - allowed)
+    if forbidden:
+        raise ErrorRouteError(
+            f"an error-route repair may only change {sorted(allowed)}; also changed: {forbidden}"
+        )
+    if not changed:
+        raise ErrorRouteError("error-route repair does not change the workflow")
+
+
+def build_error_route_repair(workflow: dict, target_workflow_id: str) -> dict:
+    """Point ``workflow``'s incident route at ``target_workflow_id``.
+
+    Returns ``{"workflow": <mutated>, "previous_error_workflow": <id or None>}``. The
+    caller is responsible for having verified the target actually contains an Error
+    Trigger — this function only performs the (deterministic) mutation.
+    """
+    target = str(target_workflow_id or "").strip()
+    if not target:
+        raise ErrorRouteError("an error-route repair requires a target workflow id")
+    if str((workflow.get("id") or "")) == target:
+        raise ErrorRouteError("a workflow cannot be its own error route")
+
+    previous = (workflow.get("settings") or {}).get("errorWorkflow")
+    if str(previous or "") == target:
+        raise ErrorRouteError("that error workflow is already configured")
+
+    mutated = copy.deepcopy(workflow)
+    mutated.setdefault("settings", {})["errorWorkflow"] = target
+    return {"workflow": mutated, "previous_error_workflow": previous or None}

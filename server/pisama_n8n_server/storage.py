@@ -289,6 +289,10 @@ class ReliabilityCase(Base):
     guard_drift_kind: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     guard_drift_detected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     guard_drift_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Error-route repairs are verified by ONE routed-incident probe instead of the
+    # guardrail's two: an error route has no valid-path regression to disprove.
+    guard_route_delivered_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_route_delivered_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     outcome_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -362,6 +366,8 @@ class ReliabilityCase(Base):
             "guard_drift_kind": self.guard_drift_kind,
             "guard_drift_detected_at": self.guard_drift_detected_at,
             "guard_drift_note": self.guard_drift_note,
+            "guard_route_delivered_execution_id": self.guard_route_delivered_execution_id,
+            "guard_route_delivered_at": self.guard_route_delivered_at,
             "outcome_note": self.outcome_note,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -618,6 +624,8 @@ _ADDED_COLUMNS = {
         "guard_drift_kind": "VARCHAR",
         "guard_drift_detected_at": "VARCHAR",
         "guard_drift_note": "TEXT",
+        "guard_route_delivered_execution_id": "INTEGER",
+        "guard_route_delivered_at": "VARCHAR",
     },
     "repair_attempts": {
         "guard_config": "TEXT",
@@ -1603,6 +1611,72 @@ class Storage:
         )
         return {name for name, runs in run_data.items() if runs}
 
+    def _execution_routing(self, execution_id: int):
+        """(workflow_id, {node names that produced a run}) for an ingested execution, or
+        None if unknown. The workflow_id lets a caller BIND a probe to the workflow the
+        repair was applied to: an execution of a different workflow that merely happens to
+        share a node name is not evidence about this repair."""
+        with self._Session() as session:
+            execution = session.get(Execution, execution_id)
+            if execution is None:
+                return None
+            workflow_id = execution.workflow_id
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return workflow_id, set(), None
+        run_data = (
+            ((raw.get("data") or {}).get("resultData") or {}).get("runData") or {}
+        )
+        started_at = raw.get("startedAt") if isinstance(raw, dict) else None
+        return (
+            workflow_id,
+            {name for name, runs in run_data.items() if runs},
+            started_at,
+        )
+
+    def record_route_verification(self, case_id: int, execution_id: int) -> Dict[str, Any]:
+        """Record the ONE routed-incident probe an error-route repair needs: an execution
+        of the TARGET error workflow, produced after the repair was applied.
+
+        The apply-time static check (target resolves, has an Error Trigger, source points
+        at it) is a PRECONDITION — it proves the route is well-formed, not that an incident
+        was ever delivered. This proves delivery."""
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                raise ValueError("Unknown reliability case id.")
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = (repair.to_dict().get("guard_config") or {}) if repair else {}
+            if guard.get("kind") != "error_route":
+                raise ValueError("This reliability case is not an error-route case.")
+            target_workflow_id = guard.get("target_workflow_id")
+            applied_at = repair.applied_at if repair else None
+
+        routing = self._execution_routing(execution_id)
+        if routing is None:
+            raise ValueError("Unknown execution id — ingest the probe execution first.")
+        exec_workflow_id, _run_nodes, started_at = routing
+        if str(exec_workflow_id) != str(target_workflow_id):
+            raise ValueError(
+                "The probe execution belongs to a different workflow than the configured "
+                "error-workflow target, so it is not evidence that this route delivered."
+            )
+        if applied_at and started_at and started_at < applied_at:
+            raise ValueError(
+                "The probe execution predates the repair being applied, so it is not "
+                "evidence that this repair routed anything."
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            case.guard_route_delivered_execution_id = execution_id
+            case.guard_route_delivered_at = now
+            case.updated_at = now
+            session.commit()
+            return case.to_dict()
+
     def record_guard_verification(
         self, case_id: int, kind: str, execution_id: int
     ) -> Dict[str, Any]:
@@ -1620,14 +1694,29 @@ class Storage:
             case = session.get(ReliabilityCase, case_id)
             if case is None:
                 raise ValueError("Unknown reliability case id.")
+            case_workflow_id = case.workflow_id
             repair = session.get(RepairAttempt, case.repair_id)
             guard = repair.to_dict().get("guard_config") if repair else None
             if not guard:
                 raise ValueError("This reliability case is not a guardrail case.")
+            if guard.get("kind") != "input_schema":
+                # Probe kinds are not interchangeable. Falling through would fail later
+                # with a confusing "destination did not run" — say the real reason.
+                raise ValueError(
+                    f"This reliability case is a {guard.get('kind')!r} repair, which is "
+                    "verified by its own probe, not by guardrail routing probes."
+                )
 
-        run_nodes = self._execution_run_nodes(execution_id)
-        if run_nodes is None:
+        routing = self._execution_routing(execution_id)
+        if routing is None:
             raise ValueError("Unknown execution id — ingest the probe execution first.")
+        exec_workflow_id, run_nodes, _started_at = routing
+        # Bind the probe to the guarded workflow: a probe from a DIFFERENT workflow (even
+        # one that happens to share a node name) is not evidence about THIS guard.
+        if str(exec_workflow_id) != str(case_workflow_id):
+            raise ValueError(
+                "The probe execution belongs to a different workflow than the guarded one."
+            )
 
         consumer = guard.get("failing_node")
         destination = guard.get("destination_node_name")
@@ -1667,10 +1756,17 @@ class Storage:
             session.commit()
             return case.to_dict()
 
-    def _is_guardrail_case(self, case: "ReliabilityCase") -> bool:
+    def _case_repair_kind(self, case: "ReliabilityCase") -> Optional[str]:
+        """Which prevention primitive this case is about, or None for a model fix.
+
+        Replaces a boolean ``_is_guardrail_case``, which was a live footgun the moment a
+        SECOND kind of repair carried a truthy ``guard_config``: an error-route case would
+        have been asked for guardrail routing probes that can never exist for it, leaving
+        it permanently unconcludable."""
         with self._Session() as session:
             repair = session.get(RepairAttempt, case.repair_id)
-            return bool(repair and repair.guard_config)
+            guard = repair.to_dict().get("guard_config") if repair else None
+            return (guard or {}).get("kind") if guard else None
 
     def conclude_reliability_case(
         self, case_id: int, outcome: str, note: Optional[str] = None
@@ -1701,7 +1797,8 @@ class Storage:
                     raise ValueError(
                         "A recurring case cannot be recorded as prevented."
                     )
-                if self._is_guardrail_case(case) and not (
+                kind = self._case_repair_kind(case)
+                if kind == "input_schema" and not (
                     case.guard_malformed_rejected_execution_id
                     and case.guard_valid_passed_execution_id
                 ):
@@ -1709,6 +1806,12 @@ class Storage:
                         "A guardrail can only be recorded as prevented after both "
                         "verification probes are recorded: a malformed input rejected "
                         "and a valid input passed through the installed guard."
+                    )
+                if kind == "error_route" and not case.guard_route_delivered_execution_id:
+                    raise ValueError(
+                        "An error-route repair can only be recorded as prevented once the "
+                        "route has actually delivered: record an execution of the target "
+                        "error workflow produced after the repair was applied."
                     )
             now = datetime.now(timezone.utc).isoformat()
             case.status = outcome

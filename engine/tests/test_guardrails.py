@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from pisama_n8n_engine.guardrails import input_schema_guardrail
@@ -36,9 +38,14 @@ def test_input_schema_guardrail_rejects_ambiguous_path_configuration(paths):
 # ── first-class repair layer: extraction, destinations, insertion ────────────
 
 from pisama_n8n_engine.guardrails import (  # noqa: E402
+    assert_safe_guardrail_diff,
     GuardrailDestinationError,
     GuardrailInsertionError,
     assert_guard_still_wired,
+    assert_safe_settings_diff,
+    build_error_route_repair,
+    ErrorRouteError,
+    has_error_trigger,
     insert_guard_into_workflow,
     observed_required_paths,
     property_read_leaf,
@@ -261,3 +268,81 @@ class TestGuardDriftDetection:
         assert not [
             d for d in assert_guard_still_wired(wf, guard) if d["kind"] == "guard_bypassed"
         ]
+
+
+class TestErrorRouteRepair:
+    """The second deterministic primitive: repoint settings.errorWorkflow at a workflow
+    that can actually receive incidents. Its whole safety story is the settings-diff
+    bound, because the node-level assertion is silent about settings."""
+
+    def _wf(self, **settings):
+        wf = _workflow()
+        wf["id"] = "src-1"
+        wf["settings"] = dict(settings)
+        return wf
+
+    def test_has_error_trigger(self):
+        assert has_error_trigger({"nodes": [{"type": "n8n-nodes-base.errorTrigger"}]})
+        assert not has_error_trigger({"nodes": [{"type": "n8n-nodes-base.code"}]})
+        assert not has_error_trigger({})
+
+    def test_repoints_the_route(self):
+        out = build_error_route_repair(self._wf(), "target-9")
+        assert out["workflow"]["settings"]["errorWorkflow"] == "target-9"
+        assert out["previous_error_workflow"] is None
+        # Deep copy: the input is untouched.
+        assert "errorWorkflow" not in self._wf().get("settings", {})
+
+    def test_reports_the_previous_route_for_a_broken_target(self):
+        out = build_error_route_repair(self._wf(errorWorkflow="dead-1"), "target-9")
+        assert out["previous_error_workflow"] == "dead-1"
+
+    def test_refuses_self_reference_noop_and_empty_target(self):
+        with pytest.raises(ErrorRouteError):
+            build_error_route_repair(self._wf(), "src-1")  # own error route
+        with pytest.raises(ErrorRouteError):
+            build_error_route_repair(self._wf(errorWorkflow="t-1"), "t-1")  # no-op
+        with pytest.raises(ErrorRouteError):
+            build_error_route_repair(self._wf(), "  ")
+
+    # ── the diff bound: this is the rigor ────────────────────────────────────
+
+    def test_settings_diff_accepts_the_intended_change(self):
+        base = self._wf()
+        out = build_error_route_repair(base, "target-9")["workflow"]
+        assert_safe_settings_diff(base, out, ["errorWorkflow"])  # does not raise
+
+    def test_settings_diff_refuses_a_node_change(self):
+        base = self._wf()
+        out = build_error_route_repair(base, "target-9")["workflow"]
+        out["nodes"][0]["parameters"] = {"jsCode": "malicious()"}
+        with pytest.raises(ErrorRouteError, match="node"):
+            assert_safe_settings_diff(base, out, ["errorWorkflow"])
+
+    def test_settings_diff_refuses_a_connection_change(self):
+        base = self._wf()
+        out = build_error_route_repair(base, "target-9")["workflow"]
+        out["connections"] = {}
+        with pytest.raises(ErrorRouteError, match="connection"):
+            assert_safe_settings_diff(base, out, ["errorWorkflow"])
+
+    def test_settings_diff_refuses_a_second_settings_key(self):
+        """A repair that also flips executionTimeout (or anything else) is not the
+        repair the operator approved."""
+        base = self._wf()
+        out = build_error_route_repair(base, "target-9")["workflow"]
+        out["settings"]["executionTimeout"] = 5
+        with pytest.raises(ErrorRouteError, match="executionTimeout"):
+            assert_safe_settings_diff(base, out, ["errorWorkflow"])
+
+    def test_settings_diff_refuses_a_noop(self):
+        base = self._wf()
+        with pytest.raises(ErrorRouteError, match="does not change"):
+            assert_safe_settings_diff(base, copy.deepcopy(base), ["errorWorkflow"])
+
+    def test_guardrail_node_assertion_is_blind_to_this_mutation(self):
+        """Why assert_safe_settings_diff has to exist: the node-level assertion passes
+        VACUOUSLY on a settings-only change, so it cannot police this primitive."""
+        base = self._wf()
+        out = build_error_route_repair(base, "target-9")["workflow"]
+        assert_safe_guardrail_diff(base, out, [])  # no nodes added -> passes, sees nothing
