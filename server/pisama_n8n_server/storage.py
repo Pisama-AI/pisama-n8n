@@ -283,6 +283,12 @@ class ReliabilityCase(Base):
     guard_malformed_rejected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     guard_valid_passed_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
     guard_valid_passed_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Guard drift: the poll-time integrity sweep asserts every applied guard is still
+    # present AND still wired. A guard removed or bypassed in the n8n editor is no
+    # longer prevention evidence, so the case goes ``drifted`` and cannot be concluded.
+    guard_drift_kind: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_drift_detected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_drift_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     outcome_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -353,6 +359,9 @@ class ReliabilityCase(Base):
             "guard_malformed_rejected_at": self.guard_malformed_rejected_at,
             "guard_valid_passed_execution_id": self.guard_valid_passed_execution_id,
             "guard_valid_passed_at": self.guard_valid_passed_at,
+            "guard_drift_kind": self.guard_drift_kind,
+            "guard_drift_detected_at": self.guard_drift_detected_at,
+            "guard_drift_note": self.guard_drift_note,
             "outcome_note": self.outcome_note,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -606,6 +615,9 @@ _ADDED_COLUMNS = {
         "guard_malformed_rejected_at": "VARCHAR",
         "guard_valid_passed_execution_id": "INTEGER",
         "guard_valid_passed_at": "VARCHAR",
+        "guard_drift_kind": "VARCHAR",
+        "guard_drift_detected_at": "VARCHAR",
+        "guard_drift_note": "TEXT",
     },
     "repair_attempts": {
         "guard_config": "TEXT",
@@ -1447,6 +1459,54 @@ class Storage:
             ).scalars()
             return [row.to_dict() for row in rows]
 
+    def list_applied_guardrail_repairs(self) -> List[Dict[str, Any]]:
+        """Applied guardrails whose fragment should still be live in n8n — the drift
+        sweep's work list. Model fixes are excluded (guard_config IS NULL): they mutate
+        settings/parameters and have no fragment topology to assert. ``apply_unverified``
+        is included deliberately — that state means the PUT may well have landed, so the
+        guard may be live and is exactly as worth checking."""
+        with self._Session() as session:
+            rows = (
+                session.execute(
+                    select(RepairAttempt)
+                    .where(
+                        RepairAttempt.status.in_(("applied", "apply_unverified")),
+                        RepairAttempt.guard_config.is_not(None),
+                    )
+                    .order_by(RepairAttempt.id)
+                )
+                .scalars()
+                .all()
+            )
+            return [row.to_dict(include_workflows=True) for row in rows]
+
+    def record_guard_drift(
+        self, repair_id: int, kind: str, note: str
+    ) -> Optional[Dict[str, Any]]:
+        """Mark the repair's reliability case as drifted. Idempotent per kind, so a guard
+        that stays broken across polls records once and ``guard_drift_detected_at`` keeps
+        pointing at when it ACTUALLY broke rather than at the latest poll."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.execute(
+                select(ReliabilityCase).where(ReliabilityCase.repair_id == repair_id)
+            ).scalar_one_or_none()
+            if case is None:
+                return None
+            if case.status == "drifted" and case.guard_drift_kind == kind:
+                return None
+            case.status = "drifted"
+            case.guard_drift_kind = kind
+            case.guard_drift_note = (note or "")[:1000]
+            case.guard_drift_detected_at = now
+            case.updated_at = now
+            session.commit()
+            result = case.to_dict()
+        self.record_operational_event(
+            "guard_drift_detected", {"repair_id": repair_id, "kind": kind}
+        )
+        return result
+
     def list_candidate_executions(
         self, case_id: int, limit: int = 20
     ) -> Optional[List[Dict[str, Any]]]:
@@ -1620,6 +1680,15 @@ class Storage:
             case = session.get(ReliabilityCase, case_id)
             if case is None:
                 return None
+            if case.status == "drifted":
+                # The probes proved the guard worked WHEN IT WAS WIRED. It is not wired
+                # now, so it is not preventing anything — past evidence must not launder
+                # a control that no longer exists. Restore the guard, then conclude.
+                raise ValueError(
+                    "This guard has drifted out of the live workflow "
+                    f"({case.guard_drift_kind}) and is no longer protecting it. "
+                    "Restore or re-apply the guard before recording an outcome."
+                )
             if case.status != "observing":
                 raise ValueError(f"Case is already {case.status}.")
             if outcome == "prevented":

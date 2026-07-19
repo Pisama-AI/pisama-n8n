@@ -240,3 +240,99 @@ def test_candidate_executions_annotate_routing_for_the_probe_picker(tmp_path, mo
         c.get("/api/v1/reliability-cases/999999/candidate-executions", headers=H).status_code
         == 404
     )
+
+
+# ── guard drift: the sweep that runs between operator clicks ─────────────────
+#
+# Apply-time checks only fire when someone clicks. Without the poll sweep, a guard
+# deleted or rewired in the n8n editor keeps reading as "applied / prevented" forever.
+
+SOURCE_NODE = "Baseline webhook"
+
+
+def _poll_drift(appmod, fake):
+    """Run the poller's drift sweep against the fake n8n holding the live workflow.
+
+    `asyncio.run` (not get_event_loop) — earlier tests in the suite close the loop, so
+    reusing the ambient one passes in isolation and fails in a full run.
+    """
+    import asyncio
+
+    from pisama_n8n_server.poller import _sweep_guard_drift
+
+    return asyncio.run(_sweep_guard_drift(fake, appmod.get_storage()))
+
+
+def test_intact_guard_sweeps_clean(tmp_path, monkeypatch):
+    appmod, c = _client(tmp_path, monkeypatch)
+    case_id, guard, c = _guarded_case(appmod, c, monkeypatch)
+    fake = appmod.client_from_env()
+    assert _poll_drift(appmod, fake) == 0
+    assert c.get(f"/api/v1/reliability-cases/{case_id}", headers=H).json()["status"] == "observing"
+
+
+def test_bypassed_guard_is_detected_and_blocks_prevented(tmp_path, monkeypatch):
+    """Every guard node still present and the validated branch still wired, but the
+    source now ALSO feeds the consumer directly — input can skip the guard. This is the
+    drift a node-set comparison cannot see."""
+    appmod, c = _client(tmp_path, monkeypatch)
+    case_id, guard, c = _guarded_case(appmod, c, monkeypatch)
+    fake = appmod.client_from_env()
+
+    fake.workflow["connections"][SOURCE_NODE]["main"][0].append(
+        {"node": guard["failing_node"], "type": "main", "index": 0}
+    )
+    names = {n["name"] for n in fake.workflow["nodes"]}
+    assert all(n in names for n in guard["fragment_node_names"])  # nothing deleted
+
+    assert _poll_drift(appmod, fake) == 1
+    case = c.get(f"/api/v1/reliability-cases/{case_id}", headers=H).json()
+    assert case["status"] == "drifted"
+    assert case["guard_drift_kind"] == "guard_bypassed"
+    assert case["guard_drift_detected_at"] is not None
+
+    # Past probe evidence must not launder a control that is no longer wired.
+    r = c.post(
+        f"/api/v1/reliability-cases/{case_id}/outcome", headers=H, json={"outcome": "prevented"}
+    )
+    assert r.status_code == 409 and "drifted" in r.json()["detail"].lower()
+
+
+def test_deleted_guard_node_is_detected(tmp_path, monkeypatch):
+    appmod, c = _client(tmp_path, monkeypatch)
+    case_id, guard, c = _guarded_case(appmod, c, monkeypatch)
+    fake = appmod.client_from_env()
+    fake.workflow["nodes"] = [
+        n for n in fake.workflow["nodes"] if n["name"] != guard["entry_node"]
+    ]
+    assert _poll_drift(appmod, fake) == 1
+    case = c.get(f"/api/v1/reliability-cases/{case_id}", headers=H).json()
+    assert case["status"] == "drifted"
+    assert case["guard_drift_kind"] in {"guard_deleted", "guard_bypassed"}
+
+
+def test_drift_records_once_and_keeps_first_sighting(tmp_path, monkeypatch):
+    appmod, c = _client(tmp_path, monkeypatch)
+    case_id, guard, c = _guarded_case(appmod, c, monkeypatch)
+    fake = appmod.client_from_env()
+    fake.workflow["connections"][SOURCE_NODE]["main"][0].append(
+        {"node": guard["failing_node"], "type": "main", "index": 0}
+    )
+    assert _poll_drift(appmod, fake) == 1
+    first = c.get(f"/api/v1/reliability-cases/{case_id}", headers=H).json()
+    assert _poll_drift(appmod, fake) == 0  # already recorded; not rewritten
+    second = c.get(f"/api/v1/reliability-cases/{case_id}", headers=H).json()
+    assert second["guard_drift_detected_at"] == first["guard_drift_detected_at"]
+
+
+def test_unreadable_workflow_is_not_treated_as_drift(tmp_path, monkeypatch):
+    """A transient n8n failure must never mark a healthy guard broken."""
+    appmod, c = _client(tmp_path, monkeypatch)
+    case_id, guard, c = _guarded_case(appmod, c, monkeypatch)
+
+    class _Broken:
+        async def get_workflow(self, _wid):
+            raise RuntimeError("simulated n8n outage")
+
+    assert _poll_drift(appmod, _Broken()) == 0
+    assert c.get(f"/api/v1/reliability-cases/{case_id}", headers=H).json()["status"] == "observing"

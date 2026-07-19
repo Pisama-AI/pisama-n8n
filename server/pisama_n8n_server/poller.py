@@ -153,6 +153,64 @@ async def poll_once(client: Any, storage: Any, limit: int = 50) -> Dict[str, int
         new += 1
         fired += sum(1 for d in report.get("detections", []) if d.get("detected"))
 
-    summary = {"polled": len(executions), "new": new, "fired": fired}
+    drifted = await _sweep_guard_drift(client, storage)
+    summary = {"polled": len(executions), "new": new, "fired": fired, "drifted": drifted}
     logger.info("poll_once: %s", summary)
     return summary
+
+
+async def _sweep_guard_drift(client: Any, storage: Any) -> int:
+    """Assert every applied guard is still present AND still wired in the live workflow.
+
+    Without this, the apply-time checks are the ONLY drift detection there is — and they
+    run only when an operator clicks something. A guard deleted or bypassed in the n8n
+    editor would otherwise keep reading as "applied / prevented" indefinitely.
+
+    Read-only against n8n (``get_workflow`` and nothing else) and wholly non-fatal: a
+    drift sweep must never break ingestion.
+    """
+    from pisama_n8n_engine.guardrails import assert_guard_still_wired
+
+    drifted = 0
+    try:
+        repairs = storage.list_applied_guardrail_repairs()
+    except Exception as exc:
+        logger.warning("poll: could not list applied guards: %s", exc)
+        return 0
+
+    memo: Dict[str, Any] = {}
+    for repair in repairs:
+        workflow_id = str(repair.get("workflow_id") or "")
+        guard_config = repair.get("guard_config") or {}
+        if not workflow_id or not guard_config:
+            continue
+        try:
+            if workflow_id not in memo:
+                memo[workflow_id] = await client.get_workflow(workflow_id)
+            live = memo[workflow_id]
+            if not isinstance(live, dict):
+                continue  # unreadable this cycle; absence of proof is not drift
+            drifts = assert_guard_still_wired(live, guard_config)
+        except Exception as exc:
+            # An unreachable n8n is not evidence that a guard was removed.
+            logger.warning(
+                "poll: guard drift check failed for workflow %s: %s", workflow_id, exc
+            )
+            continue
+        if not drifts:
+            continue
+        # Report the most severe single finding: a bypass means input can reach the
+        # consumer unguarded, which is worse than a broken rejection path.
+        order = ["guard_bypassed", "guard_deleted", "guard_detached", "rejection_path_broken"]
+        drifts.sort(key=lambda d: order.index(d["kind"]) if d["kind"] in order else len(order))
+        worst = drifts[0]
+        if storage.record_guard_drift(repair["id"], worst["kind"], worst["detail"]) is None:
+            continue  # no case, or already recorded with this kind
+        drifted += 1
+        logger.warning(
+            "poll: guard drift %s on workflow %s: %s",
+            worst["kind"],
+            workflow_id,
+            worst["detail"],
+        )
+    return drifted
