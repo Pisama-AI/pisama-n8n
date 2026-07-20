@@ -258,6 +258,10 @@ function duration(seconds: number | null): string {
 function ReliabilityLearning({ metrics }: { metrics?: ReliabilityMetrics }) {
   if (!metrics) return null
   const { diagnosis, remediation, time_to_applied_workflow_control: timeToControl } = metrics
+  // Fields below are absent on pre-2026-07-20 servers; each cell renders only when
+  // its field is present so the shared card works against every server vintage.
+  const timeToVerified = metrics.time_to_verified_control
+  const durable = metrics.durable_controls
 
   return (
     <Card padding="lg">
@@ -296,6 +300,44 @@ function ReliabilityLearning({ metrics }: { metrics?: ReliabilityMetrics }) {
             <span className="text-ink-4">({remediation.comparison_cases} windows)</span>
           </div>
         </div>
+        {diagnosis.acceptance_of_seen !== undefined && (
+          <div>
+            <div className="text-ink-3">Acceptance of opened findings</div>
+            <div className="mt-1 text-ink-2">
+              {percent(diagnosis.acceptance_of_seen)}{' '}
+              <span className="text-ink-4">({diagnosis.accepted}/{diagnosis.seen ?? 0} detail opens)</span>
+            </div>
+          </div>
+        )}
+        {diagnosis.review_coverage !== undefined && (
+          <div>
+            <div className="text-ink-3">Review coverage</div>
+            <div className="mt-1 text-ink-2">
+              {percent(diagnosis.review_coverage)}{' '}
+              <span className="text-ink-4">(of all fired findings)</span>
+            </div>
+          </div>
+        )}
+        {timeToVerified && (
+          <div>
+            <div className="text-ink-3">Median to verified control</div>
+            <div className="mt-1 text-ink-2">
+              {duration(timeToVerified.median_seconds)}{' '}
+              <span className="text-ink-4">({timeToVerified.sample_size} verified)</span>
+            </div>
+          </div>
+        )}
+        {durable.durable !== undefined && (
+          <div>
+            <div className="text-ink-3">Durable controls</div>
+            <div className="mt-1 text-ink-2">
+              {percent(durable.share)}{' '}
+              <span className="text-ink-4">
+                ({durable.durable}/{durable.proposed ?? 0} standing)
+              </span>
+            </div>
+          </div>
+        )}
       </div>
       <p className="mt-5 border-t border-rule pt-4 text-xs leading-relaxed text-ink-3">
         {remediation.recurrence_reduction_note}

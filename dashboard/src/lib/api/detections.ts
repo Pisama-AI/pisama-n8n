@@ -1,4 +1,4 @@
-import { fetchApi, postApi } from './client'
+import { API_BASE, fetchApi, postApi, resolveKey } from './client'
 
 // Raw row shape returned by the server's GET /api/v1/detections.
 export interface ServerDetection {
@@ -22,6 +22,8 @@ export interface ServerDetection {
   build_revision?: string | null
   feedback?: DetectionFeedback | null
   reliability_case?: ReliabilityCase | null
+  // When an operator first opened the detail view (servers >= 2026-07-20).
+  seen_at?: string | null
 }
 
 // Shape the copied DetectionListItem (and the detail view) expect. `detected`
@@ -225,4 +227,19 @@ export interface Trace {
 
 export function getDetectionTrace(id: string): Promise<Trace> {
   return fetchApi<Trace>(`/api/v1/detections/${id}/trace`)
+}
+
+// Fire-and-forget "operator opened the detail view" ping — the sound denominator
+// for diagnosis acceptance. Deliberately NOT postApi: a background ping must never
+// be able to yank the page to sign-in (postApi's SaaS 401 handler does exactly
+// that), and an old server's 404 must be silent. The server is first-timestamp-wins
+// idempotent, so duplicate pings are harmless.
+export function markDetectionSeen(id: string | number): void {
+  const key = resolveKey()
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (key) headers.Authorization = `Bearer ${key}`
+  void fetch(`${API_BASE}/api/v1/detections/${id}/seen`, {
+    method: 'POST',
+    headers,
+  }).catch(() => {})
 }

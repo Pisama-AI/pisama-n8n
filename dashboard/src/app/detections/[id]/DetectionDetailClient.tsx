@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, AlertTriangle, ExternalLink } from 'lucide-react'
 import { Layout } from '@/components/common/Layout'
@@ -12,6 +13,7 @@ import { FeedbackPanel } from '@/components/detection/FeedbackPanel'
 import { RepairVerificationPanel } from '@/components/detection/RepairVerificationPanel'
 import { TraceView } from '@/components/detection/TraceView'
 import { useDetection } from '@/hooks/useDetections'
+import { markDetectionSeen } from '@/lib/api/detections'
 import { N8N_BASE_URL } from '@/lib/flags'
 
 function confidenceTier(confidence: number): string {
@@ -75,6 +77,18 @@ function EvidenceRecord({ evidence }: { evidence?: Record<string, unknown> }) {
 export function DetectionDetailClient({ id }: { id: string }) {
   const { data: detection, isLoading, isError, error, refetch } = useDetection(id)
   const notFound = isError && /404/.test((error as Error)?.message ?? '')
+
+  // One "seen" ping per detection id, only after a successful load. The ref guard
+  // matters: the SSE handler invalidates the detail query on every ingest event, so
+  // an unguarded effect would re-ping per event. StrictMode's dev double-mount is
+  // absorbed by the ref plus the server's first-timestamp-wins idempotency.
+  const seenPinged = useRef<Set<string>>(new Set())
+  const detectionId = detection?.id
+  useEffect(() => {
+    if (!detectionId || seenPinged.current.has(detectionId)) return
+    seenPinged.current.add(detectionId)
+    markDetectionSeen(detectionId)
+  }, [detectionId])
 
   return (
     <Layout title="Detection">

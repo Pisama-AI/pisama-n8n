@@ -7,12 +7,37 @@ export interface OperationalEvent {
   created_at: string
 }
 
+// Per-detector diagnosis slice (servers >= 2026-07-20; absent on older ones).
+export interface DetectorDiagnosis {
+  fired: number
+  seen: number
+  accepted: number
+  rejected: number
+  reviewed: number
+  acceptance_rate: number | null
+}
+
+export interface DurableControlKind {
+  proposed: number
+  applied: number
+  durable: number
+  share: number | null
+  note?: string
+}
+
+// Every field added by the 2026-07-20 canonical shape is OPTIONAL: the shared
+// dashboard must render against any server vintage during a deploy window, so new
+// cells appear only when the field is present.
 export interface ReliabilityMetrics {
   diagnosis: {
     accepted: number
     rejected: number
     reviewed: number
     acceptance_rate: number | null
+    seen?: number
+    acceptance_of_seen?: number | null
+    review_coverage?: number | null
+    by_detector?: Record<string, DetectorDiagnosis>
   }
   remediation: {
     prevented: number
@@ -31,10 +56,22 @@ export interface ReliabilityMetrics {
     median_seconds: number | null
     p90_seconds: number | null
   }
+  time_to_verified_control?: {
+    sample_size: number
+    median_seconds: number | null
+    p90_seconds: number | null
+  }
   durable_controls: {
     applied_workflow_controls: number
-    share: null
+    proposed?: number
+    applied?: number
+    durable?: number
+    // Widened from the literal `null` the old server hardcoded: the corrected
+    // servers compute a real share (durable / proposed).
+    share: number | null
     share_note: string
+    by_kind?: Record<'input_schema' | 'error_route' | 'workflow_patch', DurableControlKind>
+    harness?: { implemented: boolean; note: string }
   }
 }
 
