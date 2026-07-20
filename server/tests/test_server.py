@@ -324,12 +324,17 @@ def test_feedback_and_operations_summary_use_persisted_execution_data(client):
     assert body["executions_analyzed"] == 1
     assert body["detections_fired"] >= 1
     assert body["feedback_by_verdict"] == {"useful": 1}
-    assert body["reliability_metrics"]["diagnosis"] == {
-        "accepted": 1,
-        "rejected": 0,
-        "reviewed": 1,
-        "acceptance_rate": 1.0,
-    }
+    diagnosis = body["reliability_metrics"]["diagnosis"]
+    # Canonical shape (Loop M2): the reviewed-based rate is kept and labeled, and the
+    # explicit denominators (seen, review_coverage) ride alongside it.
+    assert diagnosis["accepted"] == 1
+    assert diagnosis["rejected"] == 0
+    assert diagnosis["reviewed"] == 1
+    assert diagnosis["acceptance_rate"] == 1.0
+    assert diagnosis["seen"] == 0  # nothing opened the detail view in this test
+    assert diagnosis["acceptance_of_seen"] is None
+    assert diagnosis["review_coverage"] is not None
+    assert "by_detector" in diagnosis
     assert "webhook_ingested" in body["latest_events"]
 
 

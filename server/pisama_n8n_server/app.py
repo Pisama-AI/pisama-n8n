@@ -266,6 +266,22 @@ _FEEDBACK_VERDICTS = {"useful", "not_useful", "fixed_manually"}
 
 
 @app.post(
+    "/api/v1/detections/{detection_id}/seen", dependencies=[Depends(require_auth)]
+)
+async def mark_detection_seen(
+    detection_id: int, storage: Storage = Depends(get_storage)
+) -> Dict[str, Any]:
+    """Record that an operator opened this detection's detail view (first timestamp
+    wins; idempotent). The sound denominator for diagnosis acceptance — accepted/seen
+    instead of the self-selected accepted/reviewed sample. On a PISAMA_PUBLIC_READ
+    demo, anonymous viewers' pings 401 by design: only authed operators record seen."""
+    seen = storage.mark_detection_seen(detection_id)
+    if seen is None:
+        raise HTTPException(status_code=404, detail="Unknown detection id.")
+    return seen
+
+
+@app.post(
     "/api/v1/detections/{detection_id}/feedback", dependencies=[Depends(require_auth)]
 )
 async def submit_detection_feedback(

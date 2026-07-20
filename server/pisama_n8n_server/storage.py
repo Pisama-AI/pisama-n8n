@@ -125,6 +125,10 @@ class DetectionRow(Base):
     # the raw execution so the authenticated UI/API can explain a verdict without
     # sending the full n8n payload back to a browser.
     evidence: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    # When an operator first opened this detection's detail view. First timestamp
+    # wins; gives diagnosis acceptance a sound denominator (accepted/seen) instead
+    # of the self-selected accepted/reviewed sample.
+    seen_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     execution: Mapped["Execution"] = relationship(back_populates="detections")
 
@@ -143,6 +147,7 @@ class DetectionRow(Base):
             "explanation": self.explanation,
             "detector_version": self.detector_version,
             "evidence": evidence if isinstance(evidence, dict) else {},
+            "seen_at": self.seen_at,
         }
 
 
@@ -601,6 +606,83 @@ def build_revision() -> str:
 # SQLite and Postgres. Keep every post-initial column here so an upgraded instance's
 # DB catches up (source_execution_id shipped without a migration and would otherwise
 # break reads on a pre-polling DB).
+# --- outcome-metric pure helpers (mirrored in the SaaS server — keep in sync) ---
+
+_DURABLE_KINDS = ("input_schema", "error_route", "workflow_patch")
+
+
+def _repair_kind(guard_config: Any) -> str:
+    """Classify a repair row by its guard_config discriminator.
+
+    NULL/empty = an AI model patch ("workflow_patch"). A truthy config carries the
+    kind key; legacy guardrail rows written before the error-route kind existed lack
+    it and are input-schema guards by construction."""
+    if not guard_config:
+        return "workflow_patch"
+    if isinstance(guard_config, str):
+        try:
+            guard_config = json.loads(guard_config)
+        except (TypeError, ValueError):
+            return "input_schema"
+    kind = (guard_config or {}).get("kind")
+    return kind if kind in ("input_schema", "error_route") else "input_schema"
+
+
+def _classify_durable_controls(rows: List[Any]) -> Dict[str, Any]:
+    """The strict durable-control rollup over (guard_config, applied_at,
+    rolled_back_at, case_status) tuples — classification in Python so the logic is
+    byte-identical across the SQLite and Postgres servers and immune to the SQL NULL
+    trap (a repair with NO reliability case must still count as not-drifted).
+
+    durable = applied AND not rolled back AND not drifted. The share is durable over
+    ALL proposed fixes (adoption x durability); the payload also carries `applied`
+    so durability-of-applied is computable without a redeploy. "harness" is reported
+    as not implemented rather than faked."""
+    by_kind: Dict[str, Dict[str, Any]] = {
+        kind: {"proposed": 0, "applied": 0, "durable": 0, "share": None}
+        for kind in _DURABLE_KINDS
+    }
+    for guard_config, applied_at, rolled_back_at, case_status in rows:
+        slot = by_kind[_repair_kind(guard_config)]
+        slot["proposed"] += 1
+        if applied_at is None:
+            continue
+        slot["applied"] += 1
+        # None != "drifted" is True: a repair with no case is simply not drifted.
+        if rolled_back_at is None and case_status != "drifted":
+            slot["durable"] += 1
+    proposed = sum(slot["proposed"] for slot in by_kind.values())
+    applied = sum(slot["applied"] for slot in by_kind.values())
+    durable = sum(slot["durable"] for slot in by_kind.values())
+    for slot in by_kind.values():
+        slot["share"] = (
+            round(slot["durable"] / slot["proposed"], 4) if slot["proposed"] else None
+        )
+    by_kind["workflow_patch"]["note"] = (
+        "Drift is not monitored for model patches; durable here means applied and "
+        "not rolled back."
+    )
+    return {
+        # Kept for old dashboards: the pre-honesty raw applied count.
+        "applied_workflow_controls": applied,
+        "proposed": proposed,
+        "applied": applied,
+        "durable": durable,
+        "share": round(durable / proposed, 4) if proposed else None,
+        "share_note": (
+            "Share is durable controls over ALL proposed fixes (adoption x "
+            "durability); durable = applied, not rolled back, and not drifted out of "
+            "the live workflow. A guard restored by hand in the n8n editor stays "
+            "drifted until re-applied. Harness controls are not implemented."
+        ),
+        "by_kind": by_kind,
+        "harness": {
+            "implemented": False,
+            "note": "No harness/eval artifact is emitted by the n8n product today.",
+        },
+    }
+
+
 _ADDED_COLUMNS = {
     "executions": {
         "source_execution_id": "VARCHAR",
@@ -610,6 +692,7 @@ _ADDED_COLUMNS = {
     "detections": {
         "detector_version": "VARCHAR",
         "evidence": "TEXT NOT NULL DEFAULT '{}'",
+        "seen_at": "VARCHAR",
     },
     "reliability_cases": {
         "outcome": "VARCHAR",
@@ -859,6 +942,19 @@ class Storage:
             )
             session.commit()
 
+    def mark_detection_seen(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        """Record that an operator opened this detection's detail view. First
+        timestamp wins (idempotent); None for an unknown id."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            row = session.get(DetectionRow, detection_id)
+            if row is None:
+                return None
+            if row.seen_at is None:
+                row.seen_at = now
+                session.commit()
+            return {"id": row.id, "seen_at": row.seen_at}
+
     def submit_detection_feedback(
         self, detection_id: int, verdict: str, note: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -952,11 +1048,16 @@ class Storage:
             "diagnosis": self._diagnosis_metrics(session),
             "remediation": self._remediation_metrics(session),
             "time_to_applied_workflow_control": self._time_to_control_metrics(session),
+            "time_to_verified_control": self._time_to_verified_metrics(session),
             "durable_controls": self._durable_control_metrics(session),
         }
 
     @staticmethod
     def _diagnosis_metrics(session: Any) -> Dict[str, Any]:
+        """Acceptance with explicit denominators. acceptance_rate keeps the
+        reviewed-only denominator (a self-selected sample — labeled, not hidden);
+        acceptance_of_seen uses the sound one (operator actually opened the detail);
+        review_coverage says how much of what fired was ever reviewed at all."""
         feedback_rows = session.execute(
             select(DetectionFeedback).order_by(
                 DetectionFeedback.detection_id, desc(DetectionFeedback.id)
@@ -965,17 +1066,102 @@ class Storage:
         latest_feedback: Dict[int, str] = {}
         for feedback in feedback_rows:
             latest_feedback.setdefault(feedback.detection_id, feedback.verdict)
+        detector_of: Dict[int, str] = {}
+        if latest_feedback:
+            detector_of = dict(
+                session.execute(
+                    select(DetectionRow.id, DetectionRow.detector).where(
+                        DetectionRow.id.in_(list(latest_feedback))
+                    )
+                ).all()
+            )
         accepted = sum(
             verdict in {"useful", "fixed_manually"}
             for verdict in latest_feedback.values()
         )
         rejected = sum(verdict == "not_useful" for verdict in latest_feedback.values())
         reviewed = accepted + rejected
+        detections_fired = (
+            session.scalar(
+                select(func.count(DetectionRow.id)).where(
+                    DetectionRow.detected.is_(True)
+                )
+            )
+            or 0
+        )
+        seen = (
+            session.scalar(
+                select(func.count(DetectionRow.id)).where(
+                    DetectionRow.detected.is_(True),
+                    DetectionRow.seen_at.is_not(None),
+                )
+            )
+            or 0
+        )
+        fired_by_detector = dict(
+            session.execute(
+                select(DetectionRow.detector, func.count(DetectionRow.id))
+                .where(DetectionRow.detected.is_(True))
+                .group_by(DetectionRow.detector)
+            ).all()
+        )
+        seen_by_detector = dict(
+            session.execute(
+                select(DetectionRow.detector, func.count(DetectionRow.id))
+                .where(
+                    DetectionRow.detected.is_(True),
+                    DetectionRow.seen_at.is_not(None),
+                )
+                .group_by(DetectionRow.detector)
+            ).all()
+        )
+        by_detector: Dict[str, Dict[str, Any]] = {}
+        for detector, fired_count in fired_by_detector.items():
+            by_detector[detector] = {
+                "fired": fired_count,
+                "seen": seen_by_detector.get(detector, 0),
+                "accepted": 0,
+                "rejected": 0,
+                "reviewed": 0,
+                "acceptance_rate": None,
+            }
+        for detection_id, verdict in latest_feedback.items():
+            detector = detector_of.get(detection_id)
+            if detector is None:
+                continue
+            slot = by_detector.setdefault(
+                detector,
+                {
+                    "fired": 0,
+                    "seen": 0,
+                    "accepted": 0,
+                    "rejected": 0,
+                    "reviewed": 0,
+                    "acceptance_rate": None,
+                },
+            )
+            if verdict in {"useful", "fixed_manually"}:
+                slot["accepted"] += 1
+            elif verdict == "not_useful":
+                slot["rejected"] += 1
+        for slot in by_detector.values():
+            slot["reviewed"] = slot["accepted"] + slot["rejected"]
+            slot["acceptance_rate"] = (
+                round(slot["accepted"] / slot["reviewed"], 4)
+                if slot["reviewed"]
+                else None
+            )
         return {
             "accepted": accepted,
             "rejected": rejected,
             "reviewed": reviewed,
             "acceptance_rate": round(accepted / reviewed, 4) if reviewed else None,
+            "seen": seen,
+            "acceptance_of_seen": round(accepted / seen, 4) if seen else None,
+            "review_coverage": (
+                round(reviewed / detections_fired, 4) if detections_fired else None
+            ),
+            "by_detector": by_detector,
         }
 
     def _remediation_metrics(self, session: Any) -> Dict[str, Any]:
@@ -1076,21 +1262,44 @@ class Storage:
             "p90_seconds": self._percentile(elapsed_seconds, 0.9),
         }
 
+    def _time_to_verified_metrics(self, session: Any) -> Dict[str, Any]:
+        """received_at (ingest) -> outcome_at where outcome='prevented'. The
+        time-to-SAFE delta: verification happened, not merely an apply. outcome
+        survives a later rollback by design, so a prevented-then-rolled-back case
+        still counts — the verification did happen."""
+        rows = session.execute(
+            select(ReliabilityCase.outcome_at, Execution.received_at)
+            .join(DetectionRow, ReliabilityCase.detection_id == DetectionRow.id)
+            .join(Execution, DetectionRow.execution_id == Execution.id)
+            .where(
+                ReliabilityCase.outcome == "prevented",
+                ReliabilityCase.outcome_at.is_not(None),
+            )
+        ).all()
+        elapsed_seconds = []
+        for outcome_at, received_at in rows:
+            later, earlier = _parse_iso(outcome_at), _parse_iso(received_at)
+            if later is not None and earlier is not None and later >= earlier:
+                elapsed_seconds.append((later - earlier).total_seconds())
+        return {
+            "sample_size": len(elapsed_seconds),
+            "median_seconds": self._percentile(elapsed_seconds, 0.5),
+            "p90_seconds": self._percentile(elapsed_seconds, 0.9),
+        }
+
     @staticmethod
     def _durable_control_metrics(session: Any) -> Dict[str, Any]:
-        applied = (
-            session.scalar(
-                select(func.count(RepairAttempt.id)).where(
-                    RepairAttempt.applied_at.is_not(None)
-                )
+        rows = session.execute(
+            select(
+                RepairAttempt.guard_config,
+                RepairAttempt.applied_at,
+                RepairAttempt.rolled_back_at,
+                ReliabilityCase.status,
+            ).outerjoin(
+                ReliabilityCase, ReliabilityCase.repair_id == RepairAttempt.id
             )
-            or 0
-        )
-        return {
-            "applied_workflow_controls": applied,
-            "share": None,
-            "share_note": "n8n workflow controls are the only control type recorded in this release.",
-        }
+        ).all()
+        return _classify_durable_controls(rows)
 
     def _claim_repair(
         self,
