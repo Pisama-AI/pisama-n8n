@@ -383,3 +383,143 @@ def test_recurrence_reduction_surfaces_non_null(tmp_path, monkeypatch):
     assert remediation["post_repair_failure_rate"] == 0.1
     assert remediation["recurrence_reduction"] == 0.8  # 1 - (0.1 / 0.5)
     assert "Pooled across 1" in remediation["recurrence_reduction_note"]
+
+
+# ── data-shape diversity: cells that map to real branches ────────────────────
+
+def test_corrupt_guard_config_classifies_without_crashing(tmp_path, monkeypatch):
+    """OSS guard_config is a TEXT column; a corrupt/truncated JSON blob must
+    classify as input_schema (the documented fallback for a truthy config) rather
+    than crash the whole summary."""
+    appmod, c = _client(tmp_path, monkeypatch)
+    storage = appmod.get_storage()
+    from pisama_n8n_server.storage import RepairAttempt
+
+    rid = _seed_repair(storage, guard_config={"kind": "input_schema"}, applied=True)
+    with storage._Session() as session:
+        repair = session.get(RepairAttempt, rid)
+        repair.guard_config = "not-json{{"  # bypass _seed_repair's json.dumps
+        session.commit()
+
+    durable = c.get("/api/v1/operations/summary", headers=H).json()[
+        "reliability_metrics"
+    ]["durable_controls"]
+    assert durable["by_kind"]["input_schema"] == {
+        "proposed": 1, "applied": 1, "durable": 1, "share": 1.0,
+    }
+
+
+def test_none_failure_mode_fingerprint_matches(tmp_path, monkeypatch):
+    """The (detector, None) fingerprint branch: a detection with failure_mode NULL
+    must recur a case whose failure_mode is also NULL — the mode_clause .is_(None)
+    path no other test exercises."""
+    appmod, c = _client(tmp_path, monkeypatch)
+    storage = appmod.get_storage()
+    from pisama_n8n_server.storage import (
+        DetectionRow,
+        Execution,
+        ReliabilityCase,
+        RepairAttempt,
+    )
+
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    now = datetime.now(timezone.utc)
+    raw = json.dumps(
+        {
+            "startedAt": now.isoformat(),
+            "finished": True,
+            "data": {
+                "resultData": {
+                    "runData": {
+                        "Node": [
+                            {
+                                "executionStatus": "success",
+                                "executionTime": 1,
+                                "data": {"main": [[{"json": {}}]]},
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+    )
+    with storage._Session() as session:
+        execution = Execution(workflow_id="wf-none", received_at=past, raw="{}")
+        session.add(execution)
+        session.flush()
+        detection = DetectionRow(
+            execution_id=execution.id,
+            detector="resource",
+            detected=True,
+            confidence=0.8,
+            failure_mode=None,
+        )
+        session.add(detection)
+        session.flush()
+        repair = RepairAttempt(
+            detection_id=detection.id,
+            workflow_id="wf-none",
+            status="applied",
+            explanation="seeded",
+            baseline_workflow="{}",
+            proposed_workflow="{}",
+            created_at=past,
+            applied_at=past,
+        )
+        session.add(repair)
+        session.flush()
+        session.add(
+            ReliabilityCase(
+                repair_id=repair.id,
+                detection_id=detection.id,
+                workflow_id="wf-none",
+                detector="resource",
+                failure_mode=None,
+                status="observing",
+                baseline_execution_count=5,
+                created_at=past,
+                updated_at=past,
+            )
+        )
+        # A LATER execution of the same workflow whose fired detection also has
+        # failure_mode None -> the (resource, None) fingerprint must match.
+        later_execution = Execution(
+            workflow_id="wf-none", received_at=now.isoformat(), raw=raw
+        )
+        session.add(later_execution)
+        session.flush()
+        session.add(
+            DetectionRow(
+                execution_id=later_execution.id,
+                detector="resource",
+                detected=True,
+                confidence=0.8,
+                failure_mode=None,
+            )
+        )
+        session.commit()
+        later_id = later_execution.id
+
+    storage.observe_reliability_cases(later_id)
+
+    case = c.get("/api/v1/reliability-cases", headers=H).json()[0]
+    assert case["status"] == "recurred"
+    assert case["recurrence_count"] == 1
+    assert case["first_recurrence_execution_id"] == later_id
+
+
+def test_flatted_webhook_ingest_stores_a_runtime_trace(tmp_path, monkeypatch):
+    """The wild flatted DB-dump format through the REAL webhook: it must normalize,
+    detect, and store a payload whose trace classifies as runtime — the property
+    observation depends on."""
+    _appmod, c = _client(tmp_path, monkeypatch)
+    flatted = json.loads(
+        (FIXTURES / "executions/flatted/FLATTED-01-error.json").read_text()
+    )
+    r = c.post("/api/v1/n8n/webhook", headers=H, json=flatted)
+    assert r.status_code == 200, r.text
+    rows = c.get("/api/v1/detections", headers=H).json()
+    assert any(row["detected"] for row in rows)
+    trace = c.get(f"/api/v1/detections/{rows[0]['id']}/trace", headers=H).json()
+    assert trace["available"] is True
+    assert trace["kind"] == "runtime"
