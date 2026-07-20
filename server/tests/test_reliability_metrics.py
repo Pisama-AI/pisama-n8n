@@ -288,3 +288,98 @@ def test_summary_frozen_key_set(tmp_path, monkeypatch):
         "input_schema", "error_route", "workflow_patch",
     }
     assert durable["harness"]["implemented"] is False
+
+
+# ── upgrade path: an existing DB gains seen_at at boot ───────────────────────
+
+def test_existing_detections_table_gains_seen_at_on_upgrade(tmp_path, monkeypatch):
+    """A production SQLite volume predates seen_at. Opening it under this release
+    must ALTER the column in place — the e2e run used a fresh DB (create_all path)
+    and never exercised this, so it gets pinned here."""
+    from sqlalchemy import create_engine, text
+
+    db_path = tmp_path / "prior-release.db"
+    url = f"sqlite:///{db_path}"
+    old_engine = create_engine(url)
+    with old_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE detections ("
+                "id INTEGER PRIMARY KEY, execution_id INTEGER NOT NULL, "
+                "detector VARCHAR NOT NULL, detected BOOLEAN NOT NULL, "
+                "confidence FLOAT NOT NULL, failure_mode VARCHAR, "
+                "explanation VARCHAR, detector_version VARCHAR, "
+                "evidence TEXT NOT NULL DEFAULT '{}')"
+            )
+        )
+        # The list endpoint joins executions, so a faithful old DB needs one.
+        connection.execute(
+            text(
+                "CREATE TABLE executions ("
+                "id INTEGER PRIMARY KEY, workflow_id VARCHAR, "
+                "received_at VARCHAR NOT NULL, raw TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO executions (id, workflow_id, received_at, raw)"
+                " VALUES (1, 'wf-old', '2026-07-01T00:00:00+00:00', '{}')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO detections (execution_id, detector, detected, confidence)"
+                " VALUES (1, 'schema', 1, 0.95)"
+            )
+        )
+    old_engine.dispose()
+
+    monkeypatch.setenv("PISAMA_API_KEY", "k")
+    monkeypatch.setenv("DATABASE_URL", url)
+    import pisama_n8n_server.app as appmod
+    from pisama_n8n_server.storage import Storage
+
+    appmod._storage = Storage()
+    c = TestClient(appmod.app)
+
+    # The pre-existing row survives, reads seen_at None, and accepts a seen ping.
+    rows = c.get("/api/v1/detections", headers=H).json()
+    assert rows and rows[0]["seen_at"] is None
+    r = c.post(f"/api/v1/detections/{rows[0]['id']}/seen", headers=H)
+    assert r.status_code == 200 and r.json()["seen_at"]
+
+
+# ── the comparison formula surfaces a real number ────────────────────────────
+
+def test_recurrence_reduction_surfaces_non_null(tmp_path, monkeypatch):
+    """No prior test ever observed recurrence_reduction non-null through the
+    summary. Counters here are seeded (the observe path is covered elsewhere);
+    what this pins is the pooled formula + gate surfacing a real number."""
+    appmod, c = _client(tmp_path, monkeypatch)
+    storage = appmod.get_storage()
+    from pisama_n8n_server.storage import ReliabilityCase
+
+    rid = _seed_repair(
+        storage,
+        guard_config={"kind": "input_schema"},
+        applied=True,
+        case_status="observing",
+    )
+    with storage._Session() as session:
+        case = session.execute(
+            select(ReliabilityCase).where(ReliabilityCase.repair_id == rid)
+        ).scalar_one()
+        case.baseline_execution_count = 10
+        case.baseline_failure_count = 5
+        case.post_repair_execution_count = 10
+        case.post_repair_failure_count = 1
+        session.commit()
+
+    remediation = c.get("/api/v1/operations/summary", headers=H).json()[
+        "reliability_metrics"
+    ]["remediation"]
+    assert remediation["comparison_cases"] == 1
+    assert remediation["baseline_failure_rate"] == 0.5
+    assert remediation["post_repair_failure_rate"] == 0.1
+    assert remediation["recurrence_reduction"] == 0.8  # 1 - (0.1 / 0.5)
+    assert "Pooled across 1" in remediation["recurrence_reduction_note"]
