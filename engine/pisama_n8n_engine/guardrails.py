@@ -311,7 +311,8 @@ def observed_required_paths(
       upstream node's recorded output), when available.
 
     Returns ``{"confirmed": [...], "candidates": [...]}``. A path is CONFIRMED when the
-    consumer's code reads it, its final segment matches the failing leaf, and walking it
+    consumer's code reads it, its final segment matches the failing leaf (or, when the
+    leaf is a method call like ``.split(...)``, the call's receiver), and walking it
     through the observed input actually fails (missing or null on the way) — i.e. the
     guard, inserted immediately upstream of this consumer, would have rejected exactly
     this input. Chains that match the leaf but cannot be verified against a recorded
@@ -326,10 +327,20 @@ def observed_required_paths(
     for match in _CHAIN_PATTERN.finditer(failing_node_code):
         path = match.group(1).lstrip(".")
         segments = path.split(".")
-        if leaf in segments:
-            # Guard up to and including the failing leaf: reads deeper than the leaf
-            # fail at the leaf's level, so requiring beyond it would over-constrain.
-            chains.append(".".join(segments[: segments.index(leaf) + 1]))
+        if leaf not in segments:
+            continue
+        # Guard up to and including the failing leaf: reads deeper than the leaf
+        # fail at the leaf's level, so requiring beyond it would over-constrain.
+        keep = segments.index(leaf) + 1
+        # A leaf followed by "(" is a method call ($json.a.b.split(',')), not data
+        # the input must carry: the failed read was on the receiver, so require the
+        # parent path instead. Requiring the method name would make the guard walk
+        # into a non-dict and reject every input, valid ones included.
+        leaf_end = match.start(1) + len(".") + len(".".join(segments[:keep]))
+        if failing_node_code[leaf_end : leaf_end + 1] == "(":
+            keep -= 1
+        if keep:
+            chains.append(".".join(segments[:keep]))
     # de-dup, preserve order
     chains = list(dict.fromkeys(chains))
 

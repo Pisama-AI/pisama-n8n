@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -109,6 +112,25 @@ class TestObservedPaths:
         assert property_read_leaf("something unrelated") is None
         assert property_read_leaf(None) is None
 
+    def test_method_call_leaf_requires_the_receiver_not_the_method(self):
+        # `.split` failed because a.b was undefined; the input must carry a.b, and
+        # requiring a.b.split would make the guard reject valid string inputs too.
+        out = observed_required_paths(
+            "return [{ json: { parts: $json.a.b.split(',') } }];",
+            "Cannot read properties of undefined (reading 'split')",
+            {"other": 1},
+        )
+        assert out == {"confirmed": ["a.b"], "candidates": []}
+
+    def test_genuine_property_chain_keeps_its_full_path(self):
+        # No call site: `split` here is data, not a method, so the full path stands.
+        out = observed_required_paths(
+            "return [{ json: { s: $json.a.b.split } }];",
+            "Cannot read properties of undefined (reading 'split')",
+            {"a": {"b": {}}},
+        )
+        assert out == {"confirmed": ["a.b.split"], "candidates": []}
+
 
 class TestDestinations:
     def test_error_workflow_is_stop_and_error(self):
@@ -200,6 +222,32 @@ def test_generated_validator_ignores_prototype_chain_members():
     fragment = input_schema_guardrail(["body.__proto__"])
     code = fragment["nodes"][0]["parameters"]["jsCode"]
     assert "Object.hasOwn" in code
+
+
+_NODE = shutil.which("node")
+
+
+@pytest.mark.skipif(_NODE is None, reason="executing the generated validator needs node")
+def test_generated_validator_accepts_string_at_method_call_receiver():
+    # End-to-end half of the method-call fix: a guard requiring the receiver (a.b)
+    # must pass an item where a.b is a plain string, while requiring the method name
+    # itself (a.b.split) walks into the string and would reject that same valid item.
+    def verdict(paths, item_json):
+        code = input_schema_guardrail(paths)["nodes"][0]["parameters"]["jsCode"]
+        script = (
+            f"const items = [{{ json: {json.dumps(item_json)} }}];\n"
+            "const $input = { all: () => items };\n"
+            f"const out = new Function('$input', {json.dumps(code)})($input);\n"
+            "console.log(JSON.stringify(out[0].json._pisama_input_schema));"
+        )
+        run = subprocess.run(
+            [_NODE, "-e", script], capture_output=True, text=True, check=True
+        )
+        return json.loads(run.stdout)
+
+    item = {"a": {"b": "x,y"}}
+    assert verdict(["a.b"], item) == {"valid": True, "missing": []}
+    assert verdict(["a.b.split"], item) == {"valid": False, "missing": ["a.b.split"]}
 
 
 class TestGuardDriftDetection:
