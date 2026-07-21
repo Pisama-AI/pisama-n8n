@@ -82,10 +82,11 @@ def _chains(code: str) -> List[str]:
 
 
 def _method_leaf_chains(code: str, chains: List[str]) -> List[str]:
-    """Chains whose leaf is invoked as a call — the derivation would produce a
-    required path ending in the METHOD name (e.g. message.text.split), and the
-    resulting guard would reject ALL input. Product bug (filed separately); the
-    campaign screens these out of the input_schema lane."""
+    """Chains whose leaf is invoked as a call (e.g. message.text.split). The
+    engine derivation (guardrails.observed_required_paths) strips a call-site
+    leaf and requires its RECEIVER path, so these no longer screen a workflow
+    out of the input_schema lane; recorded as a diagnostic and used by the
+    campaign driver as a regression tripwire on derived paths."""
     flagged = []
     for chain in chains:
         leaf = chain.rsplit(".", 1)[-1]
@@ -161,9 +162,10 @@ def classify(path: Path) -> Dict[str, Any]:
     dropped = sorted(set(settings) - SETTINGS_WHITELIST)
 
     # Lane GUESS (driver decides empirically): input_schema needs a body-satisfiable
-    # chain read without a method leaf; error_route needs a failure and a missing or
-    # stale error route (68/70 missing, 2 stale).
-    if doc.get("status") == "error" and body_chains and not method_leafs:
+    # chain read; error_route needs a failure and a missing or stale error route
+    # (68/70 missing, 2 stale). Method-call leaves no longer disqualify: the engine
+    # requires the call's receiver path, not the method name.
+    if doc.get("status") == "error" and body_chains:
         lane_guess = "input_schema"
     elif doc.get("status") == "error" or all_chains:
         lane_guess = "error_route"

@@ -283,7 +283,10 @@ def input_schema_flow(entry, workflow_id, detection, row, success_target) -> Non
     options = body.get("path_options") or {}
     chosen = list(options.get("confirmed") or []) or list(options.get("candidates") or [])
     row["derived_paths"] = chosen
-    # Method-leaf screen (C2 product bug: such a guard would reject ALL input).
+    # Regression tripwire (C2, fixed in engine): the engine must derive the RECEIVER
+    # of a method-call leaf, never the method name — a guard requiring the method
+    # would reject ALL input. A derived path landing in method_leaf_chains means
+    # the fix regressed; reroute rather than apply a reject-all guard.
     if any(p in (entry.get("method_leaf_chains") or []) for p in chosen) or not all(
             p == "body" or p.startswith("body.") for p in chosen):
         row["lane"] = "error_route"
