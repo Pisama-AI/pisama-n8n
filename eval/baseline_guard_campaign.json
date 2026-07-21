@@ -1,0 +1,24 @@
+{
+  "environment": {
+    "server_build_revision": "unknown",
+    "n8n_url_host": "localhost:59712",
+    "tier": "local",
+    "invocation": "scripts/run_corpus_guard_campaign.py --tier local --max-executions 2000 --out eval/campaigns/local_results_2026-07.jsonl"
+  },
+  "total": 70,
+  "executions_fired": 357,
+  "stages": {
+    "excluded": 48,
+    "import_failed": 3,
+    "probed": 17,
+    "propose_failed": 2
+  },
+  "lanes": {
+    "None": 3,
+    "error_route": 19,
+    "none": 48
+  },
+  "applied": 17,
+  "probed": 17,
+  "ready_for_outcome_review": 0
+}

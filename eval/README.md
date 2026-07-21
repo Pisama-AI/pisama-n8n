@@ -178,3 +178,16 @@ and failing production traffic.
 - `mine` measures the **error** lane only against real data — n8n's status gives a clean
   label for node errors, but there is no clean n8n label for "this timeout/resource
   pattern was a real problem," so those are not fabricated on real data.
+
+## Corpus guard campaign (2026-07)
+
+Real guard lifecycles across the 70 committed community workflows on a throwaway
+local n8n, through the product's own endpoints: 67 imported, 19 real failures
+detected, **17 guards applied and verified by real routed-incident probes** — and
+0 reaching the full 30-success prevention bar, for a reason the report explains
+rather than papers over. Funnel, disclosures, and provenance:
+[campaigns/2026-07-guard-campaign.md](campaigns/2026-07-guard-campaign.md);
+machine summary: [baseline_guard_campaign.json](baseline_guard_campaign.json);
+harness: `scripts/corpus_campaign_prepare.py` + `scripts/run_corpus_guard_campaign.py`
++ `scripts/run_corpus_campaign_local.sh` (deterministic manifest, `--check` in CI
+spirit; no outcome is ever concluded by a script).
