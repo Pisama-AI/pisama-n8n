@@ -159,3 +159,22 @@ the live instance. Consequence: the live subset ships STANDING GUARDS
 | rw_fd15eb261c | none | excluded | — | no_observed_failure |
 | rw_fdf89bea70 | none | excluded | — | no_observed_failure |
 
+
+## Live subset (2026-07-21) — appended after the generated local report
+
+Ten of the 17 locally-verified workflows were re-run against the FOUNDER'S REAL
+n8n Cloud instance through the deployed demo API (driver executed in-machine;
+credentials never left Fly): **10/10 guards applied, 10/10 routed-incident probes
+recorded**. Live outcome metrics afterwards: **durable controls 11/11 (share
+1.0)** — 1 input_schema (the dogfood workflow) + 10 error_route standing guards
+across real community workflows; cases 10 observing + 1 prevented; the drift
+sweep reported `drifted: 0` on the following poll. All 10 source workflows were
+deactivated after proving (guards persist; zero Cloud active slots consumed);
+the shared alerting target stays active (one slot, executes only on errors).
+
+**Version-behavior finding**: current n8n Cloud does not invoke an error workflow
+unless it is ACTIVE; n8n 1.70.0 invokes it unactivated. The first live pass
+recorded `route_not_delivered` on all 10 until the alerting target was activated
+— one activation fixed all 10 (machine summary:
+`live_results_2026-07.json`). Product follow-up filed: the error-target picker
+should verify target activation on newer n8n versions.

@@ -1,0 +1,19 @@
+{
+  "run_at": "2026-07-21",
+  "instance": "founder dogfood n8n Cloud (via pisama-n8n-api, in-machine driver)",
+  "tier": "live-b (standing guards only; Tier A from corpus is empty by finding)",
+  "workflows": 10,
+  "guards_applied": 10,
+  "route_probes_recorded": 10,
+  "executions_spent": "~55 (10x apply pass at ~4 each + 10 probe fires + diagnosis)",
+  "post_run_state": {
+    "durable_controls": "11/11 share 1.0 (1 input_schema dogfood + 10 error_route community)",
+    "cases": {
+      "observing": 10,
+      "prevented": 1
+    },
+    "drift_sweep": "clean (drifted: 0) on the poll after the run",
+    "active_slots_consumed": "1 (the alerting target; all 10 sources deactivated)"
+  },
+  "finding_version_behavior": "n8n Cloud (current version) does NOT invoke an error workflow unless the error workflow is ACTIVE; n8n 1.70.0 (local stack) invokes it unactivated. First live pass recorded route_not_delivered on all 10 until the alerting target was activated; one activation fixed all 10. Product follow-up: the error-target picker should surface/verify target activation on newer n8n."
+}
