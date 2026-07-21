@@ -584,12 +584,26 @@ async def list_error_route_targets(
                 )
                 continue
             eligible = has_error_trigger(full)
+            # Newer n8n (observed on n8n Cloud, 2026-07-21) only INVOKES an error
+            # workflow that is ACTIVE; 1.70.0 invokes it unactivated. An inactive
+            # target stays eligible (activation is one click) but the operator
+            # must know, or the route silently never delivers.
+            active = bool(full.get("active"))
+            reason = None
+            if not eligible:
+                reason = "No Error Trigger node."
+            elif not active:
+                reason = (
+                    "Inactive: newer n8n versions only invoke ACTIVE error "
+                    "workflows. Activate it after choosing."
+                )
             targets.append(
                 {
                     "id": candidate_id,
                     "name": item.get("name"),
                     "eligible": eligible,
-                    "reason": None if eligible else "No Error Trigger node.",
+                    "active": active,
+                    "reason": reason,
                 }
             )
     except HTTPException:

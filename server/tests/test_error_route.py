@@ -129,6 +129,10 @@ def test_target_picker_marks_eligibility_and_excludes_self(tmp_path, monkeypatch
 
     assert SOURCE_WF not in by_id  # a workflow cannot be its own error handler
     assert by_id[TARGET_ID]["eligible"] is True
+    # Newer n8n only invokes ACTIVE error workflows; an eligible-but-inactive
+    # target must carry the activation warning so the route cannot silently die.
+    assert by_id[TARGET_ID]["active"] is False
+    assert "Activate" in by_id[TARGET_ID]["reason"]
     # Ineligible candidates are RETURNED with a reason, not filtered out: an operator who
     # sees "No Error Trigger node" learns what to add; a short list just looks broken.
     assert by_id[TRIGGERLESS_ID]["eligible"] is False
