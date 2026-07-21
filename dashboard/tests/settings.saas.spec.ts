@@ -58,3 +58,34 @@ test('shows the connect CTA when there are no connections', async ({ page }) => 
   await page.goto('/settings')
   await expect(page.getByRole('button', { name: 'Connect n8n' })).toBeVisible()
 })
+
+test('ingest keys: shows the node API URL and mints a key exactly once', async ({ page }) => {
+  await page.route('**/api/backend/api/v1/connections', (r) => r.fulfill({ json: [CONNECTION] }))
+  await page.route('**/api/backend/api/v1/api-keys', (r) => {
+    if (r.request().method() === 'POST') {
+      return r.fulfill({
+        json: { api_key: 'pn8n_testplaintext', note: 'Store this now — it is not shown again.' },
+      })
+    }
+    return r.fulfill({
+      json: [{ id: 'k1', name: 'ingest', prefix: 'pn8n_abcdefg', created_at: '2026-07-20T10:00:00Z' }],
+    })
+  })
+
+  await page.goto('/settings')
+  // The community-node credential needs the PUBLIC API origin; the card must state it.
+  await expect(page.getByText('/api/v1', { exact: false }).first()).toBeVisible()
+  // Existing keys list by prefix only.
+  await expect(page.getByText('pn8n_abcdefg')).toBeVisible()
+
+  // Minting shows the plaintext once, with the copy-now warning.
+  const [req] = await Promise.all([
+    page.waitForRequest(
+      (r) => r.url().includes('/api/v1/api-keys') && r.method() === 'POST',
+    ),
+    page.getByRole('button', { name: 'Create ingest key' }).click(),
+  ])
+  expect(req.method()).toBe('POST')
+  await expect(page.getByText('pn8n_testplaintext')).toBeVisible()
+  await expect(page.getByText('Copy this key now')).toBeVisible()
+})

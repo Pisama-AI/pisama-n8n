@@ -12,10 +12,58 @@ suggestions and auto-fixing) runs in the Pisama cloud.
 > suggestions + auto-apply) is gated behind a cloud key.
 >
 > **Honest about quality:** detector *precision* is measured on real n8n templates and is
-> solid; *recall* is not yet validated against real-world failures (current positive
-> fixtures are synthetic). The cycle detector works but fires only on genuinely unbounded
-> cycles, and true infinite loops are rare in real workflows. We do not publish recall/F1
-> claims yet. See the engine README.
+> solid. *Recall* was validated in 2026-07 against failures mined from real community
+> workflows: error and resource detection reached 1.00/1.00 on that corpus after fixes
+> (in-sample, disclosed); timeout recall remains open. The cycle detector fires only on
+> genuinely unbounded cycles, and true infinite loops are rare in real workflows. See
+> the engine README and `eval/campaigns/2026-07-guard-campaign.md` for the full
+> methodology, funnels, and every disclosed limitation.
+
+## Quickstart (self-host)
+
+Docker (server on `:8400`, SQLite persisted in a volume):
+
+```bash
+git clone https://github.com/Pisama-AI/pisama-n8n.git
+cd pisama-n8n/deploy
+PISAMA_API_KEY=choose-a-secret docker compose up --build
+# or, with the dashboard on :3000
+PISAMA_API_KEY=choose-a-secret docker compose --profile ui up --build
+```
+
+Then connect your n8n. Either channel works; neither requires the other.
+
+- **Polling** (Pisama reaches your n8n): set `PISAMA_N8N_URL` and `PISAMA_N8N_API_KEY`
+  in the server environment (n8n API keys are minted under Settings, n8n API), then
+  trigger a sync from the dashboard's Settings page or with
+  `curl -X POST -H "Authorization: Bearer $PISAMA_API_KEY" http://localhost:8400/api/v1/n8n/sync`.
+- **Push** (your n8n reaches Pisama, works behind firewalls): install the
+  [`n8n-nodes-pisama`](https://www.npmjs.com/package/n8n-nodes-pisama) community node
+  in n8n, create a Pisama API credential with API URL
+  `http://<server-host>:8400/api/v1` and your `PISAMA_API_KEY` as the API key
+  (set `PISAMA_WEBHOOK_SECRET` on the server and in the credential to use HMAC
+  signatures instead), and add the Pisama node to the workflows you want watched.
+
+Without Docker (Python 3.11 or newer):
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e engine -e server
+PISAMA_API_KEY=choose-a-secret uvicorn pisama_n8n_server.app:app --port 8400
+```
+
+Dashboard without Docker (Node 20 or newer): `cd dashboard && npm ci && npm run dev`,
+with `NEXT_PUBLIC_API_BASE` pointing at the server (default `http://localhost:8400`).
+
+### Supported n8n versions
+
+The end-to-end gates run against pinned n8n **1.70.0** (guardrail lifecycle and corpus
+campaign stacks) and **1.91.3** (dogfood stack), plus a live n8n Cloud instance on the
+current release. Ingestion is payload-format based and works across this range. One
+behavioral difference that matters for the error-route repair: current n8n versions
+only invoke error workflows that are **active**, while older versions (1.70.0) also
+invoke inactive ones. When Pisama points a workflow at an error handler, activate the
+handler workflow; the repair UI warns when the chosen target is inactive.
 
 ## What's here
 

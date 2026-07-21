@@ -1,10 +1,11 @@
 # Self-host Pisama for n8n.
 #   cd deploy && PISAMA_API_KEY=your-key docker compose up --build
+# With the dashboard:
+#   cd deploy && PISAMA_API_KEY=your-key docker compose --profile ui up --build
 #
 # The build context is the repo root (..) so the image can see engine/ + server/.
-# The dashboard is not yet built; it lives behind the "ui" profile so the default
-# `docker compose up` runs just the detection server. Enable it later with
-# `docker compose --profile ui up` once dashboard/Dockerfile exists.
+# The dashboard lives behind the "ui" profile so the default `docker compose up`
+# runs just the detection server.
 services:
   server:
     build:
@@ -30,11 +31,15 @@ services:
       timeout: 5s
       retries: 5
 
-  # Not built yet — see dashboard/README.md. Behind a profile so it doesn't block `up`.
+  # Dashboard on :3000. NEXT_PUBLIC_API_BASE is baked into the browser bundle at
+  # BUILD time and must be the server URL as the BROWSER sees it (host-published
+  # :8400 by default, matching the port mapping above).
   dashboard:
     profiles: ["ui"]
     build:
       context: ../dashboard
+      args:
+        NEXT_PUBLIC_API_BASE: ${PISAMA_DASHBOARD_API_BASE:-http://localhost:8400}
     ports:
       - "3000:3000"
 

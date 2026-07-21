@@ -9,7 +9,7 @@ import { KeyRound, RefreshCw, Sparkles, LogOut, Plus, Server, Cable } from 'luci
 import { Layout } from '@/components/common/Layout'
 import { Card, CardHeader, CardTitle, Button, Input, EmptyState } from '@/components/ui'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { IS_SAAS } from '@/lib/saas'
+import { IS_SAAS, SAAS_PUBLIC_API_URL } from '@/lib/saas'
 import { BILLING_ENABLED } from '@/lib/flags'
 import { API_BASE, setStoredKey, clearStoredKey, hasStoredKey } from '@/lib/api/client'
 import {
@@ -18,6 +18,9 @@ import {
   syncConnection,
   syncOss,
   openBillingPortal,
+  listIngestKeys,
+  createIngestKey,
+  revokeIngestKey,
 } from '@/lib/api/settings'
 import { getPaidStatus } from '@/lib/api/fixes'
 
@@ -279,6 +282,103 @@ function ConnectionsCard() {
   )
 }
 
+// The push channel: keys for the n8n-nodes-pisama community node (or direct webhook
+// POSTs). This is the only path for n8n instances Pisama cannot poll (firewalled or
+// private networks), so the card also states the public API URL the credential needs.
+function IngestKeysCard() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({ queryKey: ['ingest-keys'], queryFn: listIngestKeys })
+  const [minted, setMinted] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const apiUrl = `${SAAS_PUBLIC_API_URL}/api/v1`
+
+  async function onCreate() {
+    setBusy(true)
+    try {
+      const res = await createIngestKey()
+      setMinted(res.api_key)
+      setCopied(false)
+      qc.invalidateQueries({ queryKey: ['ingest-keys'] })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onRevoke(id: string) {
+    await revokeIngestKey(id)
+    qc.invalidateQueries({ queryKey: ['ingest-keys'] })
+  }
+
+  return (
+    <Card padding="lg">
+      <CardTitleRow icon={KeyRound}>Ingest keys</CardTitleRow>
+      <p className="text-sm text-ink-3 mb-4">
+        For n8n instances Pisama cannot poll (firewalled or on a private network), push
+        executions instead: install the{' '}
+        <a
+          className="text-evidence hover:underline"
+          href="https://www.npmjs.com/package/n8n-nodes-pisama"
+          target="_blank"
+          rel="noreferrer"
+        >
+          n8n-nodes-pisama
+        </a>{' '}
+        community node in n8n, then create a credential with an ingest key and this API URL:
+      </p>
+      <div className="mb-4 rounded-lg border border-rule p-3 text-sm">
+        <div className="text-xs text-ink-3 mb-1">API URL (community node credential)</div>
+        <code className="text-ink-2 break-all">{apiUrl}</code>
+      </div>
+      {minted && (
+        <div className="mb-4 rounded-lg border border-rule p-3">
+          <p className="text-xs mb-2" style={{ color: 'var(--fail)' }}>
+            Copy this key now. It is not shown again.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="text-sm text-ink break-all flex-1">{minted}</code>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                navigator.clipboard.writeText(minted)
+                setCopied(true)
+              }}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+        </div>
+      )}
+      {isLoading ? (
+        <Skeleton className="h-10" />
+      ) : !data || data.length === 0 ? (
+        <p className="text-sm text-ink-3 mb-3">No ingest keys yet.</p>
+      ) : (
+        <div className="space-y-2 mb-3">
+          {data.map((k) => (
+            <div key={k.id} className="flex items-center gap-3 rounded-lg border border-rule p-3">
+              <div className="flex-1 min-w-0">
+                <code className="text-sm text-ink">{k.prefix}...</code>
+                <div className="text-xs text-ink-3">
+                  {k.name || 'ingest'} · created{' '}
+                  {formatDistanceToNow(new Date(k.created_at), { addSuffix: true })}
+                </div>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => onRevoke(k.id)}>
+                Revoke
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button size="sm" isLoading={busy} leftIcon={<Plus size={14} />} onClick={onCreate}>
+        Create ingest key
+      </Button>
+    </Card>
+  )
+}
+
 function BillingCard() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -325,6 +425,7 @@ export function SettingsClient() {
           <>
             <AccountCard />
             <ConnectionsCard />
+            <IngestKeysCard />
             {BILLING_ENABLED && <BillingCard />}
           </>
         ) : (

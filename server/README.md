@@ -60,22 +60,69 @@ credential (field names below are verbatim from `n8n-nodes-pisama@0.3.0` on npm)
   `PISAMA_WEBHOOK_SECRET`, or `PISAMA_API_KEY` if you didn't set a separate secret. When
   set, the server enforces the signature plus replay protection.
 
-No node changes needed; v0.3.0 as published on npm works unmodified.
+No node changes needed; the node as published on npm works unmodified.
 
 ## Endpoints
+
+Ingestion + detections:
 
 - `POST /api/v1/n8n/webhook`: ingest one execution (push channel).
 - `POST /api/v1/n8n/sync`: poll the configured n8n and ingest new executions.
 - `GET /api/v1/detections`: every stored detection (each carries the ingest timestamp).
 - `GET /api/v1/detections/{id}`: one enriched detection.
 - `GET /api/v1/detections/{id}/trace`: the per-node execution trace behind a detection.
+- `POST /api/v1/detections/{id}/seen`: mark a detection reviewed (feeds the
+  review-coverage metric).
+- `POST /api/v1/detections/{id}/feedback`: operator verdict (accept/reject) on a
+  detection.
 - `GET /api/v1/stream`: SSE stream of live detection events (token via `?token=`).
+
+Deterministic repairs (free, no model involved):
+
+- `POST /api/v1/n8n/guardrail`: propose an input-schema guardrail from a data-contract
+  detection.
+- `POST /api/v1/n8n/repairs/{id}/destination`: choose the guardrail's rejection
+  destination (required before apply).
+- `POST /api/v1/n8n/error-route`: propose an error-route repair from a
+  missing-error-workflow detection.
+- `GET /api/v1/n8n/repairs/{id}/error-targets`: candidate target workflows, each with
+  eligibility and an activation warning when needed.
+- `POST /api/v1/n8n/repairs/{id}/error-target`: choose the target error workflow
+  (required before apply).
+- `POST /api/v1/n8n/apply`: apply any configured repair by `repair_id` through the
+  guarded state machine (claim, freshness check, snapshot, bounded diff). Free for
+  deterministic repairs; the same endpoint also applies paid fix proposals.
+- `POST /api/v1/n8n/rollback`: restore the pre-repair workflow; refused if the
+  workflow changed since apply.
+
+Reliability cases (the evidence trail behind every applied repair):
+
+- `GET /api/v1/reliability-cases`, `GET /api/v1/reliability-cases/{id}`: observation
+  state, success counts, recurrence, probe evidence.
+- `GET /api/v1/reliability-cases/{id}/candidate-executions`: executions eligible as
+  probe evidence.
+- `POST /api/v1/reliability-cases/{id}/guard-verification`: record a guardrail probe
+  (malformed rejected / valid passed).
+- `POST /api/v1/reliability-cases/{id}/route-verification`: record a delivered
+  routed-incident probe for an error-route repair.
+- `POST /api/v1/reliability-cases/{id}/outcome`: a human concludes the case; refused
+  until the evidence bar is met.
+
+Operations + metrics:
+
+- `GET /api/v1/operations/summary`: dashboard rollup (executions, detections, repairs).
+- `GET /api/v1/reliability/metrics`: the five outcome metrics with honest denominators
+  (diagnosis acceptance, verified remediation, recurrence reduction, time to control,
+  durable-control share).
+
+Paid tier (cloud key required):
+
 - `GET /api/v1/paid/status`: paid-tier availability, gated on `PISAMA_CLOUD_KEY`.
-- `POST /api/v1/n8n/fix`: generate and persist a read-only paid repair proposal.
-- `POST /api/v1/n8n/apply`: apply a reviewed proposal by `repair_id`, after a live
-  workflow freshness check.
-- `POST /api/v1/n8n/rollback`: roll back an applied proposal by `repair_id`, only when
-  the workflow still matches Pisama's applied version.
+- `POST /api/v1/n8n/fix`: generate and persist a read-only paid repair proposal
+  (applied and rolled back via the shared `/n8n/apply` + `/n8n/rollback` above).
+
+Liveness:
+
 - `GET /healthz` (alias `GET /api/v1/health`): liveness; the alias is the community
   node's credential-Test path.
 

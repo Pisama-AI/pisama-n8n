@@ -1,4 +1,4 @@
-import { fetchApi, postApi } from './client'
+import { deleteApi, fetchApi, postApi } from './client'
 
 // Shapes mirror the SaaS backend (saas_server/app.py). OSS mode only uses syncOss.
 export interface Me {
@@ -38,6 +38,28 @@ export function syncConnection(id: string): Promise<SyncSummary> {
 
 export function syncOss(): Promise<SyncSummary> {
   return postApi('/api/v1/n8n/sync', {})
+}
+
+// SaaS ingest keys (pn8n_...): authenticate pushed executions — the n8n-nodes-pisama
+// community node or direct POSTs to /api/v1/n8n/webhook. Plaintext is returned ONCE
+// at mint time; afterwards only the prefix is listable.
+export interface IngestKey {
+  id: string
+  name?: string | null
+  prefix: string
+  created_at: string
+}
+
+export function listIngestKeys(): Promise<IngestKey[]> {
+  return fetchApi('/api/v1/api-keys')
+}
+
+export function createIngestKey(): Promise<{ api_key: string }> {
+  return postApi('/api/v1/api-keys', {})
+}
+
+export function revokeIngestKey(id: string): Promise<void> {
+  return deleteApi(`/api/v1/api-keys/${id}`)
 }
 
 // SaaS: open the Stripe customer portal (manage/cancel subscription).

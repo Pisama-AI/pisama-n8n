@@ -59,6 +59,20 @@ export async function fetchApi<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export async function deleteApi(path: string): Promise<void> {
+  const key = resolveKey()
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (key) headers.Authorization = `Bearer ${key}`
+
+  const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers })
+  if (!res.ok) {
+    if (res.status === 401) redirectToSignIn()
+    const err = new Error(`DELETE ${path} failed: ${res.status}`)
+    ;(err as Error & { status?: number }).status = res.status
+    throw err
+  }
+}
+
 export async function postApi<T>(path: string, body: unknown): Promise<T> {
   const key = resolveKey()
   const headers: Record<string, string> = {

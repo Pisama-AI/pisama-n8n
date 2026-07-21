@@ -107,6 +107,12 @@ export default function Onboarding() {
             )}
           </button>
         </form>
+
+        <p className="mt-6 text-xs text-ink-4">
+          Pisama cannot reach this n8n (private network or firewall)? Push executions
+          instead: install the n8n-nodes-pisama community node and create an ingest key
+          under <a href="/settings" className="text-evidence hover:underline">Settings</a>.
+        </p>
       </div>
     </main>
   )
