@@ -9,4 +9,4 @@ export const IS_SAAS = process.env.NEXT_PUBLIC_SAAS === '1'
 // direct webhook POSTs). The BFF hides the origin from browser calls, but a
 // user wiring the n8n community node needs the real host, so Settings shows it.
 export const SAAS_PUBLIC_API_URL =
-  process.env.NEXT_PUBLIC_SAAS_PUBLIC_API_URL || 'https://pisama-n8n-cloud.fly.dev'
+  process.env.NEXT_PUBLIC_SAAS_PUBLIC_API_URL || 'https://pisama-n8n-saas.fly.dev'
