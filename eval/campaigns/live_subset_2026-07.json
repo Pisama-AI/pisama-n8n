@@ -1,0 +1,17 @@
+{
+  "selected_at": "2026-07-21",
+  "tier": "live-b",
+  "rationale": "Tier A from the corpus is EMPTY (see the campaign report's central finding: no corpus workflow both fails and succeeds on constructible webhook input, so the full 30-success bar is unreachable). The live subset therefore ships STANDING GUARDS only: 10 of the 17 locally probe-verified workflows, smallest-payload-first to minimize instance clutter. Each gets ~5-7 real executions (baseline 3 + apply + routed probe); all are deactivated after proving, so zero Cloud active slots stay consumed. The n=1 dogfood workflow remains the only full-bar case.",
+  "workflows": [
+    "rw_a54cf1205c",
+    "rw_297ec57faa",
+    "rw_46d88d712a",
+    "rw_c12ac707b3",
+    "rw_5f1727b3f4",
+    "rw_7948809a8a",
+    "rw_47b20d5ae0",
+    "rw_033b575eda",
+    "rw_d24c1d0d31",
+    "rw_37b27a3085"
+  ]
+}
