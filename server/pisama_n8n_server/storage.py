@@ -32,6 +32,7 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -41,6 +42,22 @@ from sqlalchemy.orm import (
 )
 
 DEFAULT_DATABASE_URL = "sqlite:///pisama_n8n.db"
+
+
+class DuplicateSourceExecution(Exception):
+    """An execution with this upstream n8n id is already stored.
+
+    Raised by ``save_report`` when the DB-level unique index rejects the insert —
+    the losing side of a poll/sync race. Callers treat it as "already ingested",
+    never as a failure. Carries the surviving execution id."""
+
+    def __init__(self, source_execution_id: str, existing_id: Optional[int]):
+        self.source_execution_id = source_execution_id
+        self.existing_id = existing_id
+        super().__init__(
+            f"execution with source id {source_execution_id!r} already stored"
+            f" (id={existing_id})"
+        )
 
 _SECRET_KEYS = {
     "apikey",
@@ -732,6 +749,43 @@ def _ensure_columns(engine) -> None:
                     )
 
 
+def _ensure_source_dedup(engine) -> None:
+    """Collapse historical duplicate poll-ingests, then enforce uniqueness in the DB.
+
+    The poller's seen-set check is read-then-insert and therefore racy when a
+    background poll overlaps a manual /sync; this partial unique index is what makes
+    the dedup guarantee real. Webhook pushes (NULL source id) stay unconstrained.
+    Existing duplicates must go first or the index cannot be created — keep the
+    earliest row (the one reliability observation already counted) and drop the rest
+    with their detections."""
+    with engine.begin() as conn:
+        dup_ids = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT id FROM executions WHERE source_execution_id IS NOT NULL "
+                    "AND id NOT IN (SELECT MIN(id) FROM executions "
+                    "WHERE source_execution_id IS NOT NULL "
+                    "GROUP BY source_execution_id)"
+                )
+            )
+        ]
+        if dup_ids:
+            ids_csv = ",".join(str(int(i)) for i in dup_ids)
+            conn.execute(
+                text(f"DELETE FROM detections WHERE execution_id IN ({ids_csv})")
+            )
+            conn.execute(text(f"DELETE FROM executions WHERE id IN ({ids_csv})"))
+        # Identical syntax on SQLite and Postgres.
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_executions_source "
+                "ON executions(source_execution_id) "
+                "WHERE source_execution_id IS NOT NULL"
+            )
+        )
+
+
 def make_engine(url: Optional[str] = None):
     url = url or database_url()
     # check_same_thread=False so the FastAPI TestClient's threadpool can share a
@@ -740,6 +794,7 @@ def make_engine(url: Optional[str] = None):
     engine = create_engine(url, connect_args=connect_args, future=True)
     Base.metadata.create_all(engine)
     _ensure_columns(engine)
+    _ensure_source_dedup(engine)
     return engine
 
 
@@ -790,7 +845,18 @@ class Storage:
                     )
                 )
             session.add(execution)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                # The losing side of a poll/sync race on the same upstream
+                # execution: the winner's row is already stored and observed.
+                session.rollback()
+                existing = session.execute(
+                    select(Execution.id).where(
+                        Execution.source_execution_id == source_execution_id
+                    )
+                ).scalar_one_or_none()
+                raise DuplicateSourceExecution(str(source_execution_id), existing)
             execution_id = execution.id
         self.observe_reliability_cases(execution_id)
         return execution_id

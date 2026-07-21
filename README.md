@@ -57,9 +57,10 @@ with `NEXT_PUBLIC_API_BASE` pointing at the server (default `http://localhost:84
 
 ### Supported n8n versions
 
-The end-to-end gates run against pinned n8n **1.70.0** (guardrail lifecycle and corpus
-campaign stacks) and **1.91.3** (dogfood stack), plus a live n8n Cloud instance on the
-current release. Ingestion is payload-format based and works across this range. One
+The end-to-end guardrail lifecycle gate passes against pinned n8n **1.70.0** and
+**2.32.0** (the current stable at the time of writing); the dogfood stack runs
+**1.91.3**, and a live n8n Cloud instance tracks the current release. Ingestion is
+payload-format based and works across this range. One
 behavioral difference that matters for the error-route repair: current n8n versions
 only invoke error workflows that are **active**, while older versions (1.70.0) also
 invoke inactive ones. When Pisama points a workflow at an error handler, activate the

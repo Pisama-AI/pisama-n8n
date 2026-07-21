@@ -54,14 +54,16 @@ sleep 3
 
 echo "[campaign] provisioning n8n owner + API key"
 N8N_KEY="$("$PY" - "http://localhost:$N8N_PORT" <<'PROVISION'
-import json, sys, time, urllib.request, http.cookiejar, urllib.error
+import json, sys, time, urllib.request, http.cookiejar, urllib.error, uuid
 base = sys.argv[1]
 cj = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+BID = str(uuid.uuid4())  # n8n 2.x 404s /rest routes without a browser-id header
 def req(path, data=None, method="POST"):
     r = urllib.request.Request(f"{base}{path}",
         data=json.dumps(data).encode() if data is not None else None,
-        headers={"Content-Type": "application/json"}, method=method)
+        headers={"Content-Type": "application/json", "browser-id": BID,
+                 "Origin": base, "Referer": base + "/"}, method=method)
     try:
         resp = op.open(r, timeout=20)
         raw, status = resp.read(), resp.status
@@ -70,9 +72,10 @@ def req(path, data=None, method="POST"):
     except Exception:
         return 0, {}
     try:
-        return status, (json.loads(raw) if raw else {})
+        parsed = json.loads(raw) if raw else {}
     except Exception:
-        return status, {}
+        parsed = {}
+    return status, (parsed if isinstance(parsed, dict) else {"data": parsed})
 owner = {"email": "corpus-campaign@pisama.test", "firstName": "Pisama",
          "lastName": "Campaign", "password": "CorpusCampaign123!"}
 for _ in range(30):
@@ -81,13 +84,25 @@ for _ in range(30):
         break
     time.sleep(1)
 if not any(c.name == "n8n-auth" for c in cj):
-    req("/rest/login", {"email": owner["email"], "password": owner["password"]})
+    # 1.x reads "email", 2.x reads "emailOrLdapLoginId"; send both.
+    req("/rest/login", {"email": owner["email"],
+                        "emailOrLdapLoginId": owner["email"],
+                        "password": owner["password"]})
 st, existing = req("/rest/api-keys", method="GET")
-for k in (existing.get("data") or []):
-    req(f"/rest/api-keys/{k.get('id')}", method="DELETE")
-st, made = req("/rest/api-keys", {"label": "corpus-campaign", "expiresAt": None})
+data = existing.get("data")
+rows = data.get("items") if isinstance(data, dict) else data  # 2.x wraps in items
+for k in rows or []:
+    if isinstance(k, dict) and k.get("id"):
+        req(f"/rest/api-keys/{k['id']}", method="DELETE")
+body = {"label": "corpus-campaign", "expiresAt": None}
+st, made = req("/rest/api-keys", body)
+if st == 400:  # 2.x requires an explicit scopes array
+    _, sc = req("/rest/api-keys/scopes", method="GET")
+    body["scopes"] = sc.get("data") or []
+    st, made = req("/rest/api-keys", body)
 data = made.get("data") or {}
-print(data.get("apiKey") or data.get("rawApiKey") or "")
+# 2.x: "apiKey" is redacted, "rawApiKey" is the usable secret; 1.x has only "apiKey".
+print(data.get("rawApiKey") or data.get("apiKey") or "")
 PROVISION
 )"
 [ -n "$N8N_KEY" ] || { echo "[campaign] failed to provision an n8n API key" >&2; exit 1; }

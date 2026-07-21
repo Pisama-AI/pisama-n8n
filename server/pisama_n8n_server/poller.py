@@ -14,6 +14,7 @@ from typing import Any, Dict
 import httpx
 
 from pisama_n8n_server.processing import process_execution
+from pisama_n8n_server.storage import DuplicateSourceExecution
 
 logger = logging.getLogger("pisama_n8n_server")
 
@@ -131,6 +132,15 @@ async def poll_once(client: Any, storage: Any, limit: int = 50) -> Dict[str, int
             )
     else:
         executions = await client.list_executions(limit=limit, include_data=True)
+    if executions and len(executions) >= limit:
+        # n8n returns newest-first with no cursor here: a full window means older
+        # executions may have rolled past between polls and were never seen.
+        logger.warning(
+            "poll: fetched a full window of %d executions — a high-volume instance "
+            "can outrun the polling window and miss executions. Use the "
+            "n8n-nodes-pisama push channel for instances this busy.",
+            limit,
+        )
     seen = storage.seen_source_ids()
 
     new = fired = 0
@@ -147,6 +157,10 @@ async def poll_once(client: Any, storage: Any, limit: int = 50) -> Dict[str, int
         ex = await _with_error_workflow_context(ex, client)
         try:
             report = process_execution(ex, storage, source_execution_id=exid)
+        except DuplicateSourceExecution:
+            # Lost a race with a concurrent poll/sync over the same execution; the
+            # winner stored it. Correct outcome, not a failure — and not "new".
+            continue
         except Exception as exc:  # one bad execution must not sink the whole poll
             logger.warning("poll: failed to process execution %s: %s", exid, exc)
             continue
