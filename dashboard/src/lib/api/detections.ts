@@ -1,4 +1,4 @@
-import { fetchApi } from './client'
+import { API_BASE, fetchApi, postApi, resolveKey } from './client'
 
 // Raw row shape returned by the server's GET /api/v1/detections.
 export interface ServerDetection {
@@ -9,6 +9,8 @@ export interface ServerDetection {
   confidence: number
   failure_mode: string | null
   explanation: string
+  detector_version?: string | null
+  evidence?: Record<string, unknown>
   // Added by the server (join on executions.received_at); may be absent on
   // older rows, so the adapter falls back.
   received_at?: string
@@ -17,6 +19,11 @@ export interface ServerDetection {
   workflow_id?: string | null
   workflow_name?: string | null
   n8n_execution_id?: string | null
+  build_revision?: string | null
+  feedback?: DetectionFeedback | null
+  reliability_case?: ReliabilityCase | null
+  // When an operator first opened the detail view (servers >= 2026-07-20).
+  seen_at?: string | null
 }
 
 // Shape the copied DetectionListItem (and the detail view) expect. `detected`
@@ -34,14 +41,73 @@ export interface Detection {
   created_at: string
   detected: boolean
   failure_mode: string | null
+  detector_version?: string | null
+  evidence?: Record<string, unknown>
   workflow_id?: string | null
   workflow_name?: string | null
   n8n_execution_id?: string | null
+  build_revision?: string | null
   details?: {
     severity?: string
     affected_agents?: number
   }
+  feedback?: DetectionFeedback | null
+  reliability_case?: ReliabilityCase | null
 }
+
+export type FeedbackVerdict = 'useful' | 'not_useful' | 'fixed_manually'
+
+export interface DetectionFeedback {
+  id: number
+  detection_id: number
+  verdict: FeedbackVerdict
+  note: string | null
+  created_at: string
+}
+
+export interface ReliabilityCase {
+  id: number
+  repair_id: number
+  detection_id: number
+  workflow_id: string
+  detector: string
+  failure_mode: string | null
+  status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back' | 'drifted'
+  outcome: ReliabilityOutcome | 'recurred' | null
+  // Failure-rate window fields — present on an OSS model-fix case; the SaaS
+  // guardrail case is focused on the two routing probes and omits them.
+  baseline_execution_count?: number
+  baseline_failure_count?: number
+  post_repair_execution_count?: number
+  post_repair_failure_count?: number
+  comparison_minimum_executions?: number
+  comparison_ready?: boolean
+  baseline_failure_rate?: number | null
+  post_repair_failure_rate?: number | null
+  recurrence_reduction?: number | null
+  successful_execution_count?: number
+  recurrence_count?: number
+  first_success_execution_id?: number | null
+  first_recurrence_execution_id?: number | null
+  required_successful_executions?: number
+  ready_for_outcome_review: boolean
+  // Guardrail prevention probes: the two real executions that prove the installed
+  // guard rejects malformed input and passes valid input. Present on a guardrail case.
+  guard_malformed_rejected_execution_id?: number | null
+  guard_valid_passed_execution_id?: number | null
+  // Guard drift: the installed guard is no longer present/wired in the live workflow.
+  // Set by the server's poll-time integrity sweep; blocks concluding 'prevented'.
+  guard_drift_kind?: string | null
+  guard_drift_detected_at?: string | null
+  guard_drift_note?: string | null
+  outcome_note: string | null
+  created_at: string
+  updated_at: string
+  outcome_at: string | null
+}
+
+export type ReliabilityOutcome = 'prevented' | 'inconclusive'
+export type GuardVerificationKind = 'malformed_rejected' | 'valid_passed'
 
 function severityFromConfidence(confidence: number): string {
   if (confidence >= 0.8) return 'high'
@@ -61,9 +127,14 @@ export function adaptDetection(row: ServerDetection): Detection {
     created_at: row.received_at ?? new Date().toISOString(),
     detected: row.detected,
     failure_mode: row.failure_mode,
+    detector_version: row.detector_version ?? null,
+    evidence: row.evidence ?? {},
     workflow_id: row.workflow_id ?? null,
     workflow_name: row.workflow_name ?? null,
     n8n_execution_id: row.n8n_execution_id ?? null,
+    build_revision: row.build_revision ?? null,
+    feedback: row.feedback ?? null,
+    reliability_case: row.reliability_case ?? null,
     details: {
       severity: severityFromConfidence(row.confidence),
     },
@@ -80,6 +151,54 @@ export async function getDetections(): Promise<Detection[]> {
 export async function getDetection(id: string): Promise<Detection> {
   const row = await fetchApi<ServerDetection>(`/api/v1/detections/${id}`)
   return adaptDetection(row)
+}
+
+export function submitDetectionFeedback(
+  detectionId: string,
+  verdict: FeedbackVerdict,
+): Promise<DetectionFeedback> {
+  return postApi(`/api/v1/detections/${detectionId}/feedback`, { verdict })
+}
+
+export function concludeReliabilityCase(
+  caseId: number,
+  outcome: ReliabilityOutcome,
+  note?: string,
+): Promise<ReliabilityCase> {
+  return postApi(`/api/v1/reliability-cases/${caseId}/outcome`, { outcome, note })
+}
+
+// A recent execution of the guarded workflow, annotated with how it routed through
+// this guard. `matches_kind` flags it as a clean probe for one of the two checks;
+// the record endpoint still re-verifies the routing authoritatively.
+export interface CandidateExecution {
+  execution_id: number
+  source_execution_id: string | null
+  received_at: string
+  destination_ran: boolean
+  consumer_ran: boolean
+  matches_kind: GuardVerificationKind | null
+}
+
+export function getCandidateExecutions(caseId: number): Promise<CandidateExecution[]> {
+  return fetchApi(`/api/v1/reliability-cases/${caseId}/candidate-executions`)
+}
+
+// Record a guardrail prevention probe against a real ingested execution — referenced by
+// its internal id (from the picker) or its n8n source id (manual entry). The server
+// verifies the routing from the execution's runData (rejection destination ran + guarded
+// consumer skipped for malformed; the inverse for valid) and returns 409 on a mismatch or
+// an execution that has not been ingested yet. Same path on the OSS and SaaS servers.
+export function recordGuardVerification(
+  caseId: number,
+  kind: GuardVerificationKind,
+  ref: { executionId?: number; sourceExecutionId?: string },
+): Promise<ReliabilityCase> {
+  return postApi(`/api/v1/reliability-cases/${caseId}/guard-verification`, {
+    kind,
+    execution_id: ref.executionId,
+    source_execution_id: ref.sourceExecutionId,
+  })
 }
 
 // Per-node execution trace behind a detection (GET /detections/{id}/trace).
@@ -108,4 +227,19 @@ export interface Trace {
 
 export function getDetectionTrace(id: string): Promise<Trace> {
   return fetchApi<Trace>(`/api/v1/detections/${id}/trace`)
+}
+
+// Fire-and-forget "operator opened the detail view" ping — the sound denominator
+// for diagnosis acceptance. Deliberately NOT postApi: a background ping must never
+// be able to yank the page to sign-in (postApi's SaaS 401 handler does exactly
+// that), and an old server's 404 must be silent. The server is first-timestamp-wins
+// idempotent, so duplicate pings are harmless.
+export function markDetectionSeen(id: string | number): void {
+  const key = resolveKey()
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (key) headers.Authorization = `Bearer ${key}`
+  void fetch(`${API_BASE}/api/v1/detections/${id}/seen`, {
+    method: 'POST',
+    headers,
+  }).catch(() => {})
 }

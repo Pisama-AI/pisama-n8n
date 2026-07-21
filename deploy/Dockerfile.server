@@ -3,6 +3,9 @@
 #   docker build -f deploy/Dockerfile.server -t pisama-n8n-server .
 FROM python:3.11-slim
 
+ARG PISAMA_BUILD_REVISION=unknown
+ENV PISAMA_BUILD_REVISION=${PISAMA_BUILD_REVISION}
+
 WORKDIR /app
 COPY engine /app/engine
 COPY server /app/server

@@ -17,7 +17,99 @@ N8N_EVAL_KEY=... N8N_EVAL_EMAIL=owner@x N8N_EVAL_PASSWORD=... \
 
 # real executions from an ALREADY-connected n8n (ground truth = n8n's own status/errors)
 N8N_HOST=https://you.app.n8n.cloud N8N_API_KEY=... python eval/runtime_eval.py --source mine
+
+# REAL-WORLD: run real community workflows (third-party logic) on a local n8n and score
+# recall against independent ground truth computed from n8n's own record
+python eval/mine_real_world.py --scan            # corpus stats only
+python eval/mine_real_world.py --limit 76 --report eval/baseline_realworld.json
+python eval/mine_real_world.py --rescore         # re-score saved executions (no n8n)
 ```
+
+## Real-world recall validation (mined third-party failures)
+
+`mine_real_world.py` closes the gap the paragraphs above disclose: it runs REAL community
+workflows (the same 10,826-doc GitHub corpus the precision validation used; 76 are
+runnable after the safe-node/no-credentials filter) on a real n8n engine, captures the
+executions, and scores the runtime detectors against **independent ground truth computed
+from n8n's own record** (status / node error objects / executionTime / payload sizes —
+no engine imports). The failures are authored by other people: their throws, their
+loops, their data explosions. A parallel sweep mined 31 **wild executions** (execution
+JSONs strangers committed to GitHub, 8 recording genuine production failures).
+
+Corpus: `eval/data/realworld/` (70 committed executions mined from public GitHub
+workflow repos). These embed third-party workflow definitions and demo data as they
+appeared upstream; a demo RSA private key that rode along in one tutorial fixture
+(`rw_6c1c2e6a80.json`) has been redacted, and detection never reads key bytes. Do not
+treat these fixtures as scrubbed of all upstream data. Baselines:
+`baseline_realworld.json` (main corpus) + `baseline_realworld_holdout.json`.
+
+### What the mining found (and fixed)
+
+The first pass scored error P0.88/R0.88 and resource P0.08/R0.33. A 16-case adversarial
+triage classified every disagreement (12 detector bugs / 2 gt artifacts / 2 both):
+
+1. **Resource over-fire (9 FPs, one root cause)**: the growth checks were pure RATIO
+   tests — 45 -> 115 chars counted as a "2.6x explosion". Fixed with an absolute floor
+   (`min_explosion_chars`, = `max_content_size` so the detector has one scale line).
+2. **Resource recall bug**: item counts were re-derived from the rendered content string,
+   which leads with a "Node: ..." header — the JSON parse never engaged, so every count
+   collapsed to 1 and real 1 -> 10 amplification was invisible. The parser now emits a
+   structured `items_out` per turn.
+3. **Loud failures could yield ZERO detections**: a terminal single-node failure tripped
+   none of the hidden-error checks (no continueOnFail, no downstream turns, rate under
+   15%, and success-despite-failures suppresses itself once the workflow is marked
+   failed) — invisible to dashboards and healing. New `execution_failure` branch; the
+   controlled corpus's `error_low_rate_visible` adversarial case is now a positive of
+   that type (semantic decision documented at the case).
+4. **Legacy `continueOnFail: true` swallowed failures were invisible**: the parser set
+   the flag but passed no onError MODE to the swallowed-error check. Found on a real
+   community workflow whose Code node crashed, was continued, and n8n marked the run
+   successful — the exact hidden-failure class the product exists to catch.
+5. **Structured error objects**: wild production executions record swallowed failures as
+   an error OBJECT (`{message, name, ...}`) on the item json, not a string. The detector
+   caught three such hidden failures in a stranger's production workflow that both the
+   gt and the parser initially missed. Both now accept dict-with-message.
+
+### The numbers (after fixes)
+
+| corpus | n | error P/R | resource P/R | timeout P/R |
+|---|---|---|---|---|
+| real-world community (in-sample*) | 69 | 1.00 / 1.00 | 1.00 / 1.00 | n/a (0 positives) |
+| wild (strangers' production) | 17 | 1.00 / 1.00 | 1.00 / 1.00** | n/a (0 positives) |
+| holdout (fresh, larger workflows) | 1 | 1.00 / 1.00 | n/a | n/a |
+| controlled (regression guard) | 19 | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 |
+
+\* **In-sample disclosure**: the 69-execution corpus drove the fixes, so its post-fix
+numbers are in-sample. Out-of-sample evidence: the wild set (only 2 of its 17 cases
+informed a fix), the n=1 holdout, the unchanged controlled corpus (incl. adversarial
+negatives), and 41 unit tests locking each fix as a contract.
+
+\** Wild "resource positives" are the >10k-char oversized semantic firing on production
+payloads; whether each was an operational INCIDENT is unknowable from the record. It
+measures agreement with the documented size semantic, not incident truth.
+
+### Honest limits
+
+- **Timeout recall is still unvalidated on real-world data** — zero >60s nodes appeared
+  in 87 real executions (rare event). It remains validated only on the real-engine
+  authored corpus (`generate_real_corpus.py`, a genuine 65s node).
+- **The failure distribution is not production**: community workflows run once with an
+  empty standardized input over-represent input-shape errors. This validates pipeline
+  recall on organically diverse real executions, not the production failure mix.
+- **Selection bias, disclosed**: only credential-free workflows whose executing nodes
+  can't reach the network run (76 + 2 of 10,826 docs) — data-shaping workflows, which is
+  also where the runtime lane's failure modes live. 8 workflows n8n itself refuses to
+  execute (required params left empty in the shared template) are skipped; they are
+  unrunnable for anyone.
+- **Wild-format gap (product finding)**: wild n8n execution data comes in three formats —
+  plain API export, flatted DB arrays, and partially-dereferenced dumps. The adapter
+  handles only the first; 6 of the 8 genuine wild failures are locked in the flatted
+  format. Raw wild files stay OUT of the repo (third-party PII/keys); only derived
+  labels are used.
+- Cycle (structural lane) recall was already validated separately: 85/85 real unbounded
+  cycles via independent graph ground truth (2,348-workflow corpus, 2026-07-14).
+  Complexity has no independent "failure" fact to recall against (it is a smell), and
+  schema's static path is disabled by design.
 
 ## The real-world number (finally available)
 
@@ -86,3 +178,16 @@ and failing production traffic.
 - `mine` measures the **error** lane only against real data — n8n's status gives a clean
   label for node errors, but there is no clean n8n label for "this timeout/resource
   pattern was a real problem," so those are not fabricated on real data.
+
+## Corpus guard campaign (2026-07)
+
+Real guard lifecycles across the 70 committed community workflows on a throwaway
+local n8n, through the product's own endpoints: 67 imported, 19 real failures
+detected, **17 guards applied and verified by real routed-incident probes** — and
+0 reaching the full 30-success prevention bar, for a reason the report explains
+rather than papers over. Funnel, disclosures, and provenance:
+[campaigns/2026-07-guard-campaign.md](campaigns/2026-07-guard-campaign.md);
+machine summary: [baseline_guard_campaign.json](baseline_guard_campaign.json);
+harness: `scripts/corpus_campaign_prepare.py` + `scripts/run_corpus_guard_campaign.py`
++ `scripts/run_corpus_campaign_local.sh` (deterministic manifest, `--check` in CI
+spirit; no outcome is ever concluded by a script).

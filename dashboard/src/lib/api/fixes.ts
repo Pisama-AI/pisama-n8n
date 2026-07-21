@@ -14,11 +14,23 @@ export interface FixSuggestion {
   patch_ops: PatchOp[]
   mutated_workflow: Record<string, unknown>
   workflow_id: string | null
+  // OSS returns a durable local repair id. The hosted API may use its own repair
+  // lifecycle while the two products converge, so this remains optional here.
+  repair_id?: number
+  repair_status?: 'proposed'
 }
 
 export interface ApplyResult {
-  snapshot: Record<string, unknown>
-  applied: Record<string, unknown>
+  repair: RepairRecord
+}
+
+export interface RepairRecord {
+  id: number
+  status: string
+  workflow_id: string
+  applied_at: string | null
+  rolled_back_at: string | null
+  failure_reason: string | null
 }
 
 export interface PaidStatus {
@@ -30,8 +42,6 @@ export interface PaidStatus {
 
 // Endpoint families differ between the OSS self-host server and the SaaS API.
 const FIX = IS_SAAS ? '/api/v1/fixes' : '/api/v1/n8n/fix'
-const APPLY = IS_SAAS ? '/api/v1/fixes/apply' : '/api/v1/n8n/apply'
-const ROLLBACK = IS_SAAS ? '/api/v1/fixes/rollback' : '/api/v1/n8n/rollback'
 
 export async function getPaidStatus(): Promise<PaidStatus> {
   const raw = await fetchApi<Record<string, unknown>>('/api/v1/paid/status')
@@ -51,18 +61,25 @@ export function requestFix(detectionId: string): Promise<FixSuggestion> {
   return postApi(FIX, { detection_id: Number(detectionId) })
 }
 
+// Apply/rollback diverge by product, mirroring guardrail.ts: the OSS server shares one
+// repair-apply endpoint (POST /n8n/apply {repair_id}); the SaaS server runs BOTH repair
+// kinds (guardrails and model fixes) through REST-nested per-repair paths
+// (POST /n8n/repairs/{id}/apply, no body). Same {repair} response either way. The fix
+// suggestion carries repair_id in both products since the SaaS persistent-repair port.
 export function applyFix(
-  workflowId: string,
-  mutatedWorkflow: Record<string, unknown>,
+  repairId: number,
 ): Promise<ApplyResult> {
-  return postApi(APPLY, { workflow_id: workflowId, mutated_workflow: mutatedWorkflow })
+  return IS_SAAS
+    ? postApi(`/api/v1/n8n/repairs/${repairId}/apply`, {})
+    : postApi('/api/v1/n8n/apply', { repair_id: repairId })
 }
 
 export function rollbackFix(
-  workflowId: string,
-  snapshot: Record<string, unknown>,
+  repairId: number,
 ): Promise<unknown> {
-  return postApi(ROLLBACK, { workflow_id: workflowId, snapshot })
+  return IS_SAAS
+    ? postApi(`/api/v1/n8n/repairs/${repairId}/rollback`, {})
+    : postApi('/api/v1/n8n/rollback', { repair_id: repairId })
 }
 
 // SaaS only: start a Stripe Checkout for the Pro upgrade; returns a redirect URL.

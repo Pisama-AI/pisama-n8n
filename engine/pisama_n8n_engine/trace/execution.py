@@ -5,14 +5,36 @@ The public n8n `/executions?includeData=true` API (and the community node) retur
 per-node timing / error / output the timeout/error/resource detectors consume. Ported
 verbatim from the calibrated eval harness (proven: timeout node execTime, real error
 status, output size all reach the detectors).
+
+Payloads dumped from n8n's DB or logs arrive in the "flatted" wire format (a JSON array
+of index-referenced entries) or as partially-dereferenced variants of it; both entry
+points normalize those to the plain shape first, so callers can feed any of the wild
+export formats transparently. See ``trace/flatted.py``.
 """
+
 from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pisama_n8n_engine.detect.base import TurnSnapshot
+from pisama_n8n_engine.trace.flatted import normalize_execution
+from pisama_n8n_engine.detect.n8n_utils import is_ai_node_type
+from pisama_n8n_engine.detect.truncation import extract_stop_reason
+
+
+_NATIVE_AI_AGENT_TYPE = "@n8n/n8n-nodes-langchain.agent"
+
+
+def _normalized(execution_data: Any) -> Dict[str, Any]:
+    normalized = normalize_execution(execution_data)
+    if normalized is None:
+        raise ValueError(
+            "unrecognized n8n execution payload: expected a plain execution export, "
+            "a flatted execution-data array, or a (partially dereferenced) data-column dump"
+        )
+    return normalized
 
 
 def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
@@ -34,7 +56,11 @@ def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
             first = main[1][0] if isinstance(main[1], list) and main[1] else None
             j = first.get("json") if isinstance(first, dict) else None
             msg = (j.get("error") or j.get("message")) if isinstance(j, dict) else None
-            return msg if isinstance(msg, str) and msg.strip() else "node routed items to its error output"
+            return (
+                msg
+                if isinstance(msg, str) and msg.strip()
+                else "node routed items to its error output"
+            )
         return None
 
     if on_error == "continueRegularOutput":
@@ -44,16 +70,284 @@ def _swallowed_error(run: Dict[str, Any], on_error: str) -> Any:
                 err = j.get("error")
                 if isinstance(err, str) and err.strip():
                     return err
+                # n8n also records the swallowed failure as a structured error
+                # OBJECT ({message, name, description, ...}) on the item json —
+                # observed on real production executions (wild-mined corpus).
+                if isinstance(err, dict):
+                    msg = err.get("message")
+                    if isinstance(msg, str) and msg.strip():
+                        return msg
     return None
 
 
-def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
+def _error_details(error: Any, swallowed: Any) -> Tuple[Optional[str], Optional[int]]:
+    """Extract the recorded error text and HTTP status without reading healthy output."""
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("description") or error.get("name")
+        status = error.get("httpCode") or error.get("statusCode") or error.get("status")
+    else:
+        message = error or swallowed
+        status = None
+    try:
+        return (
+            str(message) if message else None,
+            int(status) if status is not None else None,
+        )
+    except (TypeError, ValueError):
+        return (str(message) if message else None, None)
+
+
+def _configured_request_timeout_ms(
+    parameters: Dict[str, Any], node_type: str
+) -> Optional[int]:
+    """Return a positive n8n HTTP-request timeout when the workflow set one."""
+    if "httprequest" not in node_type.lower():
+        return None
+    options = parameters.get("options")
+    value = parameters.get("timeout")
+    if value is None and isinstance(options, dict):
+        value = options.get("timeout")
+    try:
+        timeout_ms = int(value)
+    except (TypeError, ValueError):
+        return None
+    return timeout_ms if timeout_ms > 0 else None
+
+
+def _run_order(run: Dict[str, Any], fallback: int) -> Tuple[int, int, int]:
+    """Return n8n's recorded execution order, or an explicitly weaker fallback.
+
+    ``runData`` is grouped by node name, so dictionary iteration is not a temporal
+    contract. Real n8n executions retain ``executionIndex`` for the agent traces
+    captured by the dogfood lane. A detector that needs causality must require this
+    strong tier rather than infer it from grouped ``runData`` order.
+    """
+    try:
+        return (0, int(run["executionIndex"]), fallback)
+    except (KeyError, TypeError, ValueError):
+        pass
+    try:
+        return (1, int(run["startTime"]), fallback)
+    except (KeyError, TypeError, ValueError):
+        return (2, fallback, fallback)
+
+
+def _source_nodes(run: Dict[str, Any]) -> List[str]:
+    """Return recorded immediate predecessor names without graph inference."""
+    source = run.get("source") or []
+    return [
+        str(item["previousNode"])
+        for item in source
+        if isinstance(item, dict) and item.get("previousNode")
+    ]
+
+
+def _tool_result_values(value: Any) -> List[Dict[str, Any]]:
+    """Read explicit Anthropic tool-result objects from an n8n node output."""
+    if isinstance(value, dict):
+        direct = value.get("tool_result")
+        if isinstance(direct, dict):
+            return [direct]
+        if value.get("type") == "tool_result":
+            return [value]
+        messages = value.get("messages")
+        if isinstance(messages, list):
+            values: List[Dict[str, Any]] = []
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, list):
+                    values.extend(
+                        block
+                        for block in content
+                        if isinstance(block, dict)
+                        and block.get("type") == "tool_result"
+                    )
+            return values
+    return []
+
+
+def _agent_facts(output_data: Any) -> Dict[str, Any]:
+    """Extract only the provider facts proven by real Claude n8n output shapes."""
+    if not isinstance(output_data, list):
+        return {"is_claude_message": False, "tool_use_ids": [], "tool_results": []}
+    tool_use_ids: List[str] = []
+    tool_results: List[Dict[str, Any]] = []
+    is_claude_message = False
+    for item in output_data:
+        payload = item.get("json") if isinstance(item, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        model = payload.get("model")
+        content = payload.get("content")
+        if (
+            isinstance(model, str)
+            and model.lower().startswith("claude")
+            and payload.get("role") == "assistant"
+            and isinstance(content, list)
+        ):
+            is_claude_message = True
+            tool_use_ids.extend(
+                str(block["id"])
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("id")
+            )
+        tool_results.extend(_tool_result_values(payload))
+    return {
+        "is_claude_message": is_claude_message,
+        "tool_use_ids": tool_use_ids,
+        "tool_results": tool_results,
+    }
+
+
+def _native_agent_steps(item: Any) -> List[Any]:
+    """Return one output item's recorded native Agent steps, if present."""
+    payload = item.get("json") if isinstance(item, dict) else None
+    steps = payload.get("intermediateSteps") if isinstance(payload, dict) else None
+    return steps if isinstance(steps, list) else []
+
+
+def _native_agent_action(step: Any) -> Dict[str, Any]:
+    """Reduce one native Agent step without copying tool input or call IDs."""
+    action = step.get("action") if isinstance(step, dict) else None
+    observation = step.get("observation") if isinstance(step, dict) else None
+    tool = action.get("tool") if isinstance(action, dict) else None
+    tool_call_id = action.get("toolCallId") if isinstance(action, dict) else None
+    return {
+        "tool": tool if isinstance(tool, str) else None,
+        "has_tool_call_id": bool(
+            isinstance(tool_call_id, str) and tool_call_id.strip()
+        ),
+        # This stays internal to the parser/detector correlation. The detector
+        # evidence never emits observations or tool input.
+        "observation": observation
+        if isinstance(observation, str) and observation
+        else None,
+    }
+
+
+def _native_agent_facts(node_type: str, output_data: Any) -> Dict[str, Any]:
+    """Read the observed native AI Agent action shape without exposing inputs.
+
+    n8n 1.91 records native agent actions in the Agent node's ``main`` output as
+    ``json.intermediateSteps``. The paired tool run has no runtime source link, so
+    the detector needs only the tool name, whether n8n supplied a tool-call ID, and
+    the Agent's recorded observation for a strict error correlation. Raw tool input,
+    tool-call IDs, and model output are deliberately not copied into metadata.
+    """
+    if node_type != _NATIVE_AI_AGENT_TYPE or not isinstance(output_data, list):
+        return {"native_agent_actions": []}
+    actions: List[Dict[str, Any]] = []
+    for item in output_data:
+        actions.extend(_native_agent_action(step) for step in _native_agent_steps(item))
+    return {"native_agent_actions": actions}
+
+
+def _native_agent_names(workflow: Dict[str, Any]) -> set[str]:
+    """Return named native AI Agent nodes from an executed workflow snapshot."""
+    return {
+        str(node["name"])
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict)
+        and node.get("name")
+        and node.get("type") == _NATIVE_AI_AGENT_TYPE
+    }
+
+
+def _native_agent_target(
+    edge: Any, connection_type: str, native_agents: set[str]
+) -> Optional[str]:
+    """Return one literal native-Agent target from a matching workflow edge."""
+    if not isinstance(edge, dict) or edge.get("type") != connection_type:
+        return None
+    target = edge.get("node")
+    if not isinstance(target, str) or target not in native_agents:
+        return None
+    return target
+
+
+def _direct_native_targets(
+    outputs: Any, connection_type: str, native_agents: set[str]
+) -> List[str]:
+    """Return literal native-Agent targets for one n8n AI edge type."""
+    branches = outputs.get(connection_type) if isinstance(outputs, dict) else None
+    if not isinstance(branches, list):
+        return []
+    targets: List[str] = []
+    for branch in branches:
+        if not isinstance(branch, list):
+            continue
+        for edge in branch:
+            target = _native_agent_target(edge, connection_type, native_agents)
+            if target is not None and target not in targets:
+                targets.append(target)
+    return targets
+
+
+def _append_unique(values: List[str], value: str) -> None:
+    """Append a direct workflow peer once while preserving n8n's edge order."""
+    if value not in values:
+        values.append(value)
+
+
+def _native_agent_topology(workflow: Dict[str, Any]) -> Dict[str, Any]:
+    """Return direct native-Agent peer edges from the workflow snapshot.
+
+    Native n8n nested runs currently carry ``source: [null]``. This records only a
+    literal direct ``ai_tool``, ``ai_languageModel``, or ``ai_outputParser`` workflow
+    edge, never a graph path. Keeping both directions lets runtime detectors reject
+    shared peers rather than attributing an error across an ambiguous agent graph.
+    """
+    native_agents = _native_agent_names(workflow)
+    agent_edges: Dict[str, Dict[str, List[str]]] = {
+        name: {"tool_nodes": [], "model_nodes": [], "output_parser_nodes": []}
+        for name in native_agents
+    }
+    source_edges: Dict[str, Dict[str, List[str]]] = {}
+    connections = workflow.get("connections") or {}
+    if not isinstance(connections, dict):
+        return {"agent_edges": agent_edges, "source_edges": source_edges}
+
+    for source, outputs in connections.items():
+        if not isinstance(source, str):
+            continue
+        for connection_type, agent_key, source_key in (
+            ("ai_tool", "tool_nodes", "tool_agents"),
+            ("ai_languageModel", "model_nodes", "model_agents"),
+            ("ai_outputParser", "output_parser_nodes", "output_parser_agents"),
+        ):
+            for target in _direct_native_targets(
+                outputs, connection_type, native_agents
+            ):
+                targets = source_edges.setdefault(
+                    source,
+                    {
+                        "tool_agents": [],
+                        "model_agents": [],
+                        "output_parser_agents": [],
+                    },
+                )[source_key]
+                _append_unique(targets, target)
+                _append_unique(agent_edges[target][agent_key], source)
+    return {"agent_edges": agent_edges, "source_edges": source_edges}
+
+
+def execution_to_turns(execution_data: Any) -> List[TurnSnapshot]:
     """Build the per-node runtime turns from a captured execution's runData."""
+    execution_data = _normalized(execution_data)
     turns: List[TurnSnapshot] = []
 
-    workflow = execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    workflow = (
+        execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    )
     wf_nodes = workflow.get("nodes", [])
-    node_defs = {n.get("name"): n for n in wf_nodes if isinstance(n, dict) and n.get("name")}
+    node_defs = {
+        n.get("name"): n for n in wf_nodes if isinstance(n, dict) and n.get("name")
+    }
+    native_topology = _native_agent_topology(workflow)
 
     started_at = None
     started_at_str = execution_data.get("startedAt")
@@ -67,63 +361,104 @@ def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
     seq = 0
     base_time = started_at or datetime.now()
 
+    flattened_runs = []
+    fallback = 0
     for node_name, node_runs in run_data.items():
-        if not node_runs:
+        if not isinstance(node_runs, list):
             continue
+        for run in node_runs:
+            if isinstance(run, dict):
+                flattened_runs.append((_run_order(run, fallback), node_name, run))
+                fallback += 1
+
+    for order, node_name, run in sorted(flattened_runs, key=lambda item: item[0]):
         ndef = node_defs.get(node_name, {})
         node_type = ndef.get("type", "unknown")
         node_params = ndef.get("parameters", {})
+        retry_on_fail = bool(ndef.get("retryOnFail"))
+        retry_attempts = len(run_data.get(node_name, []))
+        configured_timeout_ms = _configured_request_timeout_ms(node_params, node_type)
+        is_ai = is_ai_node_type(node_type)
 
         # n8n stores continue-on-fail config at the NODE level (`onError`), not under
         # `parameters`. Older/exported workflows use `settings.continueOnFail` or a
         # top-level `continueOnFail` bool. Read all three so real polled data — where
         # `onError` is a sibling of `parameters` — is read faithfully.
         node_settings = ndef.get("settings") or {}
-        on_error = (ndef.get("onError") or node_params.get("onError") or "")
-        continue_on_fail = on_error in ("continueErrorOutput", "continueRegularOutput") or bool(
+        on_error = ndef.get("onError") or node_params.get("onError") or ""
+        if not on_error and (
             node_settings.get("continueOnFail") or ndef.get("continueOnFail")
-        )
+        ):
+            # The legacy boolean behaves like continueRegularOutput: the errored item
+            # flows through the regular output. Without this mapping, a swallowed
+            # failure on a legacy-config node is invisible — found on a REAL community
+            # workflow whose Code node crashed, was continued, and n8n marked the run
+            # successful (eval/data/realworld rw_d7be75a953).
+            on_error = "continueRegularOutput"
+        continue_on_fail = on_error in ("continueErrorOutput", "continueRegularOutput")
 
-        for run in node_runs:
-            execution_time_ms = run.get("executionTime", 0)
-            execution_status = run.get("executionStatus", "unknown")
-            error_info = run.get("error")
-            # Real n8n emits degenerate shapes here: `data: null` on some errored runs,
-            # `main: []` (no output branches) and `main: [null]` (a null branch placeholder).
-            # Index blindly and the whole execution's ingest crashes.
-            main_branches = (run.get("data") or {}).get("main") or []
-            output_data = (main_branches[0] if main_branches else None) or []
+        execution_time_ms = run.get("executionTime", 0)
+        execution_status = run.get("executionStatus", "unknown")
+        error_info = run.get("error")
+        # Real n8n emits degenerate shapes here: `data: null` on some errored runs,
+        # `main: []` (no output branches) and `main: [null]` (a null branch placeholder).
+        # Index blindly and the whole execution's ingest crashes.
+        main_branches = (run.get("data") or {}).get("main") or []
+        output_data = (main_branches[0] if main_branches else None) or []
 
-            # A node with continue-on-fail that actually failed leaves NO `run.error` and
-            # keeps `executionStatus="success"` — the failure is only visible as the error
-            # branch carrying items (continueErrorOutput) or an `error` key inside the
-            # regular output item (continueRegularOutput). Surface that swallowed failure
-            # so the error detector can see it. Gated on the node's own `onError` config,
-            # so a healthy node whose data merely contains a field named "error" is unaffected.
-            swallowed = None if error_info else _swallowed_error(run, on_error)
+        # A node with continue-on-fail that actually failed leaves NO `run.error` and
+        # keeps `executionStatus="success"` — the failure is only visible as the error
+        # branch carrying items (continueErrorOutput) or an `error` key inside the
+        # regular output item (continueRegularOutput). Surface that swallowed failure
+        # so the error detector can see it. Gated on the node's own `onError` config,
+        # so a healthy node whose data merely contains a field named "error" is unaffected.
+        swallowed = None if error_info else _swallowed_error(run, on_error)
+        error_message, http_status = _error_details(error_info, swallowed)
+        finish_reason = extract_stop_reason(main_branches)
 
-            content_parts = [f"Node: {node_name} (type: {node_type})"]
-            if output_data:
-                try:
-                    content_parts.append(json.dumps(output_data, default=str))
-                except (TypeError, ValueError):
-                    content_parts.append(str(output_data))
-            if error_info:
-                msg = error_info.get("message", "") if isinstance(error_info, dict) else str(error_info)
-                content_parts.append(f"ERROR: {msg}")
-            elif swallowed:
-                content_parts.append(f"ERROR (continue-on-fail, swallowed): {swallowed}")
+        content_parts = [f"Node: {node_name} (type: {node_type})"]
+        if output_data:
+            try:
+                content_parts.append(json.dumps(output_data, default=str))
+            except (TypeError, ValueError):
+                content_parts.append(str(output_data))
+        if error_info:
+            msg = (
+                error_info.get("message", "")
+                if isinstance(error_info, dict)
+                else str(error_info)
+            )
+            content_parts.append(f"ERROR: {msg}")
+        elif swallowed:
+            content_parts.append(f"ERROR (continue-on-fail, swallowed): {swallowed}")
 
-            start_time = run.get("startTime")
-            if start_time:
-                try:
-                    timestamp = datetime.fromtimestamp(start_time / 1000)
-                except (ValueError, TypeError, OSError):
-                    timestamp = base_time + timedelta(milliseconds=seq * 1000)
-            else:
+        start_time = run.get("startTime")
+        if start_time:
+            try:
+                timestamp = datetime.fromtimestamp(start_time / 1000)
+            except (ValueError, TypeError, OSError):
                 timestamp = base_time + timedelta(milliseconds=seq * 1000)
+        else:
+            timestamp = base_time + timedelta(milliseconds=seq * 1000)
 
-            turns.append(TurnSnapshot(
+        agent_facts = {
+            **_agent_facts(output_data),
+            **_native_agent_facts(node_type, output_data),
+        }
+        agent_edges = native_topology["agent_edges"].get(
+            node_name,
+            {"tool_nodes": [], "model_nodes": [], "output_parser_nodes": []},
+        )
+        source_edges = native_topology["source_edges"].get(
+            node_name,
+            {
+                "tool_agents": [],
+                "model_agents": [],
+                "output_parser_agents": [],
+            },
+        )
+        turns.append(
+            TurnSnapshot(
                 turn_number=seq,
                 participant_type="node",
                 participant_id=node_name,
@@ -135,19 +470,59 @@ def execution_to_turns(execution_data: Dict[str, Any]) -> List[TurnSnapshot]:
                     "parameters": node_params,
                     "status": execution_status,
                     "has_error": error_info is not None or swallowed is not None,
+                    "error_message": error_message,
+                    "http_status": http_status,
                     "continue_on_fail": continue_on_fail,
+                    "retry_on_fail": retry_on_fail,
+                    "attempt_count": retry_attempts,
+                    "configured_timeout_ms": configured_timeout_ms,
+                    "is_ai_node": is_ai,
+                    "finish_reason": finish_reason,
+                    # Structured per-run output item count, so detectors don't have to
+                    # re-derive it from the rendered content string (which leads with a
+                    # "Node: ..." header and defeats naive JSON parsing).
+                    "items_out": len(output_data)
+                    if isinstance(output_data, list)
+                    else 0,
+                    # P3 agent diagnostics require the strong, n8n-recorded order
+                    # tier. A missing execution index is intentionally inconclusive.
+                    "execution_order_tier": order[0],
+                    "execution_index": order[1] if order[0] == 0 else None,
+                    "source_nodes": _source_nodes(run),
+                    # Native Agent runs lack nested runtime source links. Preserve
+                    # only literal workflow edges so the P3 detector can require an
+                    # unambiguous one-tool / one-model topology.
+                    "native_agent_tool_nodes": agent_edges["tool_nodes"],
+                    "native_agent_model_nodes": agent_edges["model_nodes"],
+                    "native_agent_output_parser_nodes": agent_edges[
+                        "output_parser_nodes"
+                    ],
+                    "native_ai_tool_target_agents": source_edges["tool_agents"],
+                    "native_ai_model_target_agents": source_edges["model_agents"],
+                    "native_ai_output_parser_target_agents": source_edges[
+                        "output_parser_agents"
+                    ],
+                    **agent_facts,
                 },
-            ))
-            seq += 1
+            )
+        )
+        seq += 1
 
     return turns
 
 
 def execution_to_turns_and_metadata(
-    execution_data: Dict[str, Any],
+    execution_data: Any,
 ) -> Tuple[List[TurnSnapshot], Dict[str, Any]]:
     """Turns plus the workflow-level metadata the timeout detector reads."""
+    execution_data = _normalized(execution_data)
     turns = execution_to_turns(execution_data)
+    workflow_json = (
+        execution_data.get("workflow") or execution_data.get("workflowData") or {}
+    )
+    error_workflow_resolution = (
+        execution_data.get("pisama_error_workflow_resolution") or {}
+    )
     metadata = {
         "workflow_id": execution_data.get("workflowId"),
         "workflow_duration_ms": sum(
@@ -159,6 +534,19 @@ def execution_to_turns_and_metadata(
         # it defaulted to "success" and flagged every visibly-failed workflow as a
         # hidden "success-despite-failure" — a false positive on real error executions.
         "workflow_status": _workflow_status(execution_data),
+        "workflow_json": workflow_json,
+        "workflow_available": bool(workflow_json),
+        # Polling attaches the configured error workflow after fetching the source
+        # workflow. It remains separate from workflow_json so structural detectors
+        # continue to analyze only the executed workflow.
+        "error_workflow_json": execution_data.get("pisama_error_workflow") or {},
+        "error_workflow_available": bool(execution_data.get("pisama_error_workflow")),
+        "error_workflow_resolution": error_workflow_resolution
+        if isinstance(error_workflow_resolution, dict)
+        else {},
+        "execution_id": execution_data.get("id") or execution_data.get("executionId"),
+        "retry_of": execution_data.get("retryOf"),
+        "retry_success_id": execution_data.get("retrySuccessId"),
     }
     return turns, metadata
 
@@ -176,7 +564,9 @@ def _workflow_status(execution_data: Dict[str, Any]) -> str:
     status = execution_data.get("status")
     if status:
         return status
-    top_error = ((execution_data.get("data") or {}).get("resultData") or {}).get("error")
+    top_error = ((execution_data.get("data") or {}).get("resultData") or {}).get(
+        "error"
+    )
     if execution_data.get("finished") is False or top_error:
         return "error"
     return "success"

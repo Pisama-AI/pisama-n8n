@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from pisama_n8n_engine.orchestrator import DetectionReport, analyze
 from pisama_n8n_engine.trace.execution import execution_to_turns_and_metadata
+from pisama_n8n_engine.trace.flatted import normalize_execution
 
 
 def extract_workflow_and_runtime(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], bool]:
@@ -26,11 +27,24 @@ def extract_workflow_and_runtime(payload: Dict[str, Any]) -> Tuple[Optional[Dict
 
 
 def process_execution(
-    payload: Dict[str, Any],
+    payload: Any,
     storage: Any,
     source_execution_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run both detection lanes on one execution, persist, and return the report dict."""
+    """Run both detection lanes on one execution, persist, and return the report dict.
+
+    Accepts every shape executions arrive in from the wild: the plain API export, the
+    flatted DB wire format (a JSON array — what a dump of n8n's execution_data column
+    contains), and partially-dereferenced variants. Raises ValueError for a payload
+    that decodes as none of them.
+    """
+    normalized = normalize_execution(payload)
+    if normalized is None:
+        raise ValueError(
+            "Unrecognized execution payload: expected an n8n execution export, a "
+            "flatted execution-data array (DB dump), or a workflow JSON."
+        )
+    payload = normalized
     workflow_json, has_runtime = extract_workflow_and_runtime(payload)
 
     workflow_id = payload.get("workflowId")

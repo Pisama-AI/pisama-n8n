@@ -1,0 +1,167 @@
+[
+ {
+  "version": 1,
+  "startData": "1",
+  "resultData": "2",
+  "executionData": "54"
+ },
+ {},
+ {
+  "error": "3",
+  "lastNodeExecuted": "8",
+  "runData": "18"
+ },
+ {
+  "description": null,
+  "level": "4",
+  "lineNumber": 1,
+  "message": "5",
+  "node": "6",
+  "stack": "16",
+  "tags": "17"
+ },
+ "error",
+ "Simulated failure for testing [line 1]",
+ {
+  "id": "7",
+  "name": "8",
+  "parameters": "9",
+  "position": "14",
+  "type": "15",
+  "typeVersion": 2
+ },
+ "35a21e8b-2d9c-4357-bf28-d7f0e313cf09",
+ "Error Code",
+ {
+  "jsCode": "10",
+  "language": "11",
+  "mode": "12",
+  "notice": "13"
+ },
+ "throw new Error(\"Simulated failure for testing\");",
+ "javaScript",
+ "runOnceForAllItems",
+ "",
+ [
+  220,
+  0
+ ],
+ "n8n-nodes-base.code",
+ "Error: Simulated failure for testing\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:1:104\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code:2:2\n    at VM2 Wrapper.apply (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/bridge.js:490:11)\n    at NodeVM.run (/usr/local/lib/node_modules/n8n/node_modules/@n8n/vm2/lib/nodevm.js:497:23)\n    at JavaScriptSandbox.runCodeAllItems (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/JavaScriptSandbox.js:73:39)\n    at ExecuteContext.execute (/usr/local/lib/node_modules/n8n/node_modules/n8n-nodes-base/dist/nodes/Code/Code.node.js:155:31)\n    at WorkflowExecute.runNode (/usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:687:50)\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:921:62\n    at /usr/local/lib/node_modules/n8n/node_modules/n8n-core/dist/execution-engine/workflow-execute.js:1257:20",
+ {},
+ {
+  "Error Code": "19",
+  "Webhook": "30"
+ },
+ [
+  "20"
+ ],
+ {
+  "error": "21",
+  "executionIndex": 1,
+  "executionStatus": "4",
+  "executionTime": 17,
+  "hints": "26",
+  "source": "27",
+  "startTime": 1784061118712
+ },
+ {
+  "description": null,
+  "level": "4",
+  "lineNumber": 1,
+  "message": "5",
+  "node": "22",
+  "stack": "16",
+  "tags": "25"
+ },
+ {
+  "id": "7",
+  "name": "8",
+  "parameters": "23",
+  "position": "24",
+  "type": "15",
+  "typeVersion": 2
+ },
+ {
+  "jsCode": "10",
+  "language": "11",
+  "mode": "12",
+  "notice": "13"
+ },
+ [
+  220,
+  0
+ ],
+ {},
+ [],
+ [
+  "28"
+ ],
+ {
+  "previousNode": "29"
+ },
+ "Webhook",
+ [
+  "31"
+ ],
+ {
+  "data": "32",
+  "executionIndex": 0,
+  "executionStatus": "51",
+  "executionTime": 0,
+  "hints": "52",
+  "source": "53",
+  "startTime": 1784061118711
+ },
+ {
+  "main": "33"
+ },
+ [
+  "34"
+ ],
+ [
+  "35"
+ ],
+ {
+  "json": "36",
+  "pairedItem": "50"
+ },
+ {
+  "body": "37",
+  "executionMode": "38",
+  "headers": "39",
+  "params": "47",
+  "query": "48",
+  "webhookUrl": "49"
+ },
+ {
+  "trigger": true
+ },
+ "production",
+ {
+  "accept": "40",
+  "accept-encoding": "41",
+  "connection": "42",
+  "content-length": "43",
+  "content-type": "44",
+  "host": "45",
+  "user-agent": "46"
+ },
+ "*/*",
+ "gzip, deflate, br, zstd",
+ "keep-alive",
+ "16",
+ "application/json",
+ "localhost:5679",
+ "python-httpx/0.28.1",
+ {},
+ {},
+ "http://localhost:5678/webhook/er-5b4625-1",
+ {
+  "item": 0
+ },
+ "success",
+ [],
+ [],
+ {}
+]

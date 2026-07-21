@@ -10,22 +10,27 @@ Single-tenant, SQLAlchemy 2.x. Defaults to a local SQLite file; override with
 No mocks: this is real SQLite via a real SQLAlchemy engine. Tests point
 ``DATABASE_URL`` at a temp file / ``sqlite:///:memory:`` — still real SQLite.
 """
+
 from __future__ import annotations
 
 import json
 import os
+from math import ceil
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from sqlalchemy import (
+    desc,
     Float,
     ForeignKey,
     String,
     Text,
     create_engine,
+    func,
     inspect,
     select,
     text,
+    update,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -36,6 +41,43 @@ from sqlalchemy.orm import (
 )
 
 DEFAULT_DATABASE_URL = "sqlite:///pisama_n8n.db"
+
+_SECRET_KEYS = {
+    "apikey",
+    "authorization",
+    "authtoken",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _secret_key(name: Any) -> bool:
+    """Whether an execution-payload field names credential material."""
+    normalized = "".join(char for char in str(name).lower() if char.isalnum())
+    return normalized in _SECRET_KEYS or normalized.endswith("apikey")
+
+
+def redact_execution_payload(value: Any) -> Any:
+    """Return a persistence-safe execution copy without credentials.
+
+    n8n includes a workflow snapshot in execution exports. HTTP Request nodes can
+    therefore carry header values such as ``x-api-key`` even after the transient
+    workflow itself has been deleted. Detection runs against the in-memory payload;
+    only the locally retained audit copy is redacted.
+    """
+    if isinstance(value, list):
+        return [redact_execution_payload(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    header_name = value.get("name")
+    result: Dict[str, Any] = {}
+    for key, item in value.items():
+        if _secret_key(key) or (key == "value" and _secret_key(header_name)):
+            result[key] = "[redacted]"
+        else:
+            result[key] = redact_execution_payload(item)
+    return result
 
 
 class Base(DeclarativeBase):
@@ -54,7 +96,12 @@ class Execution(Base):
     raw: Mapped[str] = mapped_column(Text, nullable=False)
     # The upstream n8n execution id, when this row came from API polling — used to
     # dedup so re-polling doesn't re-ingest the same execution. Null for webhook pushes.
-    source_execution_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    source_execution_id: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, index=True
+    )
+    # Build revision that analyzed this execution. It distinguishes current detector
+    # evidence from rows retained from an earlier server image.
+    build_revision: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     detections: Mapped[List["DetectionRow"]] = relationship(
         back_populates="execution", cascade="all, delete-orphan"
@@ -65,16 +112,31 @@ class DetectionRow(Base):
     __tablename__ = "detections"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    execution_id: Mapped[int] = mapped_column(ForeignKey("executions.id"), nullable=False)
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("executions.id"), nullable=False
+    )
     detector: Mapped[str] = mapped_column(String, nullable=False)
     detected: Mapped[bool] = mapped_column(nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     explanation: Mapped[str] = mapped_column(Text, default="")
+    detector_version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Detector-specific, local audit facts. This is intentionally separate from
+    # the raw execution so the authenticated UI/API can explain a verdict without
+    # sending the full n8n payload back to a browser.
+    evidence: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    # When an operator first opened this detection's detail view. First timestamp
+    # wins; gives diagnosis acceptance a sound denominator (accepted/seen) instead
+    # of the self-selected accepted/reviewed sample.
+    seen_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     execution: Mapped["Execution"] = relationship(back_populates="detections")
 
     def to_dict(self) -> Dict[str, Any]:
+        try:
+            evidence = json.loads(self.evidence) if self.evidence else {}
+        except (TypeError, ValueError):
+            evidence = {}
         return {
             "id": self.id,
             "execution_id": self.execution_id,
@@ -83,6 +145,257 @@ class DetectionRow(Base):
             "confidence": self.confidence,
             "failure_mode": self.failure_mode,
             "explanation": self.explanation,
+            "detector_version": self.detector_version,
+            "evidence": evidence if isinstance(evidence, dict) else {},
+            "seen_at": self.seen_at,
+        }
+
+
+class RepairAttempt(Base):
+    """A durable, server-owned record of a proposed workflow repair.
+
+    Repair payloads must never be trusted when they come back from a browser. Keeping
+    the proposal, pre-apply snapshot, and lifecycle transitions here creates an audit
+    trail and prevents stale tabs from applying arbitrary workflow JSON.
+    """
+
+    __tablename__ = "repair_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    baseline_workflow: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_workflow: Mapped[str] = mapped_column(Text, nullable=False)
+    patch_ops: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(
+        String, default="proposed", nullable=False, index=True
+    )
+    snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applied_workflow: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Present only for deterministic guardrail repairs (NULL for model-generated fixes).
+    # Carries {paths, destination, failing_node, alert_url, fragment_node_names}; the
+    # apply path refuses a guardrail whose destination is still null.
+    guard_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    applied_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    rolled_back_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    @staticmethod
+    def _decode(value: Optional[str], fallback: Any) -> Any:
+        if not value:
+            return fallback
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def to_dict(self, include_workflows: bool = False) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "id": self.id,
+            "detection_id": self.detection_id,
+            "workflow_id": self.workflow_id,
+            "patch_ops": self._decode(self.patch_ops, []),
+            "explanation": self.explanation,
+            "status": self.status,
+            "failure_reason": self.failure_reason,
+            "guard_config": self._decode(self.guard_config, None),
+            "created_at": self.created_at,
+            "applied_at": self.applied_at,
+            "rolled_back_at": self.rolled_back_at,
+        }
+        if include_workflows:
+            result.update(
+                baseline_workflow=self._decode(self.baseline_workflow, {}),
+                proposed_workflow=self._decode(self.proposed_workflow, {}),
+                snapshot=self._decode(self.snapshot, None),
+                applied_workflow=self._decode(self.applied_workflow, None),
+            )
+        return result
+
+
+class DetectionFeedback(Base):
+    """An operator's explicit verdict on a detection, kept in the self-host database."""
+
+    __tablename__ = "detection_feedback"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, index=True
+    )
+    verdict: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "detection_id": self.detection_id,
+            "verdict": self.verdict,
+            "note": self.note,
+            "created_at": self.created_at,
+        }
+
+
+class ReliabilityCase(Base):
+    """Tenant-local evidence for whether one applied repair changed a failure pattern.
+
+    A case intentionally stores ids, a narrow failure fingerprint, and aggregate
+    observations only. It never copies execution payloads into a second dataset.
+    ``prevented`` is an operator conclusion, not an inference from one healthy run.
+    """
+
+    __tablename__ = "reliability_cases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repair_id: Mapped[int] = mapped_column(
+        ForeignKey("repair_attempts.id"), nullable=False, unique=True, index=True
+    )
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    detector: Mapped[str] = mapped_column(String, nullable=False)
+    failure_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="observing", index=True
+    )
+    # The verified or reviewed conclusion survives a later rollback. ``status``
+    # is the current lifecycle state; outcome is the historical result.
+    outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    # Fixed, local-only pre/post windows for a rate comparison. The post window is
+    # capped at the size of the baseline window so it cannot drift over time.
+    baseline_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    baseline_failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    post_repair_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    post_repair_failure_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    successful_execution_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    recurrence_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    first_success_execution_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("executions.id"), nullable=True
+    )
+    first_recurrence_execution_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("executions.id"), nullable=True
+    )
+    # Guardrail prevention probes: the two real executions that prove the installed
+    # guard actually rejects malformed input and passes valid input. A guardrail case
+    # cannot be concluded ``prevented`` until BOTH are recorded — that is what turns a
+    # template into verified prevention evidence rather than a claim.
+    guard_malformed_rejected_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_malformed_rejected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_valid_passed_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_valid_passed_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Guard drift: the poll-time integrity sweep asserts every applied guard is still
+    # present AND still wired. A guard removed or bypassed in the n8n editor is no
+    # longer prevention evidence, so the case goes ``drifted`` and cannot be concluded.
+    guard_drift_kind: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_drift_detected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_drift_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Error-route repairs are verified by ONE routed-incident probe instead of the
+    # guardrail's two: an error route has no valid-path regression to disprove.
+    guard_route_delivered_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_route_delivered_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    outcome_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    outcome_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    def _comparison_values(self) -> Dict[str, Any]:
+        comparison_minimum = comparison_minimum_execution_count()
+        baseline_rate = (
+            self.baseline_failure_count / self.baseline_execution_count
+            if self.baseline_execution_count
+            else None
+        )
+        post_rate = (
+            self.post_repair_failure_count / self.post_repair_execution_count
+            if self.post_repair_execution_count
+            else None
+        )
+        comparison_ready = (
+            self.baseline_execution_count >= comparison_minimum
+            and self.post_repair_execution_count >= self.baseline_execution_count
+            and baseline_rate is not None
+            and baseline_rate > 0
+            and post_rate is not None
+        )
+        return {
+            "baseline_execution_count": self.baseline_execution_count,
+            "baseline_failure_count": self.baseline_failure_count,
+            "post_repair_execution_count": self.post_repair_execution_count,
+            "post_repair_failure_count": self.post_repair_failure_count,
+            "comparison_minimum_executions": comparison_minimum,
+            "comparison_ready": comparison_ready,
+            "baseline_failure_rate": round(baseline_rate, 4)
+            if baseline_rate is not None
+            else None,
+            "post_repair_failure_rate": round(post_rate, 4)
+            if post_rate is not None
+            else None,
+            "recurrence_reduction": (
+                round(1 - (post_rate / baseline_rate), 4) if comparison_ready else None
+            ),
+        }
+
+    def _ready_for_outcome_review(self) -> bool:
+        return (
+            self.status == "observing"
+            and self.successful_execution_count >= verification_success_threshold()
+            and self.recurrence_count == 0
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "repair_id": self.repair_id,
+            "detection_id": self.detection_id,
+            "workflow_id": self.workflow_id,
+            "detector": self.detector,
+            "failure_mode": self.failure_mode,
+            "status": self.status,
+            "outcome": self.outcome,
+            **self._comparison_values(),
+            "successful_execution_count": self.successful_execution_count,
+            "recurrence_count": self.recurrence_count,
+            "first_success_execution_id": self.first_success_execution_id,
+            "first_recurrence_execution_id": self.first_recurrence_execution_id,
+            "required_successful_executions": verification_success_threshold(),
+            "ready_for_outcome_review": self._ready_for_outcome_review(),
+            "guard_malformed_rejected_execution_id": self.guard_malformed_rejected_execution_id,
+            "guard_malformed_rejected_at": self.guard_malformed_rejected_at,
+            "guard_valid_passed_execution_id": self.guard_valid_passed_execution_id,
+            "guard_valid_passed_at": self.guard_valid_passed_at,
+            "guard_drift_kind": self.guard_drift_kind,
+            "guard_drift_detected_at": self.guard_drift_detected_at,
+            "guard_drift_note": self.guard_drift_note,
+            "guard_route_delivered_execution_id": self.guard_route_delivered_execution_id,
+            "guard_route_delivered_at": self.guard_route_delivered_at,
+            "outcome_note": self.outcome_note,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "outcome_at": self.outcome_at,
+        }
+
+
+class OperationalEvent(Base):
+    """Small, local-only audit events for ingestion and polling health."""
+
+    __tablename__ = "operational_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    details: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "event_type": self.event_type,
+            "details": RepairAttempt._decode(self.details, {}),
+            "created_at": self.created_at,
         }
 
 
@@ -135,31 +448,50 @@ def parse_trace(raw: Dict[str, Any]) -> Dict[str, Any]:
         for n in (block.get("nodes") or [])
         if isinstance(n, dict)
     }
-    order_names = [n.get("name") for n in (block.get("nodes") or []) if isinstance(n, dict)]
+    order_names = [
+        n.get("name") for n in (block.get("nodes") or []) if isinstance(n, dict)
+    ]
 
     data = raw.get("data")
     result = data.get("resultData") if isinstance(data, dict) else None
     result = result if isinstance(result, dict) else {}
     run_data = result.get("runData")
 
-    top_error = result.get("error", {}).get("message") if isinstance(result.get("error"), dict) else None
-    started, stopped = _parse_iso(raw.get("startedAt")), _parse_iso(raw.get("stoppedAt"))
-    duration_ms = int((stopped - started).total_seconds() * 1000) if started and stopped else None
+    top_error = (
+        result.get("error", {}).get("message")
+        if isinstance(result.get("error"), dict)
+        else None
+    )
+    started, stopped = (
+        _parse_iso(raw.get("startedAt")),
+        _parse_iso(raw.get("stoppedAt")),
+    )
+    duration_ms = (
+        int((stopped - started).total_seconds() * 1000) if started and stopped else None
+    )
 
     if isinstance(run_data, dict) and run_data:
         nodes: List[Dict[str, Any]] = []
         for name, runs in run_data.items():
             if not isinstance(runs, list):
                 continue
-            total_time, total_items, status, node_err, order = 0, 0, "success", None, None
+            total_time, total_items, status, node_err, order = (
+                0,
+                0,
+                "success",
+                None,
+                None,
+            )
             for run in runs:
                 if not isinstance(run, dict):
                     continue
                 total_time += int(run.get("executionTime") or 0)
-                for branch in ((run.get("data") or {}).get("main") or []):
+                for branch in (run.get("data") or {}).get("main") or []:
                     if isinstance(branch, list):
                         total_items += len(branch)
-                errored = run.get("executionStatus") == "error" or bool(run.get("error"))
+                errored = run.get("executionStatus") == "error" or bool(
+                    run.get("error")
+                )
                 if errored:
                     status = "error"
                     if node_err is None and isinstance(run.get("error"), dict):
@@ -182,8 +514,10 @@ def parse_trace(raw: Dict[str, Any]) -> Dict[str, Any]:
         nodes.sort(key=lambda n: n["_order"])
         for n in nodes:
             n.pop("_order", None)
-        overall = "error" if (top_error or any(n["status"] == "error" for n in nodes)) else (
-            "success" if raw.get("finished") else "unknown"
+        overall = (
+            "error"
+            if (top_error or any(n["status"] == "error" for n in nodes))
+            else ("success" if raw.get("finished") else "unknown")
         )
         return {
             "available": True,
@@ -229,16 +563,155 @@ def database_url() -> str:
     return os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL
 
 
+def verification_success_threshold() -> int:
+    """Minimum post-change successful executions before an operator may conclude
+    a failure was prevented. Keep this deliberately conservative by default."""
+    raw = os.environ.get("PISAMA_VERIFICATION_MIN_SUCCESSFUL_EXECUTIONS", "30")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
+def comparison_minimum_execution_count() -> int:
+    """Minimum equal-sized pre/post windows before publishing a rate change."""
+    raw = os.environ.get("PISAMA_COMPARISON_MIN_EXECUTIONS", "10")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
+
+
+def baseline_window_limit() -> int:
+    """Bound baseline work and make every case's comparison window finite."""
+    raw = os.environ.get("PISAMA_BASELINE_MAX_EXECUTIONS", "50")
+    try:
+        return max(comparison_minimum_execution_count(), int(raw))
+    except ValueError:
+        return 50
+
+
+def build_revision() -> str:
+    """Return the image revision that produced a retained execution row.
+
+    A deployment can omit the build argument, in which case ``unknown`` is more
+    honest than attributing historical detector evidence to the current checkout.
+    """
+    return os.environ.get("PISAMA_BUILD_REVISION", "").strip() or "unknown"
+
+
 # Columns added after the first (id, workflow_id, received_at, raw) release, keyed by
 # table. create_all() only creates missing TABLES, not missing columns, so an existing
 # self-host DB needs these added in place. ALTER TABLE ADD COLUMN is supported by both
 # SQLite and Postgres. Keep every post-initial column here so an upgraded instance's
 # DB catches up (source_execution_id shipped without a migration and would otherwise
 # break reads on a pre-polling DB).
+# --- outcome-metric pure helpers (mirrored in the SaaS server — keep in sync) ---
+
+_DURABLE_KINDS = ("input_schema", "error_route", "workflow_patch")
+
+
+def _repair_kind(guard_config: Any) -> str:
+    """Classify a repair row by its guard_config discriminator.
+
+    NULL/empty = an AI model patch ("workflow_patch"). A truthy config carries the
+    kind key; legacy guardrail rows written before the error-route kind existed lack
+    it and are input-schema guards by construction."""
+    if not guard_config:
+        return "workflow_patch"
+    if isinstance(guard_config, str):
+        try:
+            guard_config = json.loads(guard_config)
+        except (TypeError, ValueError):
+            return "input_schema"
+    kind = (guard_config or {}).get("kind")
+    return kind if kind in ("input_schema", "error_route") else "input_schema"
+
+
+def _classify_durable_controls(rows: List[Any]) -> Dict[str, Any]:
+    """The strict durable-control rollup over (guard_config, applied_at,
+    rolled_back_at, case_status) tuples — classification in Python so the logic is
+    byte-identical across the SQLite and Postgres servers and immune to the SQL NULL
+    trap (a repair with NO reliability case must still count as not-drifted).
+
+    durable = applied AND not rolled back AND not drifted. The share is durable over
+    ALL proposed fixes (adoption x durability); the payload also carries `applied`
+    so durability-of-applied is computable without a redeploy. "harness" is reported
+    as not implemented rather than faked."""
+    by_kind: Dict[str, Dict[str, Any]] = {
+        kind: {"proposed": 0, "applied": 0, "durable": 0, "share": None}
+        for kind in _DURABLE_KINDS
+    }
+    for guard_config, applied_at, rolled_back_at, case_status in rows:
+        slot = by_kind[_repair_kind(guard_config)]
+        slot["proposed"] += 1
+        if applied_at is None:
+            continue
+        slot["applied"] += 1
+        # None != "drifted" is True: a repair with no case is simply not drifted.
+        if rolled_back_at is None and case_status != "drifted":
+            slot["durable"] += 1
+    proposed = sum(slot["proposed"] for slot in by_kind.values())
+    applied = sum(slot["applied"] for slot in by_kind.values())
+    durable = sum(slot["durable"] for slot in by_kind.values())
+    for slot in by_kind.values():
+        slot["share"] = (
+            round(slot["durable"] / slot["proposed"], 4) if slot["proposed"] else None
+        )
+    by_kind["workflow_patch"]["note"] = (
+        "Drift is not monitored for model patches; durable here means applied and "
+        "not rolled back."
+    )
+    return {
+        # Kept for old dashboards: the pre-honesty raw applied count.
+        "applied_workflow_controls": applied,
+        "proposed": proposed,
+        "applied": applied,
+        "durable": durable,
+        "share": round(durable / proposed, 4) if proposed else None,
+        "share_note": (
+            "Share is durable controls over ALL proposed fixes (adoption x "
+            "durability); durable = applied, not rolled back, and not drifted out of "
+            "the live workflow. A guard restored by hand in the n8n editor stays "
+            "drifted until re-applied. Harness controls are not implemented."
+        ),
+        "by_kind": by_kind,
+        "harness": {
+            "implemented": False,
+            "note": "No harness/eval artifact is emitted by the n8n product today.",
+        },
+    }
+
+
 _ADDED_COLUMNS = {
     "executions": {
         "source_execution_id": "VARCHAR",
         "workflow_name": "VARCHAR",
+        "build_revision": "VARCHAR",
+    },
+    "detections": {
+        "detector_version": "VARCHAR",
+        "evidence": "TEXT NOT NULL DEFAULT '{}'",
+        "seen_at": "VARCHAR",
+    },
+    "reliability_cases": {
+        "outcome": "VARCHAR",
+        "baseline_execution_count": "INTEGER NOT NULL DEFAULT 0",
+        "baseline_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "post_repair_execution_count": "INTEGER NOT NULL DEFAULT 0",
+        "post_repair_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "guard_malformed_rejected_execution_id": "INTEGER",
+        "guard_malformed_rejected_at": "VARCHAR",
+        "guard_valid_passed_execution_id": "INTEGER",
+        "guard_valid_passed_at": "VARCHAR",
+        "guard_drift_kind": "VARCHAR",
+        "guard_drift_detected_at": "VARCHAR",
+        "guard_drift_note": "TEXT",
+        "guard_route_delivered_execution_id": "INTEGER",
+        "guard_route_delivered_at": "VARCHAR",
+    },
+    "repair_attempts": {
+        "guard_config": "TEXT",
     },
 }
 
@@ -254,7 +727,9 @@ def _ensure_columns(engine) -> None:
             present = {c["name"] for c in inspector.get_columns(table)}
             for name, ddl_type in columns.items():
                 if name not in present:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}")
+                    )
 
 
 def make_engine(url: Optional[str] = None):
@@ -273,7 +748,9 @@ class Storage:
 
     def __init__(self, url: Optional[str] = None) -> None:
         self.engine = make_engine(url)
-        self._Session = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
+        self._Session = sessionmaker(
+            bind=self.engine, expire_on_commit=False, future=True
+        )
 
     def save_report(
         self,
@@ -283,7 +760,7 @@ class Storage:
     ) -> int:
         """Persist the raw payload + every detection in the report. Returns exec id."""
         try:
-            raw = json.dumps(execution_data, default=str)
+            raw = json.dumps(redact_execution_payload(execution_data), default=str)
         except (TypeError, ValueError):
             raw = str(execution_data)
 
@@ -298,6 +775,7 @@ class Storage:
                 received_at=received_at,
                 raw=raw,
                 source_execution_id=source_execution_id,
+                build_revision=build_revision(),
             )
             for d in report.detections:
                 execution.detections.append(
@@ -307,11 +785,15 @@ class Storage:
                         confidence=float(d.confidence),
                         failure_mode=d.failure_mode,
                         explanation=d.explanation or "",
+                        detector_version=getattr(d, "detector_version", None),
+                        evidence=self._encode(getattr(d, "evidence", {}) or {}),
                     )
                 )
             session.add(execution)
             session.commit()
-            return execution.id
+            execution_id = execution.id
+        self.observe_reliability_cases(execution_id)
+        return execution_id
 
     def seen_source_ids(self) -> set:
         """The set of upstream n8n execution ids already ingested (for poll dedup)."""
@@ -332,6 +814,7 @@ class Storage:
                 return None
             execution = session.get(Execution, det.execution_id)
             workflow = None
+            raw = None
             if execution is not None:
                 try:
                     raw = json.loads(execution.raw)
@@ -340,11 +823,1217 @@ class Storage:
                         workflow = raw
                 except (TypeError, ValueError):
                     workflow = None
+                    raw = None
             return {
                 "detection": det.to_dict(),
                 "workflow": workflow,
                 "workflow_id": execution.workflow_id if execution else None,
+                # The full parsed execution — the guardrail proposer reads the failing
+                # consumer's recorded input from its runData to confirm required paths.
+                "execution": raw,
             }
+
+    @staticmethod
+    def _encode(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+    def create_repair_proposal(
+        self,
+        detection_id: int,
+        workflow_id: str,
+        baseline_workflow: Dict[str, Any],
+        suggestion: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Persist a cloud suggestion before a browser can see or apply it."""
+        proposed = suggestion.get("mutated_workflow")
+        if not isinstance(proposed, dict):
+            raise ValueError(
+                "Cloud fix response did not include a mutated_workflow object."
+            )
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            row = RepairAttempt(
+                detection_id=detection_id,
+                workflow_id=str(workflow_id),
+                baseline_workflow=self._encode(baseline_workflow),
+                proposed_workflow=self._encode(proposed),
+                patch_ops=self._encode(suggestion.get("patch_ops") or []),
+                explanation=str(suggestion.get("explanation") or ""),
+                status="proposed",
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return row.to_dict()
+
+    def create_guardrail_proposal(
+        self,
+        detection_id: int,
+        workflow_id: str,
+        baseline_workflow: Dict[str, Any],
+        guard_config: Dict[str, Any],
+        explanation: str,
+    ) -> Dict[str, Any]:
+        """Persist a deterministic input-schema guardrail proposal.
+
+        The rejection destination is chosen by the operator in a SECOND step, so the
+        proposed_workflow is not buildable yet — it is stored as the baseline placeholder
+        and rebuilt by ``set_guardrail_destination``. ``guard_config`` carries the derived
+        paths and ``destination: None``; the apply path refuses until a destination is set.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            row = RepairAttempt(
+                detection_id=detection_id,
+                workflow_id=str(workflow_id),
+                baseline_workflow=self._encode(baseline_workflow),
+                proposed_workflow=self._encode(baseline_workflow),
+                patch_ops=self._encode([]),
+                explanation=str(explanation or ""),
+                status="proposed",
+                guard_config=self._encode(guard_config),
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return row.to_dict(include_workflows=True)
+
+    def set_guardrail_destination(
+        self,
+        repair_id: int,
+        proposed_workflow: Dict[str, Any],
+        guard_config: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Record the operator's chosen rejection destination and the built workflow.
+
+        Only a still-``proposed`` guardrail repair can have its destination set/changed.
+        The caller builds ``proposed_workflow`` (engine-side) and passes the completed
+        ``guard_config`` (destination filled in); storage stays engine-agnostic.
+        """
+        with self._Session() as session:
+            row = session.get(RepairAttempt, repair_id)
+            if row is None or row.guard_config is None:
+                return None
+            if row.status != "proposed":
+                raise ValueError(f"Repair is already {row.status}.")
+            row.proposed_workflow = self._encode(proposed_workflow)
+            row.guard_config = self._encode(guard_config)
+            session.commit()
+            return row.to_dict(include_workflows=True)
+
+    def get_repair(
+        self, repair_id: int, include_workflows: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.get(RepairAttempt, repair_id)
+            return row.to_dict(include_workflows=include_workflows) if row else None
+
+    def record_operational_event(
+        self, event_type: str, details: Dict[str, Any]
+    ) -> None:
+        """Persist a minimal local health event. Workflow payloads never belong here."""
+        with self._Session() as session:
+            session.add(
+                OperationalEvent(
+                    event_type=event_type,
+                    details=self._encode(details),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+            session.commit()
+
+    def mark_detection_seen(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        """Record that an operator opened this detection's detail view. First
+        timestamp wins (idempotent); None for an unknown id."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            row = session.get(DetectionRow, detection_id)
+            if row is None:
+                return None
+            if row.seen_at is None:
+                row.seen_at = now
+                session.commit()
+            return {"id": row.id, "seen_at": row.seen_at}
+
+    def submit_detection_feedback(
+        self, detection_id: int, verdict: str, note: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Record one opt-in operator verdict. None means the detection does not exist."""
+        with self._Session() as session:
+            if session.get(DetectionRow, detection_id) is None:
+                return None
+            feedback = DetectionFeedback(
+                detection_id=detection_id,
+                verdict=verdict,
+                note=note.strip()[:1000] if note else None,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(feedback)
+            session.commit()
+            return feedback.to_dict()
+
+    def latest_detection_feedback(self, detection_id: int) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.execute(
+                select(DetectionFeedback)
+                .where(DetectionFeedback.detection_id == detection_id)
+                .order_by(desc(DetectionFeedback.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            return row.to_dict() if row else None
+
+    def operational_summary(self) -> Dict[str, Any]:
+        """Local operational signals for an operator, derived from real persisted state."""
+        with self._Session() as session:
+            executions = session.scalar(select(func.count(Execution.id))) or 0
+            fired = (
+                session.scalar(
+                    select(func.count(DetectionRow.id)).where(
+                        DetectionRow.detected.is_(True)
+                    )
+                )
+                or 0
+            )
+            latest_execution = session.scalar(select(func.max(Execution.received_at)))
+            detector_rows = session.execute(
+                select(DetectionRow.detector, func.count(DetectionRow.id))
+                .where(DetectionRow.detected.is_(True))
+                .group_by(DetectionRow.detector)
+                .order_by(desc(func.count(DetectionRow.id)))
+            ).all()
+            repair_rows = session.execute(
+                select(RepairAttempt.status, func.count(RepairAttempt.id)).group_by(
+                    RepairAttempt.status
+                )
+            ).all()
+            feedback_rows = session.execute(
+                select(
+                    DetectionFeedback.verdict, func.count(DetectionFeedback.id)
+                ).group_by(DetectionFeedback.verdict)
+            ).all()
+            case_rows = session.execute(
+                select(ReliabilityCase.status, func.count(ReliabilityCase.id)).group_by(
+                    ReliabilityCase.status
+                )
+            ).all()
+            events = session.execute(
+                select(OperationalEvent).order_by(desc(OperationalEvent.id)).limit(100)
+            ).scalars()
+            latest_events: Dict[str, Dict[str, Any]] = {}
+            for event in events:
+                latest_events.setdefault(event.event_type, event.to_dict())
+            return {
+                "executions_analyzed": executions,
+                "detections_fired": fired,
+                "last_ingested_at": latest_execution,
+                "fired_by_detector": dict(detector_rows),
+                "repairs_by_status": dict(repair_rows),
+                "feedback_by_verdict": dict(feedback_rows),
+                "reliability_cases_by_status": dict(case_rows),
+                "reliability_metrics": self._reliability_metrics(session),
+                "latest_events": latest_events,
+            }
+
+    @staticmethod
+    def _percentile(values: List[float], percentile: float) -> Optional[float]:
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, ceil(len(ordered) * percentile) - 1)
+        return round(ordered[index], 3)
+
+    def _reliability_metrics(self, session: Any) -> Dict[str, Any]:
+        """Aggregate only locally persisted evidence, with explicit denominators."""
+        return {
+            "diagnosis": self._diagnosis_metrics(session),
+            "remediation": self._remediation_metrics(session),
+            "time_to_applied_workflow_control": self._time_to_control_metrics(session),
+            "time_to_verified_control": self._time_to_verified_metrics(session),
+            "durable_controls": self._durable_control_metrics(session),
+        }
+
+    @staticmethod
+    def _diagnosis_metrics(session: Any) -> Dict[str, Any]:
+        """Acceptance with explicit denominators. acceptance_rate keeps the
+        reviewed-only denominator (a self-selected sample — labeled, not hidden);
+        acceptance_of_seen uses the sound one (operator actually opened the detail);
+        review_coverage says how much of what fired was ever reviewed at all."""
+        feedback_rows = session.execute(
+            select(DetectionFeedback).order_by(
+                DetectionFeedback.detection_id, desc(DetectionFeedback.id)
+            )
+        ).scalars()
+        latest_feedback: Dict[int, str] = {}
+        for feedback in feedback_rows:
+            latest_feedback.setdefault(feedback.detection_id, feedback.verdict)
+        detector_of: Dict[int, str] = {}
+        if latest_feedback:
+            detector_of = dict(
+                session.execute(
+                    select(DetectionRow.id, DetectionRow.detector).where(
+                        DetectionRow.id.in_(list(latest_feedback))
+                    )
+                ).all()
+            )
+        accepted = sum(
+            verdict in {"useful", "fixed_manually"}
+            for verdict in latest_feedback.values()
+        )
+        rejected = sum(verdict == "not_useful" for verdict in latest_feedback.values())
+        reviewed = accepted + rejected
+        detections_fired = (
+            session.scalar(
+                select(func.count(DetectionRow.id)).where(
+                    DetectionRow.detected.is_(True)
+                )
+            )
+            or 0
+        )
+        seen = (
+            session.scalar(
+                select(func.count(DetectionRow.id)).where(
+                    DetectionRow.detected.is_(True),
+                    DetectionRow.seen_at.is_not(None),
+                )
+            )
+            or 0
+        )
+        fired_by_detector = dict(
+            session.execute(
+                select(DetectionRow.detector, func.count(DetectionRow.id))
+                .where(DetectionRow.detected.is_(True))
+                .group_by(DetectionRow.detector)
+            ).all()
+        )
+        seen_by_detector = dict(
+            session.execute(
+                select(DetectionRow.detector, func.count(DetectionRow.id))
+                .where(
+                    DetectionRow.detected.is_(True),
+                    DetectionRow.seen_at.is_not(None),
+                )
+                .group_by(DetectionRow.detector)
+            ).all()
+        )
+        by_detector: Dict[str, Dict[str, Any]] = {}
+        for detector, fired_count in fired_by_detector.items():
+            by_detector[detector] = {
+                "fired": fired_count,
+                "seen": seen_by_detector.get(detector, 0),
+                "accepted": 0,
+                "rejected": 0,
+                "reviewed": 0,
+                "acceptance_rate": None,
+            }
+        for detection_id, verdict in latest_feedback.items():
+            detector = detector_of.get(detection_id)
+            if detector is None:
+                continue
+            slot = by_detector.setdefault(
+                detector,
+                {
+                    "fired": 0,
+                    "seen": 0,
+                    "accepted": 0,
+                    "rejected": 0,
+                    "reviewed": 0,
+                    "acceptance_rate": None,
+                },
+            )
+            if verdict in {"useful", "fixed_manually"}:
+                slot["accepted"] += 1
+            elif verdict == "not_useful":
+                slot["rejected"] += 1
+        for slot in by_detector.values():
+            slot["reviewed"] = slot["accepted"] + slot["rejected"]
+            slot["acceptance_rate"] = (
+                round(slot["accepted"] / slot["reviewed"], 4)
+                if slot["reviewed"]
+                else None
+            )
+        return {
+            "accepted": accepted,
+            "rejected": rejected,
+            "reviewed": reviewed,
+            "acceptance_rate": round(accepted / reviewed, 4) if reviewed else None,
+            "seen": seen,
+            "acceptance_of_seen": round(accepted / seen, 4) if seen else None,
+            "review_coverage": (
+                round(reviewed / detections_fired, 4) if detections_fired else None
+            ),
+            "by_detector": by_detector,
+        }
+
+    def _remediation_metrics(self, session: Any) -> Dict[str, Any]:
+        outcome_rows = session.execute(
+            select(ReliabilityCase.outcome, func.count(ReliabilityCase.id))
+            .where(ReliabilityCase.outcome.is_not(None))
+            .group_by(ReliabilityCase.outcome)
+        ).all()
+        outcomes = dict(outcome_rows)
+        prevented = outcomes.get("prevented", 0)
+        recurred = outcomes.get("recurred", 0)
+        verified = prevented + recurred
+        return {
+            "prevented": prevented,
+            "recurred": recurred,
+            "inconclusive": outcomes.get("inconclusive", 0),
+            "verified_outcomes": verified,
+            "verified_remediation_rate": (
+                round(prevented / verified, 4) if verified else None
+            ),
+            **self._comparison_metrics(session),
+        }
+
+    @staticmethod
+    def _comparison_metrics(session: Any) -> Dict[str, Any]:
+        minimum = comparison_minimum_execution_count()
+        cases = (
+            session.execute(
+                select(ReliabilityCase).where(
+                    ReliabilityCase.baseline_execution_count >= minimum,
+                    ReliabilityCase.post_repair_execution_count
+                    >= ReliabilityCase.baseline_execution_count,
+                    ReliabilityCase.baseline_failure_count > 0,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return Storage._comparison_result(
+            len(cases),
+            minimum,
+            sum(case.baseline_execution_count for case in cases),
+            sum(case.baseline_failure_count for case in cases),
+            sum(case.post_repair_execution_count for case in cases),
+            sum(case.post_repair_failure_count for case in cases),
+        )
+
+    @staticmethod
+    def _comparison_result(
+        case_count: int,
+        minimum: int,
+        baseline_executions: int,
+        baseline_failures: int,
+        post_executions: int,
+        post_failures: int,
+    ) -> Dict[str, Any]:
+        baseline_rate = (
+            baseline_failures / baseline_executions if baseline_executions else None
+        )
+        post_rate = post_failures / post_executions if post_executions else None
+        reduction = (
+            round(1 - (post_rate / baseline_rate), 4)
+            if baseline_rate and post_rate is not None
+            else None
+        )
+        note = (
+            f"Pooled across {case_count} complete equal-sized case window(s)."
+            if reduction is not None
+            else f"Requires at least {minimum} comparable baseline and post-change executions per case."
+        )
+        return {
+            "comparison_cases": case_count,
+            "baseline_failure_rate": round(baseline_rate, 4)
+            if baseline_rate is not None
+            else None,
+            "post_repair_failure_rate": round(post_rate, 4)
+            if post_rate is not None
+            else None,
+            "recurrence_reduction": reduction,
+            "recurrence_reduction_note": note,
+        }
+
+    def _time_to_control_metrics(self, session: Any) -> Dict[str, Any]:
+        applied_rows = session.execute(
+            select(RepairAttempt.applied_at, Execution.received_at)
+            .join(DetectionRow, RepairAttempt.detection_id == DetectionRow.id)
+            .join(Execution, DetectionRow.execution_id == Execution.id)
+            .where(RepairAttempt.applied_at.is_not(None))
+        ).all()
+        elapsed_seconds = []
+        for applied_at, received_at in applied_rows:
+            applied, received = _parse_iso(applied_at), _parse_iso(received_at)
+            if applied is not None and received is not None and applied >= received:
+                elapsed_seconds.append((applied - received).total_seconds())
+        return {
+            "sample_size": len(elapsed_seconds),
+            "median_seconds": self._percentile(elapsed_seconds, 0.5),
+            "p90_seconds": self._percentile(elapsed_seconds, 0.9),
+        }
+
+    def _time_to_verified_metrics(self, session: Any) -> Dict[str, Any]:
+        """received_at (ingest) -> outcome_at where outcome='prevented'. The
+        time-to-SAFE delta: verification happened, not merely an apply. outcome
+        survives a later rollback by design, so a prevented-then-rolled-back case
+        still counts — the verification did happen."""
+        rows = session.execute(
+            select(ReliabilityCase.outcome_at, Execution.received_at)
+            .join(DetectionRow, ReliabilityCase.detection_id == DetectionRow.id)
+            .join(Execution, DetectionRow.execution_id == Execution.id)
+            .where(
+                ReliabilityCase.outcome == "prevented",
+                ReliabilityCase.outcome_at.is_not(None),
+            )
+        ).all()
+        elapsed_seconds = []
+        for outcome_at, received_at in rows:
+            later, earlier = _parse_iso(outcome_at), _parse_iso(received_at)
+            if later is not None and earlier is not None and later >= earlier:
+                elapsed_seconds.append((later - earlier).total_seconds())
+        return {
+            "sample_size": len(elapsed_seconds),
+            "median_seconds": self._percentile(elapsed_seconds, 0.5),
+            "p90_seconds": self._percentile(elapsed_seconds, 0.9),
+        }
+
+    @staticmethod
+    def _durable_control_metrics(session: Any) -> Dict[str, Any]:
+        rows = session.execute(
+            select(
+                RepairAttempt.guard_config,
+                RepairAttempt.applied_at,
+                RepairAttempt.rolled_back_at,
+                ReliabilityCase.status,
+            ).outerjoin(
+                ReliabilityCase, ReliabilityCase.repair_id == RepairAttempt.id
+            )
+        ).all()
+        return _classify_durable_controls(rows)
+
+    def _claim_repair(
+        self,
+        repair_id: int,
+        from_status: Union[str, Sequence[str]],
+        to_status: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically own a repair transition, preventing double-click races."""
+        statuses = (from_status,) if isinstance(from_status, str) else tuple(from_status)
+        with self._Session() as session:
+            claimed = session.execute(
+                update(RepairAttempt)
+                .where(
+                    RepairAttempt.id == repair_id,
+                    RepairAttempt.status.in_(statuses),
+                )
+                .values(status=to_status, failure_reason=None)
+            ).rowcount
+            if claimed != 1:
+                session.rollback()
+                return None
+            session.commit()
+            row = session.get(RepairAttempt, repair_id)
+            return row.to_dict(include_workflows=True) if row else None
+
+    def claim_repair_apply(self, repair_id: int) -> Optional[Dict[str, Any]]:
+        return self._claim_repair(repair_id, "proposed", "applying")
+
+    def claim_repair_rollback(self, repair_id: int) -> Optional[Dict[str, Any]]:
+        # apply_unverified is also rollback-eligible: the live PUT was attempted but its
+        # result could not be confirmed, so the workflow may be mutated.
+        return self._claim_repair(
+            repair_id, ("applied", "apply_unverified"), "rolling_back"
+        )
+
+    def record_repair_snapshot(
+        self, repair_id: int, snapshot: Dict[str, Any], applied_workflow: Dict[str, Any]
+    ) -> None:
+        """Durably persist the restore point BEFORE the live PUT, keeping status 'applying'.
+
+        This is what makes an interrupted apply recoverable: if the process dies or the
+        bookkeeping raises after n8n was mutated, the snapshot (and the intended mutated
+        workflow) are already on the row, so the repair can still be rolled back instead
+        of stranding a changed production workflow.
+        """
+        with self._Session() as session:
+            changed = session.execute(
+                update(RepairAttempt)
+                .where(
+                    RepairAttempt.id == repair_id, RepairAttempt.status == "applying"
+                )
+                .values(
+                    snapshot=self._encode(snapshot),
+                    applied_workflow=self._encode(applied_workflow),
+                )
+            ).rowcount
+            if changed != 1:
+                session.rollback()
+                raise ValueError("Repair state changed concurrently.")
+            session.commit()
+
+    def mark_repair_apply_unverified(self, repair_id: int, reason: str) -> Dict[str, Any]:
+        """The live PUT was attempted but its outcome is unconfirmed — leave the repair
+        rollback-eligible rather than stranding it as 'failed'."""
+        return self._finish_repair(
+            repair_id,
+            "applying",
+            "apply_unverified",
+            failure_reason=reason[:1000],
+            applied_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def mark_repair_applied(
+        self, repair_id: int, snapshot: Dict[str, Any], applied_workflow: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        repair = self._finish_repair(
+            repair_id,
+            "applying",
+            "applied",
+            snapshot=self._encode(snapshot),
+            applied_workflow=self._encode(applied_workflow),
+            applied_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self._start_reliability_case(repair_id)
+        return repair
+
+    def mark_repair_rolled_back(self, repair_id: int) -> Dict[str, Any]:
+        repair = self._finish_repair(
+            repair_id,
+            "rolling_back",
+            "rolled_back",
+            rolled_back_at=datetime.now(timezone.utc).isoformat(),
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.execute(
+                select(ReliabilityCase).where(ReliabilityCase.repair_id == repair_id)
+            ).scalar_one_or_none()
+            if case is not None:
+                if case.outcome is None and case.status in {
+                    "prevented",
+                    "inconclusive",
+                    "recurred",
+                }:
+                    case.outcome = case.status
+                case.status = "rolled_back"
+                case.updated_at = now
+            session.commit()
+        return repair
+
+    def mark_repair_failed(self, repair_id: int, from_status: str, reason: str) -> None:
+        self._finish_repair(
+            repair_id,
+            from_status,
+            "failed",
+            failure_reason=reason[:1000],
+        )
+
+    def mark_repair_stale(self, repair_id: int, from_status: str, reason: str) -> None:
+        self._finish_repair(
+            repair_id,
+            from_status,
+            "stale",
+            failure_reason=reason[:1000],
+        )
+
+    def _finish_repair(
+        self, repair_id: int, from_status: str, to_status: str, **values: Any
+    ) -> Dict[str, Any]:
+        with self._Session() as session:
+            changed = session.execute(
+                update(RepairAttempt)
+                .where(
+                    RepairAttempt.id == repair_id, RepairAttempt.status == from_status
+                )
+                .values(status=to_status, **values)
+            ).rowcount
+            if changed != 1:
+                session.rollback()
+                raise ValueError("Repair state changed concurrently.")
+            session.commit()
+            row = session.get(RepairAttempt, repair_id)
+            assert row is not None
+            return row.to_dict()
+
+    def _start_reliability_case(self, repair_id: int) -> None:
+        """Open the post-apply observation record from the original real detection."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            existing = session.execute(
+                select(ReliabilityCase).where(ReliabilityCase.repair_id == repair_id)
+            ).scalar_one_or_none()
+            if existing is not None:
+                return
+            repair = session.get(RepairAttempt, repair_id)
+            if repair is None:
+                raise ValueError("Unknown repair id.")
+            detection = session.get(DetectionRow, repair.detection_id)
+            if detection is None:
+                raise ValueError("Repair has no source detection.")
+            baseline_executions, baseline_failures = self._baseline_window(
+                session,
+                repair.workflow_id,
+                detection.detector,
+                detection.failure_mode,
+                repair.applied_at,
+            )
+            session.add(
+                ReliabilityCase(
+                    repair_id=repair.id,
+                    detection_id=detection.id,
+                    workflow_id=repair.workflow_id,
+                    detector=detection.detector,
+                    failure_mode=detection.failure_mode,
+                    status="observing",
+                    baseline_execution_count=baseline_executions,
+                    baseline_failure_count=baseline_failures,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+        self.record_operational_event(
+            "reliability_case_opened", {"repair_id": repair_id}
+        )
+
+    @staticmethod
+    def _is_runtime_execution(raw: Dict[str, Any]) -> bool:
+        trace = parse_trace(raw)
+        return trace.get("available") and trace.get("kind") == "runtime"
+
+    def _baseline_window(
+        self,
+        session: Any,
+        workflow_id: str,
+        detector: str,
+        failure_mode: Optional[str],
+        applied_at: Optional[str],
+    ) -> tuple[int, int]:
+        """Return a bounded pre-apply runtime window from persisted real executions."""
+        statement = select(Execution).where(Execution.workflow_id == workflow_id)
+        if applied_at is not None:
+            statement = statement.where(Execution.received_at <= applied_at)
+        candidates = session.execute(
+            statement.order_by(desc(Execution.id)).limit(baseline_window_limit() * 20)
+        ).scalars()
+        runtime_ids = []
+        for execution in candidates:
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                continue
+            if self._is_runtime_execution(raw):
+                runtime_ids.append(execution.id)
+            if len(runtime_ids) >= baseline_window_limit():
+                break
+        if not runtime_ids:
+            return 0, 0
+        mode_clause = (
+            DetectionRow.failure_mode.is_(None)
+            if failure_mode is None
+            else DetectionRow.failure_mode == failure_mode
+        )
+        failure_ids = set(
+            session.execute(
+                select(DetectionRow.execution_id).where(
+                    DetectionRow.execution_id.in_(runtime_ids),
+                    DetectionRow.detector == detector,
+                    DetectionRow.detected.is_(True),
+                    mode_clause,
+                )
+            ).scalars()
+        )
+        return len(runtime_ids), len(failure_ids)
+
+    def observe_reliability_cases(self, execution_id: int) -> None:
+        """Attach a later real runtime execution to applicable post-repair cases.
+
+        A matching fired fingerprint is a recurrence. A runtime execution that
+        completed successfully without that fingerprint increases exposure evidence.
+        The method deliberately never marks a case ``prevented`` automatically.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            execution = session.get(Execution, execution_id)
+            if execution is None or not execution.workflow_id:
+                return
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return
+            execution_started_at = _parse_iso(raw.get("startedAt"))
+            fired = {
+                (row.detector, row.failure_mode)
+                for row in session.execute(
+                    select(DetectionRow).where(
+                        DetectionRow.execution_id == execution_id,
+                        DetectionRow.detected.is_(True),
+                    )
+                ).scalars()
+            }
+            cases = (
+                session.execute(
+                    select(ReliabilityCase).where(
+                        ReliabilityCase.workflow_id == execution.workflow_id,
+                        ReliabilityCase.status.in_(("observing", "recurred")),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            trace = parse_trace(raw)
+            runtime_execution = (
+                trace.get("available") and trace.get("kind") == "runtime"
+            )
+            successful_runtime = runtime_execution and trace.get("status") == "success"
+            changed = False
+            for case in cases:
+                case_changed = self._observe_reliability_case(
+                    case,
+                    execution_id,
+                    fired,
+                    execution_started_at,
+                    runtime_execution,
+                    successful_runtime,
+                    now,
+                )
+                changed = case_changed or changed
+            if changed:
+                session.commit()
+
+    @staticmethod
+    def _is_historical_execution(
+        execution_started_at: Optional[datetime], case: ReliabilityCase
+    ) -> bool:
+        case_created_at = _parse_iso(case.created_at)
+        return bool(
+            execution_started_at is not None
+            and case_created_at is not None
+            and execution_started_at <= case_created_at
+        )
+
+    def _observe_reliability_case(
+        self,
+        case: ReliabilityCase,
+        execution_id: int,
+        fired: set,
+        execution_started_at: Optional[datetime],
+        runtime_execution: bool,
+        successful_runtime: bool,
+        observed_at: str,
+    ) -> bool:
+        """Mutate one case only when this execution is valid new evidence."""
+        if self._is_historical_execution(execution_started_at, case):
+            return False
+        matching_failure = (case.detector, case.failure_mode) in fired
+        if matching_failure:
+            self._record_recurrence(case, execution_id)
+        if successful_runtime:
+            self._record_success(case, execution_id)
+        if runtime_execution:
+            self._record_comparison_execution(case, matching_failure)
+        if not (matching_failure or successful_runtime or runtime_execution):
+            return False
+        case.updated_at = observed_at
+        return True
+
+    @staticmethod
+    def _record_recurrence(case: ReliabilityCase, execution_id: int) -> None:
+        case.status = "recurred"
+        case.outcome = "recurred"
+        case.recurrence_count += 1
+        case.first_recurrence_execution_id = (
+            case.first_recurrence_execution_id or execution_id
+        )
+
+    @staticmethod
+    def _record_success(case: ReliabilityCase, execution_id: int) -> None:
+        case.successful_execution_count += 1
+        case.first_success_execution_id = (
+            case.first_success_execution_id or execution_id
+        )
+
+    @staticmethod
+    def _record_comparison_execution(
+        case: ReliabilityCase, matching_failure: bool
+    ) -> None:
+        if case.post_repair_execution_count >= case.baseline_execution_count:
+            return
+        case.post_repair_execution_count += 1
+        case.post_repair_failure_count += int(matching_failure)
+
+    def get_reliability_case(self, case_id: int) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.get(ReliabilityCase, case_id)
+            return row.to_dict() if row else None
+
+    def get_reliability_case_for_detection(
+        self, detection_id: int
+    ) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.execute(
+                select(ReliabilityCase)
+                .where(ReliabilityCase.detection_id == detection_id)
+                .order_by(desc(ReliabilityCase.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            return row.to_dict() if row else None
+
+    def list_reliability_cases(self) -> List[Dict[str, Any]]:
+        with self._Session() as session:
+            rows = session.execute(
+                select(ReliabilityCase).order_by(desc(ReliabilityCase.id))
+            ).scalars()
+            return [row.to_dict() for row in rows]
+
+    def list_applied_guardrail_repairs(self) -> List[Dict[str, Any]]:
+        """Applied guardrails whose fragment should still be live in n8n — the drift
+        sweep's work list. Model fixes are excluded (guard_config IS NULL): they mutate
+        settings/parameters and have no fragment topology to assert. ``apply_unverified``
+        is included deliberately — that state means the PUT may well have landed, so the
+        guard may be live and is exactly as worth checking."""
+        with self._Session() as session:
+            rows = (
+                session.execute(
+                    select(RepairAttempt)
+                    .where(
+                        RepairAttempt.status.in_(("applied", "apply_unverified")),
+                        RepairAttempt.guard_config.is_not(None),
+                    )
+                    .order_by(RepairAttempt.id)
+                )
+                .scalars()
+                .all()
+            )
+            return [row.to_dict(include_workflows=True) for row in rows]
+
+    def record_guard_drift(
+        self, repair_id: int, kind: str, note: str
+    ) -> Optional[Dict[str, Any]]:
+        """Mark the repair's reliability case as drifted. Idempotent per kind, so a guard
+        that stays broken across polls records once and ``guard_drift_detected_at`` keeps
+        pointing at when it ACTUALLY broke rather than at the latest poll."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.execute(
+                select(ReliabilityCase).where(ReliabilityCase.repair_id == repair_id)
+            ).scalar_one_or_none()
+            if case is None:
+                return None
+            if case.status == "drifted" and case.guard_drift_kind == kind:
+                return None
+            case.status = "drifted"
+            case.guard_drift_kind = kind
+            case.guard_drift_note = (note or "")[:1000]
+            case.guard_drift_detected_at = now
+            case.updated_at = now
+            session.commit()
+            result = case.to_dict()
+        self.record_operational_event(
+            "guard_drift_detected", {"repair_id": repair_id, "kind": kind}
+        )
+        return result
+
+    def list_candidate_executions(
+        self, case_id: int, limit: int = 20
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Recent ingested executions of the guarded workflow, each annotated with how it
+        routed through THIS guard, so the dashboard can offer a probe picker instead of a
+        raw-id field. ``matches_kind`` classifies an execution as a clean
+        ``malformed_rejected`` probe (the rejection destination ran and the guarded consumer
+        was skipped) or ``valid_passed`` (the inverse); ``record_guard_verification`` still
+        re-checks the routing authoritatively when the probe is recorded. None when the case
+        id is unknown. Only post-apply executions are returned — a pre-guard run has no guard
+        nodes in its runData, so it could never be evidence about the installed guard.
+        """
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                return None
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = repair.to_dict().get("guard_config") if repair else None
+            conditions = [Execution.workflow_id == case.workflow_id]
+            if repair is not None and repair.applied_at:
+                conditions.append(Execution.received_at >= repair.applied_at)
+            rows = (
+                session.execute(
+                    select(Execution)
+                    .where(*conditions)
+                    .order_by(desc(Execution.id))
+                    .limit(limit)
+                )
+                .scalars()
+                .all()
+            )
+            execs = [(e.id, e.source_execution_id, e.received_at, e.raw) for e in rows]
+
+        consumer = (guard or {}).get("failing_node")
+        destination = (guard or {}).get("destination_node_name")
+        out: List[Dict[str, Any]] = []
+        for execution_id, source_execution_id, received_at, raw in execs:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = {}
+            run_data = (
+                ((parsed.get("data") or {}).get("resultData") or {}).get("runData") or {}
+            )
+            ran = {name for name, runs in run_data.items() if runs}
+            destination_ran = bool(destination) and destination in ran
+            consumer_ran = bool(consumer) and consumer in ran
+            matches_kind = None
+            if destination and consumer:
+                if destination_ran and not consumer_ran:
+                    matches_kind = "malformed_rejected"
+                elif consumer_ran and not destination_ran:
+                    matches_kind = "valid_passed"
+            out.append(
+                {
+                    "execution_id": execution_id,
+                    "source_execution_id": source_execution_id,
+                    "received_at": received_at,
+                    "destination_ran": destination_ran,
+                    "consumer_ran": consumer_ran,
+                    "matches_kind": matches_kind,
+                }
+            )
+        return out
+
+    def execution_id_for_source(self, source_execution_id: str) -> Optional[int]:
+        """The internal execution id for an ingested n8n execution, or None.
+
+        Lets a caller that knows the n8n execution id (e.g. after firing a webhook)
+        reference the right ingested execution without it having produced a detection.
+        """
+        with self._Session() as session:
+            row = (
+                session.query(Execution)
+                .filter(Execution.source_execution_id == str(source_execution_id))
+                .order_by(Execution.id.desc())
+                .first()
+            )
+            return row.id if row else None
+
+    def _execution_run_nodes(self, execution_id: int) -> Optional[set]:
+        """The set of node names that actually produced a run in an ingested execution,
+        or None if the execution is unknown."""
+        with self._Session() as session:
+            execution = session.get(Execution, execution_id)
+            if execution is None:
+                return None
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return set()
+        run_data = (
+            ((raw.get("data") or {}).get("resultData") or {}).get("runData") or {}
+        )
+        return {name for name, runs in run_data.items() if runs}
+
+    def _execution_routing(self, execution_id: int):
+        """(workflow_id, {node names that produced a run}) for an ingested execution, or
+        None if unknown. The workflow_id lets a caller BIND a probe to the workflow the
+        repair was applied to: an execution of a different workflow that merely happens to
+        share a node name is not evidence about this repair."""
+        with self._Session() as session:
+            execution = session.get(Execution, execution_id)
+            if execution is None:
+                return None
+            workflow_id = execution.workflow_id
+            try:
+                raw = json.loads(execution.raw)
+            except (TypeError, ValueError):
+                return workflow_id, set(), None
+        run_data = (
+            ((raw.get("data") or {}).get("resultData") or {}).get("runData") or {}
+        )
+        started_at = raw.get("startedAt") if isinstance(raw, dict) else None
+        return (
+            workflow_id,
+            {name for name, runs in run_data.items() if runs},
+            started_at,
+        )
+
+    def record_route_verification(self, case_id: int, execution_id: int) -> Dict[str, Any]:
+        """Record the ONE routed-incident probe an error-route repair needs: an execution
+        of the TARGET error workflow, produced after the repair was applied.
+
+        The apply-time static check (target resolves, has an Error Trigger, source points
+        at it) is a PRECONDITION — it proves the route is well-formed, not that an incident
+        was ever delivered. This proves delivery."""
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                raise ValueError("Unknown reliability case id.")
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = (repair.to_dict().get("guard_config") or {}) if repair else {}
+            if guard.get("kind") != "error_route":
+                raise ValueError("This reliability case is not an error-route case.")
+            target_workflow_id = guard.get("target_workflow_id")
+            applied_at = repair.applied_at if repair else None
+
+        routing = self._execution_routing(execution_id)
+        if routing is None:
+            raise ValueError("Unknown execution id — ingest the probe execution first.")
+        exec_workflow_id, _run_nodes, started_at = routing
+        if str(exec_workflow_id) != str(target_workflow_id):
+            raise ValueError(
+                "The probe execution belongs to a different workflow than the configured "
+                "error-workflow target, so it is not evidence that this route delivered."
+            )
+        if applied_at and started_at and started_at < applied_at:
+            raise ValueError(
+                "The probe execution predates the repair being applied, so it is not "
+                "evidence that this repair routed anything."
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            case.guard_route_delivered_execution_id = execution_id
+            case.guard_route_delivered_at = now
+            case.updated_at = now
+            session.commit()
+            return case.to_dict()
+
+    def record_guard_verification(
+        self, case_id: int, kind: str, execution_id: int
+    ) -> Dict[str, Any]:
+        """Record one guardrail prevention probe against a REAL ingested execution.
+
+        ``kind`` is ``malformed_rejected`` or ``valid_passed``. The execution's runData
+        must actually show the expected routing — malformed input must reach the rejection
+        destination and NOT the guarded consumer; valid input must reach the consumer.
+        This is what makes the reliability case verified evidence, not a checkbox.
+        Raises ValueError with the reason on any mismatch; returns the updated case.
+        """
+        if kind not in ("malformed_rejected", "valid_passed"):
+            raise ValueError("kind must be 'malformed_rejected' or 'valid_passed'.")
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                raise ValueError("Unknown reliability case id.")
+            case_workflow_id = case.workflow_id
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = repair.to_dict().get("guard_config") if repair else None
+            if not guard:
+                raise ValueError("This reliability case is not a guardrail case.")
+            if guard.get("kind") != "input_schema":
+                # Probe kinds are not interchangeable. Falling through would fail later
+                # with a confusing "destination did not run" — say the real reason.
+                raise ValueError(
+                    f"This reliability case is a {guard.get('kind')!r} repair, which is "
+                    "verified by its own probe, not by guardrail routing probes."
+                )
+
+        routing = self._execution_routing(execution_id)
+        if routing is None:
+            raise ValueError("Unknown execution id — ingest the probe execution first.")
+        exec_workflow_id, run_nodes, _started_at = routing
+        # Bind the probe to the guarded workflow: a probe from a DIFFERENT workflow (even
+        # one that happens to share a node name) is not evidence about THIS guard.
+        if str(exec_workflow_id) != str(case_workflow_id):
+            raise ValueError(
+                "The probe execution belongs to a different workflow than the guarded one."
+            )
+
+        consumer = guard.get("failing_node")
+        destination = guard.get("destination_node_name")
+        if kind == "malformed_rejected":
+            if destination not in run_nodes:
+                raise ValueError(
+                    f"Rejection destination {destination!r} did not run — malformed "
+                    "input was not rejected by the guard in this execution."
+                )
+            if consumer in run_nodes:
+                raise ValueError(
+                    f"Guarded consumer {consumer!r} still ran — malformed input reached "
+                    "the business path despite the guard."
+                )
+        else:  # valid_passed
+            if consumer not in run_nodes:
+                raise ValueError(
+                    f"Guarded consumer {consumer!r} did not run — valid input did not "
+                    "reach the business path through the guard."
+                )
+            if destination in run_nodes:
+                raise ValueError(
+                    f"Rejection destination {destination!r} ran on a valid input — the "
+                    "guard rejected input it should have passed."
+                )
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if kind == "malformed_rejected":
+                case.guard_malformed_rejected_execution_id = execution_id
+                case.guard_malformed_rejected_at = now
+            else:
+                case.guard_valid_passed_execution_id = execution_id
+                case.guard_valid_passed_at = now
+            case.updated_at = now
+            session.commit()
+            return case.to_dict()
+
+    def _case_repair_kind(self, case: "ReliabilityCase") -> Optional[str]:
+        """Which prevention primitive this case is about, or None for a model fix.
+
+        Replaces a boolean ``_is_guardrail_case``, which was a live footgun the moment a
+        SECOND kind of repair carried a truthy ``guard_config``: an error-route case would
+        have been asked for guardrail routing probes that can never exist for it, leaving
+        it permanently unconcludable."""
+        with self._Session() as session:
+            repair = session.get(RepairAttempt, case.repair_id)
+            guard = repair.to_dict().get("guard_config") if repair else None
+            return (guard or {}).get("kind") if guard else None
+
+    def conclude_reliability_case(
+        self, case_id: int, outcome: str, note: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Record an accountable human conclusion after the evidence is available."""
+        with self._Session() as session:
+            case = session.get(ReliabilityCase, case_id)
+            if case is None:
+                return None
+            if case.status == "drifted":
+                # The probes proved the guard worked WHEN IT WAS WIRED. It is not wired
+                # now, so it is not preventing anything — past evidence must not launder
+                # a control that no longer exists. Restore the guard, then conclude.
+                raise ValueError(
+                    "This guard has drifted out of the live workflow "
+                    f"({case.guard_drift_kind}) and is no longer protecting it. "
+                    "Restore or re-apply the guard before recording an outcome."
+                )
+            if case.status != "observing":
+                raise ValueError(f"Case is already {case.status}.")
+            if outcome == "prevented":
+                if case.successful_execution_count < verification_success_threshold():
+                    raise ValueError(
+                        "More successful post-repair executions are required before "
+                        "recording prevention."
+                    )
+                if case.recurrence_count:
+                    raise ValueError(
+                        "A recurring case cannot be recorded as prevented."
+                    )
+                kind = self._case_repair_kind(case)
+                if kind == "input_schema" and not (
+                    case.guard_malformed_rejected_execution_id
+                    and case.guard_valid_passed_execution_id
+                ):
+                    raise ValueError(
+                        "A guardrail can only be recorded as prevented after both "
+                        "verification probes are recorded: a malformed input rejected "
+                        "and a valid input passed through the installed guard."
+                    )
+                if kind == "error_route" and not case.guard_route_delivered_execution_id:
+                    raise ValueError(
+                        "An error-route repair can only be recorded as prevented once the "
+                        "route has actually delivered: record an execution of the target "
+                        "error workflow produced after the repair was applied."
+                    )
+            now = datetime.now(timezone.utc).isoformat()
+            case.status = outcome
+            case.outcome = outcome
+            case.outcome_note = note.strip()[:1000] if note else None
+            case.updated_at = now
+            case.outcome_at = now
+            session.commit()
+            result = case.to_dict()
+        self.record_operational_event(
+            "reliability_case_concluded", {"case_id": case_id, "outcome": outcome}
+        )
+        return result
 
     # The execution columns joined onto every detection row the API returns.
     _EXEC_COLS = (
@@ -352,10 +2041,18 @@ class Storage:
         Execution.workflow_id,
         Execution.workflow_name,
         Execution.source_execution_id,
+        Execution.build_revision,
     )
 
     @staticmethod
-    def _enrich(det: DetectionRow, received_at, workflow_id, workflow_name, source_id) -> Dict[str, Any]:
+    def _enrich(
+        det: DetectionRow,
+        received_at,
+        workflow_id,
+        workflow_name,
+        source_id,
+        build_revision,
+    ) -> Dict[str, Any]:
         return {
             **det.to_dict(),
             "received_at": received_at,
@@ -364,6 +2061,7 @@ class Storage:
             # The upstream n8n execution id (poll-ingested rows only); lets the
             # dashboard deep-link to the exact execution in the user's n8n.
             "n8n_execution_id": source_id,
+            "build_revision": build_revision,
         }
 
     def list_detections(self) -> List[Dict[str, Any]]:
@@ -386,7 +2084,24 @@ class Storage:
                 .join(Execution, DetectionRow.execution_id == Execution.id)
                 .where(DetectionRow.id == detection_id)
             ).first()
-            return self._enrich(*row) if row else None
+            if row is None:
+                return None
+            result = self._enrich(*row)
+            feedback = session.execute(
+                select(DetectionFeedback)
+                .where(DetectionFeedback.detection_id == detection_id)
+                .order_by(desc(DetectionFeedback.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            result["feedback"] = feedback.to_dict() if feedback else None
+            case = session.execute(
+                select(ReliabilityCase)
+                .where(ReliabilityCase.detection_id == detection_id)
+                .order_by(desc(ReliabilityCase.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            result["reliability_case"] = case.to_dict() if case else None
+            return result
 
     def get_execution_trace(self, detection_id: int) -> Optional[Dict[str, Any]]:
         """The per-node execution trace for a detection's execution — what ran, its

@@ -48,10 +48,12 @@ for d in report.fired:
     print(d.detector, d.confidence, d.explanation)
 ```
 
-Five active detectors: cycle, resource, timeout, error, complexity. (A schema detector
+Evidence-gated detector suite: cycle, resource, timeout, classified error, complexity,
+runtime data contracts, AI output truncation, and missing error workflows, surfaced only
+when execution evidence supports them. (The old static schema detector
 ships in the package, but its static path is deliberately disabled because it cannot be
-made precise against n8n's dynamic JSON data model; it never fires.) The
-execution-lane detectors (timeout/error/resource) also run on parsed runtime data via
+made precise against n8n's dynamic JSON data model; it never fires.) Runtime detectors
+run only on parsed execution evidence via
 `analyze(turns=...)`, the runtime-observed product.
 
 ## Licensing (the fair-code/paid boundary)
@@ -63,17 +65,19 @@ execution-lane detectors (timeout/error/resource) also run on parsed runtime dat
   own repo and on npm, not in this repository (n8n's verified-node program requires MIT).
 - **Fix suggestions and auto-fixing** are NOT in this repo. They run in the Pisama cloud
   and are the paid tier. The self-host server calls the cloud with an API key; the user's
-  n8n credentials never leave their network.
+  n8n credentials never leave their network. A suggestion is stored as a server-owned,
+  reviewable repair record. When auto-apply is enabled, Pisama refuses to overwrite a
+  workflow changed since the proposal and preserves a guarded rollback point.
 
 ## Single source of truth
 
-The detectors live in the Pisama monorepo (where the golden data, judges, and calibration
-harness are). This repo VENDORS them via `scripts/extract_from_monorepo.py`. CI runs
-`benchmarks/parity_check.py`, which freezes the vendored engine's verdicts on a committed
-corpus (`benchmarks/fixtures/` vs `benchmarks/golden.json`), so a regression or a botched
-re-extraction fails the build. Maintainers additionally run `parity_check.py --monorepo
-<path>` at re-extraction time to confirm the golden still matches the monorepo source of
-truth. Detector fixes land in the monorepo and are re-extracted here, not edited in place.
+Shared detectors originate in the Pisama monorepo, where the golden data, judges, and
+calibration harness live. This repository also carries n8n-only runtime extensions that
+operate on execution evidence unavailable in the multi-platform path. CI runs
+`benchmarks/parity_check.py`, which freezes the standalone engine's verdicts on a committed
+corpus (`benchmarks/fixtures/` vs `benchmarks/golden.json`). Shared-detector changes are
+still re-extracted from the monorepo; n8n-only extensions are validated against dedicated
+dogfood execution evidence.
 
 ## Roadmap
 

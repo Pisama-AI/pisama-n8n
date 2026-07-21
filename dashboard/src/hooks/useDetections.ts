@@ -19,6 +19,7 @@ export function useDetections() {
       es = new EventSource(url)
       es.onmessage = () => {
         queryClient.invalidateQueries({ queryKey: ['detections'] })
+        queryClient.invalidateQueries({ queryKey: ['detection'] })
       }
     } catch {
       // EventSource unavailable — fall back to the query's normal cadence.

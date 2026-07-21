@@ -11,7 +11,6 @@ Usage:
 """
 import argparse
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -26,14 +25,23 @@ MANIFEST = [
     ("core/n8n_constants.py", "detect/n8n_constants.py"),
     ("core/webhook_security.py", "security.py"),
     ("detection/confidence_calibration.py", "detect/calibration.py"),
+    ("detection/truncation.py", "detect/truncation.py"),
     ("detection/n8n/__init__.py", "detect/structural/__init__.py"),
     ("detection/n8n/cycle_detector.py", "detect/structural/cycle_detector.py"),
-    ("detection/n8n/schema_detector.py", "detect/structural/schema_detector.py"),
     ("detection/n8n/resource_detector.py", "detect/structural/resource_detector.py"),
-    ("detection/n8n/timeout_detector.py", "detect/structural/timeout_detector.py"),
-    ("detection/n8n/error_detector.py", "detect/structural/error_detector.py"),
     ("detection/n8n/complexity_detector.py", "detect/structural/complexity_detector.py"),
 ]
+
+# Locally owned in pisama-n8n and deliberately NOT re-extracted. These structural
+# detectors were rewired to import pisama_n8n_engine.detect.runtime (n8n-specific
+# runtime classification: classify_error / remediation_for / recorded_timeout), which
+# has no monorepo counterpart. Re-extracting them would revert that wiring and break the
+# import, so they are excluded from MANIFEST above and the --check drift gate below.
+LOCAL_OVERRIDES = (
+    "detect/structural/schema_detector.py",
+    "detect/structural/timeout_detector.py",
+    "detect/structural/error_detector.py",
+)
 
 # import-path rewrites (longest-prefix first)
 REWRITES = [
@@ -43,6 +51,7 @@ REWRITES = [
     (r"app\.ingestion\.n8n_parser", "pisama_n8n_engine.trace.n8n_parser"),
     (r"app\.detection\.turn_aware\._base", "pisama_n8n_engine.detect.base"),
     (r"app\.detection\.confidence_calibration", "pisama_n8n_engine.detect.calibration"),
+    (r"app\.detection\.truncation", "pisama_n8n_engine.detect.truncation"),
     (r"app\.detection\.n8n", "pisama_n8n_engine.detect.structural"),
     (r"app\.core\.n8n_utils", "pisama_n8n_engine.detect.n8n_utils"),
     (r"app\.core\.n8n_constants", "pisama_n8n_engine.detect.n8n_constants"),

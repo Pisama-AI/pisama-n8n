@@ -6,6 +6,7 @@ the n8n path, in ~100 lines: run each detector via its production entry point
 ``detect`` on the runtime turns for the execution-lane detectors), collect the fires,
 dedupe, and return a typed report. No DB, no FastAPI, no Redis — pure and sync.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -19,18 +20,28 @@ from pisama_n8n_engine.detect.structural import (
     N8NErrorDetector,
     N8NComplexityDetector,
 )
+from pisama_n8n_engine.detect.runtime import (
+    N8NErrorWorkflowDetector,
+    N8NRetryRecoveryDetector,
+    N8NTruncationDetector,
+    N8NAgentDiagnosticsDetector,
+)
 
 # Detectors whose production semantic is static workflow-structure analysis.
 _STRUCTURAL = {
     "cycle": N8NCycleDetector,
-    "schema": N8NSchemaDetector,
     "complexity": N8NComplexityDetector,
 }
 # Detectors whose production semantic is runtime-observed failure (need execution turns).
 _EXECUTION = {
+    "schema": N8NSchemaDetector,
     "timeout": N8NTimeoutDetector,
     "error": N8NErrorDetector,
     "resource": N8NResourceDetector,
+    "truncation": N8NTruncationDetector,
+    "retry_recovery": N8NRetryRecoveryDetector,
+    "error_workflow": N8NErrorWorkflowDetector,
+    "agent_diagnostics": N8NAgentDiagnosticsDetector,
 }
 
 
@@ -41,6 +52,13 @@ class Detection:
     confidence: float
     failure_mode: Optional[str]
     explanation: str = ""
+    # Keep the detector's own semantic version with the result. A stored failure
+    # fingerprint is only useful as evidence when its producing detector contract
+    # can be identified later.
+    detector_version: Optional[str] = None
+    # Small detector-specific facts that support the verdict. The server persists
+    # this locally so an operator can audit a finding without relying on prose.
+    evidence: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -75,28 +93,51 @@ def analyze(
 
     if workflow_json is not None:
         for name, cls in _STRUCTURAL.items():
+            detector = cls()
             try:
-                r = cls().detect_workflow(workflow_json)
-                report.detections.append(_to_detection(name, r))
+                r = detector.detect_workflow(workflow_json)
+                report.detections.append(_to_detection(name, r, detector.version))
             except Exception as exc:  # a detector error must not sink the whole run
-                report.detections.append(Detection(name, False, 0.0, None, f"error: {exc}"))
+                report.detections.append(
+                    Detection(
+                        name,
+                        False,
+                        0.0,
+                        None,
+                        f"error: {exc}",
+                        detector_version=detector.version,
+                    )
+                )
 
     if turns is not None:
         for name, cls in _EXECUTION.items():
+            detector = cls()
             try:
-                r = cls().detect(turns=turns, conversation_metadata=metadata)
-                report.detections.append(_to_detection(name, r))
+                r = detector.detect(turns=turns, conversation_metadata=metadata)
+                report.detections.append(_to_detection(name, r, detector.version))
             except Exception as exc:
-                report.detections.append(Detection(name, False, 0.0, None, f"error: {exc}"))
+                report.detections.append(
+                    Detection(
+                        name,
+                        False,
+                        0.0,
+                        None,
+                        f"error: {exc}",
+                        detector_version=detector.version,
+                    )
+                )
 
     return report
 
 
-def _to_detection(name: str, r: Any) -> Detection:
+def _to_detection(name: str, r: Any, detector_version: str) -> Detection:
+    evidence = getattr(r, "evidence", {}) or {}
     return Detection(
         detector=name,
         detected=bool(getattr(r, "detected", False)),
         confidence=float(getattr(r, "confidence", 0.0) or 0.0),
         failure_mode=getattr(r, "failure_mode", None),
         explanation=getattr(r, "explanation", "") or "",
+        detector_version=detector_version,
+        evidence=evidence if isinstance(evidence, dict) else {},
     )

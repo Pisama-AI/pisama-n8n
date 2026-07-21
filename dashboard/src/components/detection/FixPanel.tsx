@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Wrench, Sparkles, Lock, Check, Undo2, ArrowRight } from 'lucide-react'
 import { Card, CardHeader, CardTitle, Button } from '@/components/ui'
 import {
@@ -49,14 +49,21 @@ function ProposedChange({ ops }: { ops: PatchOp[] }) {
 // locked upsell when the server has no cloud key; a live "Get fix" when it does. Applying
 // the fix to the live workflow is gated behind HEALING_APPLY_ENABLED (default off) so an
 // unproven fix can't mutate a customer's production workflow by default.
-export function FixPanel({ detectionId }: { detectionId: string }) {
+export function FixPanel({
+  detectionId,
+  onRepairApplied,
+}: {
+  detectionId: string
+  onRepairApplied?: () => void
+}) {
+  const queryClient = useQueryClient()
   const { data: status } = useQuery({ queryKey: ['paid-status'], queryFn: getPaidStatus })
   const [suggestion, setSuggestion] = useState<FixSuggestion | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // apply flow: 'idle' → 'confirm' → 'applying' → 'applied' (holds the snapshot for rollback)
+  // Apply flow uses a server-owned repair record. The browser never retains the
+  // authoritative snapshot or sends workflow JSON back to the server.
   const [applyState, setApplyState] = useState<'idle' | 'confirm' | 'applying' | 'applied'>('idle')
-  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null)
 
   const enabled = status?.enabled ?? false
 
@@ -74,29 +81,29 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
   }
 
   async function onApply() {
-    if (!suggestion?.workflow_id) {
-      setError('No n8n workflow id — configure PISAMA_N8N_URL/KEY on the server.')
+    if (!suggestion?.repair_id) {
+      setError('This fix proposal is invalid. Generate a new fix.')
       return
     }
     setApplyState('applying')
     setError(null)
     try {
-      const result = await applyFix(suggestion.workflow_id, suggestion.mutated_workflow)
-      setSnapshot(result.snapshot)
+      await applyFix(suggestion.repair_id)
       setApplyState('applied')
+      await queryClient.invalidateQueries({ queryKey: ['detection', detectionId] })
+      onRepairApplied?.()
     } catch {
-      setError('Apply failed — check the server has n8n API access.')
+      setError('Apply failed. The workflow may have changed; review it and generate a new fix.')
       setApplyState('confirm')
     }
   }
 
   async function onRollback() {
-    if (!suggestion?.workflow_id || !snapshot) return
+    if (!suggestion?.repair_id) return
     setApplyState('applying')
     try {
-      await rollbackFix(suggestion.workflow_id, snapshot)
+      await rollbackFix(suggestion.repair_id)
       setApplyState('idle')
-      setSnapshot(null)
     } catch {
       setError('Rollback failed.')
       setApplyState('applied')
@@ -194,7 +201,7 @@ export function FixPanel({ detectionId }: { detectionId: string }) {
               size="sm"
               leftIcon={<Wrench size={14} />}
               isLoading={applyState === 'applying'}
-              disabled={!suggestion.workflow_id}
+              disabled={!suggestion.repair_id}
               onClick={() => setApplyState('confirm')}
             >
               Apply to n8n

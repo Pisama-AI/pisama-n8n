@@ -1,15 +1,19 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, AlertTriangle, ExternalLink } from 'lucide-react'
 import { Layout } from '@/components/common/Layout'
 import { Card, CardHeader, CardTitle, Badge, ConfidenceTierBadge, EmptyState } from '@/components/ui'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { formatConfidencePct } from '@/lib/utils'
 import { detectionTypeConfig, plainEnglishLabels, severityConfig } from '@/components/detection/DetectionTypeConfig'
 import { FixPanel } from '@/components/detection/FixPanel'
+import { GuardPanel } from '@/components/detection/GuardPanel'
+import { FeedbackPanel } from '@/components/detection/FeedbackPanel'
+import { RepairVerificationPanel } from '@/components/detection/RepairVerificationPanel'
 import { TraceView } from '@/components/detection/TraceView'
 import { useDetection } from '@/hooks/useDetections'
+import { markDetectionSeen } from '@/lib/api/detections'
 import { N8N_BASE_URL } from '@/lib/flags'
 
 function confidenceTier(confidence: number): string {
@@ -36,9 +40,55 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+function evidenceLabel(key: string): string {
+  return key.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function evidenceValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(evidenceValue).join(', ')
+  if (value && typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function EvidenceRecord({ evidence }: { evidence?: Record<string, unknown> }) {
+  const entries = Object.entries(evidence ?? {})
+  if (!entries.length) return null
+
+  return (
+    <Card padding="lg" className="border-rule bg-paper-2">
+      <CardHeader className="mb-5">
+        <CardTitle>Evidence used</CardTitle>
+        <p className="mt-1 text-sm text-ink-3">
+          The detector facts retained for this finding. Raw workflow payloads stay local.
+        </p>
+      </CardHeader>
+      <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+        {entries.map(([key, value]) => (
+          <div key={key} className="min-w-0 border-l border-rule pl-3">
+            <dt className="text-xs uppercase tracking-wide text-ink-3">{evidenceLabel(key)}</dt>
+            <dd className="mt-1 break-words font-mono text-sm text-ink-2">{evidenceValue(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
+  )
+}
+
 export function DetectionDetailClient({ id }: { id: string }) {
-  const { data: detection, isLoading, isError, error } = useDetection(id)
+  const { data: detection, isLoading, isError, error, refetch } = useDetection(id)
   const notFound = isError && /404/.test((error as Error)?.message ?? '')
+
+  // One "seen" ping per detection id, only after a successful load. The ref guard
+  // matters: the SSE handler invalidates the detail query on every ingest event, so
+  // an unguarded effect would re-ping per event. StrictMode's dev double-mount is
+  // absorbed by the ref plus the server's first-timestamp-wins idempotency.
+  const seenPinged = useRef<Set<string>>(new Set())
+  const detectionId = detection?.id
+  useEffect(() => {
+    if (!detectionId || seenPinged.current.has(detectionId)) return
+    seenPinged.current.add(detectionId)
+    markDetectionSeen(detectionId)
+  }, [detectionId])
 
   return (
     <Layout title="Detection">
@@ -120,15 +170,11 @@ export function DetectionDetailClient({ id }: { id: string }) {
                   <div className="grid grid-cols-2 gap-x-6 gap-y-5 pt-5 border-t border-rule">
                     <Field label="Workflow" value={workflowLabel} />
                     <Field label="Detector" value={detection.detection_type} />
-                    <Field
-                      label="Confidence"
-                      value={
-                        <span>
-                          {formatConfidencePct(detection.confidence)}{' '}
-                          <span className="text-ink-3">· {tierMeaning[tier]}</span>
-                        </span>
-                      }
-                    />
+                    {/* Certainty is a TIER, not a probability. The detectors emit a small
+                        set of fixed levels, so rendering a percentage would imply a
+                        calibrated likelihood we do not measure. The badge above shows the
+                        tier; this states what that tier means in evidence terms. */}
+                    <Field label="Certainty" value={tierMeaning[tier]} />
                     <Field
                       label="Severity"
                       value={
@@ -163,9 +209,30 @@ export function DetectionDetailClient({ id }: { id: string }) {
                   )}
                 </Card>
 
+                {detection.detected && <EvidenceRecord evidence={detection.evidence} />}
+
                 <TraceView detectionId={id} />
 
-                {detection.detected && <FixPanel detectionId={id} />}
+                {detection.detected && (
+                  <FeedbackPanel detectionId={id} initialFeedback={detection.feedback} />
+                )}
+
+                {detection.detected && detection.failure_mode === 'n8n_data_contract' ? (
+                  // The input-schema guardrail works in both products (OSS self-host and
+                  // multi-tenant SaaS); the client picks the right apply/rollback paths.
+                  <GuardPanel detectionId={id} onRepairApplied={() => void refetch()} />
+                ) : (
+                  detection.detected && (
+                    <FixPanel detectionId={id} onRepairApplied={() => void refetch()} />
+                  )
+                )}
+
+                {detection.reliability_case && (
+                  <RepairVerificationPanel
+                    initialCase={detection.reliability_case}
+                    onUpdated={() => void refetch()}
+                  />
+                )}
               </>
             )
           })()

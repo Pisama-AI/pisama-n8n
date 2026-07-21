@@ -1,6 +1,11 @@
 # Hosted pisama-n8n detection API (backs the dashboard at n8n.pisama.ai).
 # A separate Fly app — fully isolated from the main pisama-api.
-#   fly deploy --config deploy/fly.toml --dockerfile deploy/Dockerfile.server
+#
+# Deploy with ./deploy/deploy-demo-api.sh — it bakes the current git SHA into
+# PISAMA_BUILD_REVISION for real /healthz provenance. Do NOT deploy with a bare
+# `fly deploy` (build_revision would default to "unknown"); if you must run it by hand:
+#   fly deploy --config deploy/fly.toml --dockerfile deploy/Dockerfile.server \
+#     -a pisama-n8n-api --build-arg PISAMA_BUILD_REVISION=$(git rev-parse HEAD)
 app = "pisama-n8n-api"
 primary_region = "sjc"
 

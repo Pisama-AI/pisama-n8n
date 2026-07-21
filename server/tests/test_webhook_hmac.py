@@ -215,7 +215,7 @@ def test_unauthenticated_request_cannot_burn_a_nonce(client, body):
 def test_credential_test_health_path(client):
     resp = client.get("/api/v1/health")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"status": "ok"}
+    assert resp.json()["status"] == "ok"
 
     # The node sends X-Pisama-API-Key on the test request too; still fine.
     with_key = client.get("/api/v1/health", headers={"X-Pisama-API-Key": API_KEY})

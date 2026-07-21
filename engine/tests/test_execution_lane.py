@@ -18,7 +18,7 @@ from conftest import fired_names, load_execution
     ("fixture", "expected"),
     [
         ("timeout.json", ["timeout"]),
-        ("error.json", ["error"]),
+        ("error.json", ["error", "error_workflow"]),
         ("resource.json", ["resource"]),
         ("healthy.json", []),
     ],
@@ -45,3 +45,116 @@ def test_error_execution_carries_the_error_turn(bench_fixtures):
     error_turns = [t for t in turns if t.turn_metadata["has_error"]]
     assert error_turns, "the captured error execution must yield at least one error turn"
     assert any("ERROR" in t.content for t in error_turns)
+
+
+def test_loud_terminal_failure_yields_a_detection():
+    """A crashed execution must never produce ZERO detections.
+
+    Real-world regression (eval corpus rw_7e9aa5d6cc): a terminal single-node failure
+    in an 8-node workflow tripped none of the hidden-error checks — no continueOnFail,
+    no downstream turns, error rate 12.5% under the 15% threshold, and the
+    success-despite-failures check suppresses itself once the workflow is marked
+    failed. The execution_failure branch now covers loud failures.
+    """
+    from conftest import execution_doc
+
+    run = {
+        "executionTime": 5,
+        "executionStatus": "success",
+        "source": [{"previousNode": "Prev"}],
+        "data": {"main": [[{"json": {"ok": True}}]]},
+    }
+    failing = dict(run, executionStatus="error", error={"message": "merge misconfig"})
+    run_data = {f"N{i}": [dict(run)] for i in range(7)}
+    run_data["Merge"] = [failing]
+    raw = execution_doc(run_data, status="error", finished=False)
+
+    turns, metadata = execution_to_turns_and_metadata(raw)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "error" in fired_names(report)
+
+
+def test_small_payload_growth_is_not_a_resource_failure():
+    """The resource growth checks need an absolute floor: 41 -> 260 chars is a 6x
+    ratio but trivially small (9 of 11 real-world false positives were ratio-only)."""
+    from conftest import execution_doc
+
+    def run_with(payload):
+        return {
+            "executionTime": 5,
+            "executionStatus": "success",
+            "source": [{"previousNode": "Prev"}],
+            "data": {"main": [[{"json": payload}]]},
+        }
+
+    raw = execution_doc({
+        "Start": [run_with({"a": 1})],
+        "Shape": [run_with({"b": "x" * 60})],
+        "Render": [run_with({"c": "y" * 200})],
+    }, status="success", finished=True)
+    turns, metadata = execution_to_turns_and_metadata(raw)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "resource" not in fired_names(report)
+
+    # Same shape but growing to a genuinely oversized payload still fires.
+    raw_big = execution_doc({
+        "Start": [run_with({"a": 1})],
+        "Blow": [run_with({"c": "y" * 30000})],
+    }, status="success", finished=True)
+    turns, metadata = execution_to_turns_and_metadata(raw_big)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "resource" in fired_names(report)
+
+
+def test_user_configured_token_cap_is_not_a_silent_truncation():
+    """Adversarial-review fix: a user who deliberately set maxTokens on their LLM
+    node must not be reported as a silent-truncation failure at 0.95. The same
+    max-token stop WITHOUT a configured cap keeps the high-confidence fire."""
+    from conftest import execution_doc, make_node
+
+    def llm_run():
+        return {
+            "executionTime": 5,
+            "executionStatus": "success",
+            "source": [],
+            "data": {"main": [[{"json": {
+                "text": "The sea is", "finish_reason": "length"}}]]},
+        }
+
+    # Cap configured on the node itself (nested in n8n's options bag): suppressed.
+    capped = execution_doc(
+        {"LLM": [llm_run()]},
+        nodes=[make_node(
+            "LLM", "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+            parameters={"options": {"maxTokens": 64}},
+        )],
+        status="success", finished=True,
+    )
+    turns, metadata = execution_to_turns_and_metadata(capped)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "truncation" not in fired_names(report)
+    truncation = next(d for d in report.detections if d.detector == "truncation")
+    assert "user-configured token cap" in truncation.explanation
+
+    # No configured cap: the genuinely unexpected truncation still fires.
+    uncapped = execution_doc(
+        {"LLM": [llm_run()]},
+        nodes=[make_node("LLM", "@n8n/n8n-nodes-langchain.lmChatOpenAi")],
+        status="success", finished=True,
+    )
+    turns, metadata = execution_to_turns_and_metadata(uncapped)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "truncation" in fired_names(report)
+
+    # n8n's maxTokens=-1 means "no limit" and must not count as a configured cap.
+    unlimited = execution_doc(
+        {"LLM": [llm_run()]},
+        nodes=[make_node(
+            "LLM", "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+            parameters={"options": {"maxTokens": -1}},
+        )],
+        status="success", finished=True,
+    )
+    turns, metadata = execution_to_turns_and_metadata(unlimited)
+    report = analyze(turns=turns, metadata=metadata)
+    assert "truncation" in fired_names(report)

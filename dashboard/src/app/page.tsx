@@ -28,8 +28,8 @@ const DETECTORS = [
   },
   {
     icon: AlertTriangle,
-    name: 'Node error',
-    desc: 'A node threw during the run, including failures hidden by continue-on-fail settings.',
+    name: 'Classified failure',
+    desc: 'A real node error is classified as rate-limit, credential, provider, expression, timeout, or node failure.',
   },
   {
     icon: Zap,
@@ -45,6 +45,11 @@ const DETECTORS = [
     icon: GitBranch,
     name: 'Excess complexity',
     desc: 'Control flow tangled enough to be a reliability risk, calibrated on thousands of real community workflows.',
+  },
+  {
+    icon: AlertTriangle,
+    name: 'Error routing',
+    desc: 'A failed execution with no error workflow, or an error route that cannot receive the incident, is surfaced only when the recorded failure proves it.',
   },
 ]
 
@@ -69,7 +74,7 @@ const CHANNELS = [
 const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
   ['n8n connections', 'You manage them', '1', '5'],
-  ['Failure detection', 'All five detectors', 'All five detectors', 'All five detectors'],
+  ['Failure detection', 'Evidence-gated detectors', 'Evidence-gated detectors', 'Evidence-gated detectors'],
   ['AI fix suggestions', 'With a cloud key', 'Not included', 'Monthly allocation'],
   ['Apply approved fixes', 'With a cloud key', 'Not included', 'Snapshots and rollback'],
 ]
@@ -127,7 +132,7 @@ function PlanComparison() {
             <ul className="space-y-3 text-sm text-ink-2 mb-8">
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                All five detectors
+                Evidence-gated detectors
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -161,7 +166,7 @@ function PlanComparison() {
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                All five detectors
+                Evidence-gated detectors
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -323,7 +328,7 @@ export default function Landing() {
       {/* detectors */}
       <section className="border-t border-rule bg-paper-2/40">
         <div className="mx-auto max-w-5xl px-6 py-16">
-          <SectionLabel>Five detectors, two lanes</SectionLabel>
+          <SectionLabel>Evidence-gated detectors, two lanes</SectionLabel>
           <h2 className="font-serif text-2xl mb-3">
             Structural analysis of the workflow, runtime analysis of the execution
           </h2>

@@ -13,6 +13,9 @@ platform.
   dashboard can read the API.
 - Both detection lanes run per execution: structural (from the workflow JSON) + runtime
   (from the execution's runData), merged into one stored report.
+- **Repair safety**: cloud-generated proposals are persisted server-side. Apply and rollback
+  accept a repair id, never client-supplied workflow JSON or snapshots. Both reject a stale
+  workflow rather than overwriting an operator's later edit.
 
 ## Ingestion channels
 
@@ -67,8 +70,12 @@ No node changes needed; v0.3.0 as published on npm works unmodified.
 - `GET /api/v1/detections/{id}`: one enriched detection.
 - `GET /api/v1/detections/{id}/trace`: the per-node execution trace behind a detection.
 - `GET /api/v1/stream`: SSE stream of live detection events (token via `?token=`).
-- `GET /api/v1/paid/status`, `POST /api/v1/n8n/fix|apply|rollback`: paid tier
-  (cloud-backed fix suggestions and auto-apply), gated on `PISAMA_CLOUD_KEY`.
+- `GET /api/v1/paid/status`: paid-tier availability, gated on `PISAMA_CLOUD_KEY`.
+- `POST /api/v1/n8n/fix`: generate and persist a read-only paid repair proposal.
+- `POST /api/v1/n8n/apply`: apply a reviewed proposal by `repair_id`, after a live
+  workflow freshness check.
+- `POST /api/v1/n8n/rollback`: roll back an applied proposal by `repair_id`, only when
+  the workflow still matches Pisama's applied version.
 - `GET /healthz` (alias `GET /api/v1/health`): liveness; the alias is the community
   node's credential-Test path.
 
@@ -76,6 +83,7 @@ No node changes needed; v0.3.0 as published on npm works unmodified.
 
 Implemented + tested (no mocks): both ingestion channels, both detection lanes, SQLite
 persistence with dedup, all three auth forms (bearer, API-key header, HMAC with replay
-protection), CORS, live SSE, background polling. The webhook + storage + auth path is
-covered by e2e tests including a contract suite that signs exactly like the published
-node; the polling channel has a live e2e gated on `PISAMA_HARNESS_N8N=1` + a real n8n.
+protection), CORS, live SSE, background polling, and a guarded repair lifecycle. The
+webhook + storage + auth path is covered by e2e tests including a contract suite that
+signs exactly like the published node; the polling channel has a live e2e gated on
+`PISAMA_HARNESS_N8N=1` + a real n8n.

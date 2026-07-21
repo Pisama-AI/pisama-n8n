@@ -1,0 +1,262 @@
+{
+  "binaryDataSizeBytes": 0,
+  "createdAt": "2026-07-17T14:42:33.646Z",
+  "customData": {},
+  "data": {
+    "executionData": {
+      "contextData": {},
+      "metadata": {},
+      "nodeExecutionStack": [
+        {
+          "data": {
+            "main": [
+              [
+                {
+                  "json": {
+                    "body": {},
+                    "executionMode": "production",
+                    "headers": {
+                      "accept": "*/*",
+                      "accept-encoding": "gzip, br",
+                      "cdn-loop": "cloudflare; loops=1; subreqs=1",
+                      "cf-connecting-ip": "[REDACTED-CLIENT-IP]",
+                      "cf-ew-via": "15",
+                      "cf-ipcountry": "US",
+                      "cf-ray": "a1ca038faa0bfa9a-SJC",
+                      "cf-visitor": "{\"scheme\":\"https\"}",
+                      "cf-worker": "n8n.cloud",
+                      "content-length": "2",
+                      "content-type": "application/json",
+                      "host": "localhost:5678",
+                      "user-agent": "python-httpx/0.28.1",
+                      "x-forwarded-for": "[REDACTED-CLIENT-IP], 172.71.158.147",
+                      "x-forwarded-host": "localhost:5678",
+                      "x-forwarded-port": "443",
+                      "x-forwarded-proto": "https",
+                      "x-forwarded-server": "traefik-prod-users-gwc-58-869c5965d4-xjcs4",
+                      "x-is-trusted": "yes",
+                      "x-real-ip": "[REDACTED-CLIENT-IP]"
+                    },
+                    "params": {},
+                    "query": {},
+                    "webhookUrl": "http://localhost:5678/webhook/[REDACTED-PATH]"
+                  },
+                  "pairedItem": {
+                    "item": 0
+                  }
+                }
+              ]
+            ]
+          },
+          "node": {
+            "id": "missing-field",
+            "name": "Observed missing field",
+            "parameters": {
+              "jsCode": "return [{ json: { value: $json.required.value } }];",
+              "language": "javaScript",
+              "mode": "runOnceForAllItems",
+              "notice": ""
+            },
+            "position": [
+              220,
+              0
+            ],
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2
+          },
+          "source": {
+            "main": [
+              {
+                "previousNode": "Baseline webhook",
+                "previousNodeOutput": 0,
+                "previousNodeRun": 0
+              }
+            ]
+          }
+        }
+      ],
+      "runtimeData": {
+        "establishedAt": 1784299353646,
+        "redaction": {
+          "manual": false,
+          "production": false,
+          "source": "workflow",
+          "version": 2
+        },
+        "source": "webhook",
+        "triggerNode": {
+          "name": "Baseline webhook",
+          "type": "n8n-nodes-base.webhook"
+        },
+        "version": 1
+      },
+      "waitingExecution": {},
+      "waitingExecutionSource": {}
+    },
+    "resultData": {
+      "error": {
+        "description": "TypeError",
+        "level": "info",
+        "lineNumber": 1,
+        "message": "Cannot read properties of undefined (reading 'value') [line 1]",
+        "shouldReport": false,
+        "stack": "TypeError: Cannot read properties of undefined (reading 'value')\n    at VmCodeWrapper (evalmachine.<anonymous>:1:1000)\n    at evalmachine.<anonymous>:2:2\n    at Script.runInContext (node:vm:149:12)\n    at runInContext (node:vm:301:6)\n    at result (/opt/runners/task-runner-javascript/dist/js-task-runner/js-task-runner.js:215:61)\n    at new Promise (<anonymous>)\n    at JsTaskRunner.runForAllItems (/opt/runners/task-runner-javascript/dist/js-task-runner/js-task-runner.js:208:34)\n    at JsTaskRunner.executeTask (/opt/runners/task-runner-javascript/dist/js-task-runner/js-task-runner.js:143:26)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async Object.waitingForSettings (/opt/runners/task-runner-javascript/dist/task-runner.js:282:17)",
+        "tags": {}
+      },
+      "lastNodeExecuted": "Observed missing field",
+      "runData": {
+        "Baseline webhook": [
+          {
+            "data": {
+              "main": [
+                [
+                  {
+                    "json": {
+                      "body": {},
+                      "executionMode": "production",
+                      "headers": {
+                        "accept": "*/*",
+                        "accept-encoding": "gzip, br",
+                        "cdn-loop": "cloudflare; loops=1; subreqs=1",
+                        "cf-connecting-ip": "[REDACTED-CLIENT-IP]",
+                        "cf-ew-via": "15",
+                        "cf-ipcountry": "US",
+                        "cf-ray": "a1ca038faa0bfa9a-SJC",
+                        "cf-visitor": "{\"scheme\":\"https\"}",
+                        "cf-worker": "n8n.cloud",
+                        "content-length": "2",
+                        "content-type": "application/json",
+                        "host": "localhost:5678",
+                        "user-agent": "python-httpx/0.28.1",
+                        "x-forwarded-for": "[REDACTED-CLIENT-IP], 172.71.158.147",
+                        "x-forwarded-host": "localhost:5678",
+                        "x-forwarded-port": "443",
+                        "x-forwarded-proto": "https",
+                        "x-forwarded-server": "traefik-prod-users-gwc-58-869c5965d4-xjcs4",
+                        "x-is-trusted": "yes",
+                        "x-real-ip": "[REDACTED-CLIENT-IP]"
+                      },
+                      "params": {},
+                      "query": {},
+                      "webhookUrl": "http://localhost:5678/webhook/[REDACTED-PATH]"
+                    },
+                    "pairedItem": {
+                      "item": 0
+                    }
+                  }
+                ]
+              ]
+            },
+            "executionIndex": 0,
+            "executionStatus": "success",
+            "executionTime": 0,
+            "hints": [],
+            "source": [],
+            "startTime": 1784299353740
+          }
+        ],
+        "Observed missing field": [
+          {
+            "error": {
+              "description": "TypeError",
+              "level": "info",
+              "lineNumber": 1,
+              "message": "Cannot read properties of undefined (reading 'value') [line 1]",
+              "shouldReport": false,
+              "stack": "TypeError: Cannot read properties of undefined (reading 'value')\n    at VmCodeWrapper (evalmachine.<anonymous>:1:1000)\n    at evalmachine.<anonymous>:2:2\n    at Script.runInContext (node:vm:149:12)\n    at runInContext (node:vm:301:6)\n    at result (/opt/runners/task-runner-javascript/dist/js-task-runner/js-task-runner.js:215:61)\n    at new Promise (<anonymous>)\n    at JsTaskRunner.runForAllItems (/opt/runners/task-runner-javascript/dist/js-task-runner/js-task-runner.js:208:34)\n    at JsTaskRunner.executeTask (/opt/runners/task-runner-javascript/dist/js-task-runner/js-task-runner.js:143:26)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async Object.waitingForSettings (/opt/runners/task-runner-javascript/dist/task-runner.js:282:17)",
+              "tags": {}
+            },
+            "executionIndex": 1,
+            "executionStatus": "error",
+            "executionTime": 1468,
+            "hints": [],
+            "source": [
+              {
+                "previousNode": "Baseline webhook",
+                "previousNodeOutput": 0,
+                "previousNodeRun": 0
+              }
+            ],
+            "startTime": 1784299353740
+          }
+        ]
+      }
+    },
+    "resumeToken": "[REDACTED]",
+    "startData": {},
+    "version": 1
+  },
+  "deduplicationKey": null,
+  "deletedAt": null,
+  "finished": false,
+  "id": "112117",
+  "jsonSizeBytes": 4994,
+  "mode": "webhook",
+  "retryOf": null,
+  "retrySuccessId": null,
+  "startedAt": "2026-07-17T14:42:33.682Z",
+  "status": "error",
+  "stoppedAt": "2026-07-17T14:42:35.208Z",
+  "storedAt": "fs",
+  "tracingContext": null,
+  "waitTill": null,
+  "workflowData": {
+    "connections": {
+      "Baseline webhook": {
+        "main": [
+          [
+            {
+              "index": 0,
+              "node": "Observed missing field",
+              "type": "main"
+            }
+          ]
+        ]
+      }
+    },
+    "id": "0H6n1fY53bCT6rhX",
+    "name": "Pisama prevention experiment baseline 1784299351875396403",
+    "nodeGroups": [],
+    "nodes": [
+      {
+        "id": "webhook",
+        "name": "Baseline webhook",
+        "parameters": {
+          "authentication": "none",
+          "contentTypeNotice": "",
+          "httpMethod": "POST",
+          "multipleMethods": false,
+          "options": {},
+          "path": "pisama-prevention-1784299351875396403",
+          "responseMode": "onReceived"
+        },
+        "position": [
+          0,
+          0
+        ],
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "webhookId": "pisama-prevention-1784299351875396403"
+      },
+      {
+        "id": "missing-field",
+        "name": "Observed missing field",
+        "parameters": {
+          "jsCode": "return [{ json: { value: $json.required.value } }];",
+          "language": "javaScript",
+          "mode": "runOnceForAllItems",
+          "notice": ""
+        },
+        "position": [
+          220,
+          0
+        ],
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2
+      }
+    ],
+    "settings": {}
+  },
+  "workflowId": "0H6n1fY53bCT6rhX",
+  "workflowVersionId": "cff77b61-67a8-43f3-93ae-b9019e218c37"
+}

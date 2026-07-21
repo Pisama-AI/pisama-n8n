@@ -45,6 +45,9 @@ export const detectionTypeConfig: Record<string, { label: string; color: string;
   timeout: { label: 'Timeout', color: 'text-yellow-400', icon: Clock, category: 'Workflow' },
   error: { label: 'Node Error', color: 'text-red-500', icon: AlertTriangle, category: 'Workflow' },
   complexity: { label: 'Excess Complexity', color: 'text-violet-400', icon: GitBranch, category: 'Workflow' },
+  truncation: { label: 'AI Output Truncated', color: 'text-orange-500', icon: FileWarning, category: 'AI workflow' },
+  error_workflow: { label: 'Missing Error Workflow', color: 'text-red-500', icon: AlertTriangle, category: 'Workflow' },
+  agent_diagnostics: { label: 'AI Agent Tool or Output Failure', color: 'text-orange-400', icon: Activity, category: 'AI workflow' },
 }
 
 export { severityConfig } from '@/lib/severity-config'
@@ -90,4 +93,7 @@ export const plainEnglishLabels: Record<string, string> = {
   timeout: 'Node took too long',
   error: 'A node errored out',
   complexity: 'Workflow too complex',
+  truncation: 'AI response was cut short',
+  error_workflow: 'No failure alert workflow',
+  agent_diagnostics: 'AI agent tool recovery or output validation needs attention',
 }

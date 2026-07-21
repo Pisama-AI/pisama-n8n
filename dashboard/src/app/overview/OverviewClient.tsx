@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { Activity, AlertTriangle, Percent } from 'lucide-react'
+import { Activity, AlertTriangle, Percent, ShieldCheck } from 'lucide-react'
 import { format, startOfDay, subDays, isSameDay, formatDistanceToNow } from 'date-fns'
+import { useQuery } from '@tanstack/react-query'
 import { Layout } from '@/components/common/Layout'
 import { StatCard } from '@/components/detection/StatCard'
 import { Card, CardHeader, CardTitle, EmptyState } from '@/components/ui'
@@ -13,6 +14,11 @@ import {
   plainEnglishLabels,
 } from '@/components/detection/DetectionTypeConfig'
 import type { Detection } from '@/lib/api/detections'
+import {
+  getOperationsSummary,
+  type OperationsSummary,
+  type ReliabilityMetrics,
+} from '@/lib/api/operations'
 
 const TREND_DAYS = 14
 const BAR_AREA_PX = 128 // chart height in px; explicit so bar heights don't rely on % of a flex parent
@@ -186,8 +192,166 @@ function TopWorkflows({ fired }: { fired: Detection[] }) {
   )
 }
 
+function OperationalHealth({ summary }: { summary?: OperationsSummary }) {
+  if (!summary) return null
+  const latestPoll = [summary.latest_events.poll_succeeded, summary.latest_events.poll_failed]
+    .filter(Boolean)
+    .sort((a, b) => (b?.created_at ?? '').localeCompare(a?.created_at ?? ''))[0]
+  const failedRepairs = summary.repairs_by_status.failed ?? 0
+  const staleRepairs = summary.repairs_by_status.stale ?? 0
+  const observingCases = summary.reliability_cases_by_status.observing ?? 0
+  const recurringCases = summary.reliability_cases_by_status.recurred ?? 0
+
+  return (
+    <Card padding="lg">
+      <CardHeader className="mb-4">
+        <CardTitle>Operational health</CardTitle>
+        <p className="text-xs text-ink-3 mt-1">Local ingestion and repair signals</p>
+      </CardHeader>
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div className="text-ink-3">Last ingestion</div>
+          <div className="text-ink-2 mt-1">
+            {summary.last_ingested_at
+              ? formatDistanceToNow(new Date(summary.last_ingested_at), { addSuffix: true })
+              : 'No executions yet'}
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Latest poll</div>
+          <div className="text-ink-2 mt-1">
+            {latestPoll ? latestPoll.event_type.replace('_', ' ') : 'Not run'}
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Failed repairs</div>
+          <div className="text-ink-2 mt-1">{failedRepairs}</div>
+        </div>
+        <div>
+          <div className="text-ink-3">Stale repairs blocked</div>
+          <div className="text-ink-2 mt-1">{staleRepairs}</div>
+        </div>
+        <div>
+          <div className="text-ink-3">Repairs under verification</div>
+          <div className="text-ink-2 mt-1">{observingCases}</div>
+        </div>
+        <div>
+          <div className="text-ink-3">Repairs that recurred</div>
+          <div className="text-ink-2 mt-1">{recurringCases}</div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function percent(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)}%`
+}
+
+function duration(seconds: number | null): string {
+  if (seconds === null) return '—'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  return `${(seconds / 3600).toFixed(1)}h`
+}
+
+function ReliabilityLearning({ metrics }: { metrics?: ReliabilityMetrics }) {
+  if (!metrics) return null
+  const { diagnosis, remediation, time_to_applied_workflow_control: timeToControl } = metrics
+  // Fields below are absent on pre-2026-07-20 servers; each cell renders only when
+  // its field is present so the shared card works against every server vintage.
+  const timeToVerified = metrics.time_to_verified_control
+  const durable = metrics.durable_controls
+
+  return (
+    <Card padding="lg">
+      <CardHeader className="mb-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={16} className="text-evidence" />
+          <CardTitle>Reliability learning</CardTitle>
+        </div>
+        <p className="mt-1 text-xs text-ink-3">Evidence from your reviewed findings and repair outcomes</p>
+      </CardHeader>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-5 text-sm">
+        <div>
+          <div className="text-ink-3">Diagnosis acceptance</div>
+          <div className="mt-1 text-ink-2">
+            {percent(diagnosis.acceptance_rate)} <span className="text-ink-4">({diagnosis.accepted}/{diagnosis.reviewed})</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Verified remediation</div>
+          <div className="mt-1 text-ink-2">
+            {percent(remediation.verified_remediation_rate)}{' '}
+            <span className="text-ink-4">({remediation.prevented}/{remediation.verified_outcomes})</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Median to workflow control</div>
+          <div className="mt-1 text-ink-2">
+            {duration(timeToControl.median_seconds)}{' '}
+            <span className="text-ink-4">({timeToControl.sample_size} applied)</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-ink-3">Failure-rate change</div>
+          <div className="mt-1 text-ink-2">
+            {percent(remediation.recurrence_reduction)}{' '}
+            <span className="text-ink-4">({remediation.comparison_cases} windows)</span>
+          </div>
+        </div>
+        {diagnosis.acceptance_of_seen !== undefined && (
+          <div>
+            <div className="text-ink-3">Acceptance of opened findings</div>
+            <div className="mt-1 text-ink-2">
+              {percent(diagnosis.acceptance_of_seen)}{' '}
+              <span className="text-ink-4">({diagnosis.accepted}/{diagnosis.seen ?? 0} detail opens)</span>
+            </div>
+          </div>
+        )}
+        {diagnosis.review_coverage !== undefined && (
+          <div>
+            <div className="text-ink-3">Review coverage</div>
+            <div className="mt-1 text-ink-2">
+              {percent(diagnosis.review_coverage)}{' '}
+              <span className="text-ink-4">(of all fired findings)</span>
+            </div>
+          </div>
+        )}
+        {timeToVerified && (
+          <div>
+            <div className="text-ink-3">Median to verified control</div>
+            <div className="mt-1 text-ink-2">
+              {duration(timeToVerified.median_seconds)}{' '}
+              <span className="text-ink-4">({timeToVerified.sample_size} verified)</span>
+            </div>
+          </div>
+        )}
+        {durable.durable !== undefined && (
+          <div>
+            <div className="text-ink-3">Durable controls</div>
+            <div className="mt-1 text-ink-2">
+              {percent(durable.share)}{' '}
+              <span className="text-ink-4">
+                ({durable.durable}/{durable.proposed ?? 0} standing)
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+      <p className="mt-5 border-t border-rule pt-4 text-xs leading-relaxed text-ink-3">
+        {remediation.recurrence_reduction_note}
+      </p>
+    </Card>
+  )
+}
+
 export function OverviewClient() {
   const { data, isLoading, isError, error } = useDetections()
+  const { data: operations } = useQuery({
+    queryKey: ['operations-summary'],
+    queryFn: getOperationsSummary,
+  })
 
   const detections = data ?? []
   const fired = detections.filter((d) => d.detected)
@@ -262,9 +426,13 @@ export function OverviewClient() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <RecentActivity fired={fired} />
-              <TopWorkflows fired={fired} />
+              <OperationalHealth summary={operations} />
+              <ReliabilityLearning metrics={operations?.reliability_metrics} />
             </div>
+
+            <RecentActivity fired={fired} />
+
+            <TopWorkflows fired={fired} />
           </>
         )}
       </div>

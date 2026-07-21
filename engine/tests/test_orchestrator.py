@@ -5,8 +5,11 @@ from pisama_n8n_engine.orchestrator import analyze
 
 from conftest import chain_workflow, fired_names
 
-STRUCTURAL = {"cycle", "schema", "complexity"}
-EXECUTION = {"timeout", "error", "resource"}
+STRUCTURAL = {"cycle", "complexity"}
+EXECUTION = {
+    "schema", "timeout", "error", "resource", "truncation", "retry_recovery",
+    "error_workflow", "agent_diagnostics",
+}
 
 
 def test_no_inputs_runs_no_lane():

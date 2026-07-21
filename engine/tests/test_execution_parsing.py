@@ -41,6 +41,14 @@ def test_turn_shape_and_metadata_contract():
         "workflow_duration_ms": 150,
         "workflow_mode": "webhook",
         "workflow_status": "success",
+        "workflow_json": {},
+        "workflow_available": False,
+        "error_workflow_json": {},
+        "error_workflow_available": False,
+        "error_workflow_resolution": {},
+        "execution_id": "exec-test",
+        "retry_of": None,
+        "retry_success_id": None,
     }
 
 
@@ -56,6 +64,22 @@ def test_explicit_run_error_marks_turn():
     (turn,) = turns
     assert turn.turn_metadata["has_error"] is True
     assert "ERROR: exploded" in turn.content
+
+
+def test_execution_index_orders_grouped_n8n_run_data_and_keeps_agent_facts():
+    """n8n groups runData by node, while real agent causality uses executionIndex."""
+    raw = execution_doc(
+        {
+            "Later": [_run(executionIndex=2, output=[{"json": {"tool_result": {"type": "tool_result", "tool_use_id": "toolu-real", "is_error": True}}}])],
+            "Claude": [_run(executionIndex=1, output=[{"json": {"model": "claude-haiku-4-5-20251001", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu-real"}]}}])],
+        }
+    )
+    raw["data"]["resultData"]["runData"]["Later"][0]["source"] = [{"previousNode": "Claude"}]
+    turns, _ = execution_to_turns_and_metadata(raw)
+    assert [turn.participant_id for turn in turns] == ["Claude", "Later"]
+    assert turns[0].turn_metadata["tool_use_ids"] == ["toolu-real"]
+    assert turns[1].turn_metadata["tool_results"][0]["tool_use_id"] == "toolu-real"
+    assert turns[1].turn_metadata["source_nodes"] == ["Claude"]
 
 
 class TestSwallowedContinueOnFail:
@@ -74,7 +98,7 @@ class TestSwallowedContinueOnFail:
 
     def test_continue_regular_output_surfaces_item_error(self):
         # The errored item flows through the regular output with a truthy STRING
-        # `error` in its json (a dict-shaped error is deliberately ignored).
+        # `error` in its json.
         raw = self._doc(
             on_error="continueRegularOutput",
             output=[{"json": {"error": "upstream 500"}}],
@@ -83,6 +107,37 @@ class TestSwallowedContinueOnFail:
         (turn,) = turns
         assert turn.turn_metadata["has_error"] is True
         assert "swallowed" in turn.content
+
+    def test_continue_regular_output_surfaces_structured_error_object(self):
+        # n8n also records the swallowed failure as an error OBJECT with a message
+        # ({message, name, description, ...}) — the shape found on real wild
+        # production executions (olavofranzin corpus).
+        raw = self._doc(
+            on_error="continueRegularOutput",
+            output=[{"json": {"error": {"message": "The service was not able to "
+                                                   "process your request",
+                              "name": "NodeApiError"}}}],
+        )
+        turns, _ = execution_to_turns_and_metadata(raw)
+        (turn,) = turns
+        assert turn.turn_metadata["has_error"] is True
+
+    def test_legacy_continue_on_fail_bool_maps_to_regular_output(self):
+        # Legacy top-level `continueOnFail: true` (no onError field) behaves like
+        # continueRegularOutput. Regression for a REAL community workflow whose
+        # Code node crashed, was continued, and n8n marked the run successful —
+        # invisible until this mapping (eval corpus rw_d7be75a953).
+        node = make_node("Careful", "n8n-nodes-base.code")
+        node["continueOnFail"] = True
+        raw = execution_doc(
+            {"Careful": [_run(output=[{"json": {"error": "Cannot read properties "
+                                                          "of undefined"}}])]},
+            nodes=[node],
+        )
+        turns, _ = execution_to_turns_and_metadata(raw)
+        (turn,) = turns
+        assert turn.turn_metadata["continue_on_fail"] is True
+        assert turn.turn_metadata["has_error"] is True
 
     def test_continue_error_output_surfaces_error_branch(self):
         # continueErrorOutput routes failed items to the SECOND main branch; a
