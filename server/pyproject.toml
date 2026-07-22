@@ -22,6 +22,8 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio"]
+# Optional so the prod server install never inherits mcp's transitive pins.
+mcp = ["mcp>=1.6,<2"]
 
 [project.urls]
 Homepage = "https://github.com/Pisama-AI/pisama-n8n"
