@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Inter_Tight, Newsreader, JetBrains_Mono } from 'next/font/google'
+import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 import { Providers } from './providers'
 
@@ -41,6 +42,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Providers>
           <div id="main-content">{children}</div>
         </Providers>
+        {/* Hosted deploys only: self-host Docker builds have no Vercel backend for
+            the beacon, so the tracker is omitted there entirely. */}
+        {process.env.VERCEL ? <Analytics /> : null}
       </body>
     </html>
   )
