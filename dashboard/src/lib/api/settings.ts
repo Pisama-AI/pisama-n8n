@@ -40,13 +40,18 @@ export function syncOss(): Promise<SyncSummary> {
   return postApi('/api/v1/n8n/sync', {})
 }
 
-// SaaS ingest keys (pn8n_...): authenticate pushed executions — the n8n-nodes-pisama
-// community node or direct POSTs to /api/v1/n8n/webhook. Plaintext is returned ONCE
-// at mint time; afterwards only the prefix is listable.
+// SaaS tenant keys. Scope 'ingest' (pn8n_...) authenticates pushed executions — the
+// n8n-nodes-pisama community node or direct POSTs to /api/v1/n8n/webhook. Scope 'mcp'
+// (pn8nm_...) is the durable read+propose credential for MCP clients (Claude Code,
+// Cursor); it can never ingest, and an ingest key can never read. Plaintext is
+// returned ONCE at mint time; afterwards only the prefix is listable.
+export type ApiKeyScope = 'ingest' | 'mcp'
+
 export interface IngestKey {
   id: string
   name?: string | null
   prefix: string
+  scope?: ApiKeyScope
   created_at: string
 }
 
@@ -54,8 +59,8 @@ export function listIngestKeys(): Promise<IngestKey[]> {
   return fetchApi('/api/v1/api-keys')
 }
 
-export function createIngestKey(): Promise<{ api_key: string }> {
-  return postApi('/api/v1/api-keys', {})
+export function createIngestKey(scope: ApiKeyScope = 'ingest'): Promise<{ api_key: string }> {
+  return postApi('/api/v1/api-keys', { scope })
 }
 
 export function revokeIngestKey(id: string): Promise<void> {

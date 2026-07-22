@@ -293,10 +293,10 @@ function IngestKeysCard() {
   const [copied, setCopied] = useState(false)
   const apiUrl = `${SAAS_PUBLIC_API_URL}/api/v1`
 
-  async function onCreate() {
+  async function onCreate(scope: 'ingest' | 'mcp' = 'ingest') {
     setBusy(true)
     try {
-      const res = await createIngestKey()
+      const res = await createIngestKey(scope)
       setMinted(res.api_key)
       setCopied(false)
       qc.invalidateQueries({ queryKey: ['ingest-keys'] })
@@ -361,7 +361,8 @@ function IngestKeysCard() {
               <div className="flex-1 min-w-0">
                 <code className="text-sm text-ink">{k.prefix}...</code>
                 <div className="text-xs text-ink-3">
-                  {k.name || 'ingest'} · created{' '}
+                  {k.name || k.scope || 'ingest'} ·{' '}
+                  <span className="uppercase tracking-wide">{k.scope || 'ingest'}</span> · created{' '}
                   {formatDistanceToNow(new Date(k.created_at), { addSuffix: true })}
                 </div>
               </div>
@@ -372,9 +373,25 @@ function IngestKeysCard() {
           ))}
         </div>
       )}
-      <Button size="sm" isLoading={busy} leftIcon={<Plus size={14} />} onClick={onCreate}>
-        Create ingest key
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          isLoading={busy}
+          leftIcon={<Plus size={14} />}
+          onClick={() => onCreate('ingest')}
+        >
+          Create ingest key
+        </Button>
+        <Button size="sm" variant="secondary" isLoading={busy} onClick={() => onCreate('mcp')}>
+          Create MCP key
+        </Button>
+      </div>
+      <p className="text-xs text-ink-3 mt-3">
+        MCP keys (pn8nm_...) let Claude Code or Cursor read detections and stage repair
+        proposals; they cannot ingest, and applying stays here in the dashboard. Configure
+        the client with PISAMA_SERVER_URL {SAAS_PUBLIC_API_URL} and PISAMA_API_KEY set to
+        the key.
+      </p>
     </Card>
   )
 }

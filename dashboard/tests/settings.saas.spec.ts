@@ -89,3 +89,39 @@ test('ingest keys: shows the node API URL and mints a key exactly once', async (
   await expect(page.getByText('pn8n_testplaintext')).toBeVisible()
   await expect(page.getByText('Copy this key now')).toBeVisible()
 })
+
+test('MCP keys: mints with scope=mcp and badges the scope in the list', async ({ page }) => {
+  await page.route('**/api/backend/api/v1/connections', (r) => r.fulfill({ json: [CONNECTION] }))
+  await page.route('**/api/backend/api/v1/api-keys', (r) => {
+    if (r.request().method() === 'POST') {
+      return r.fulfill({ json: { api_key: 'pn8nm_testplaintext', scope: 'mcp' } })
+    }
+    return r.fulfill({
+      json: [
+        {
+          id: 'k2',
+          name: 'mcp',
+          prefix: 'pn8nm_abcdef',
+          scope: 'mcp',
+          created_at: '2026-07-22T10:00:00Z',
+        },
+      ],
+    })
+  })
+
+  await page.goto('/settings')
+  // Scope badge on the listed key + the boundary explained in the card copy.
+  await expect(page.getByText('pn8nm_abcdef')).toBeVisible()
+  // The badge text is 'mcp' in the DOM; CSS renders it uppercase.
+  await expect(page.getByText('mcp', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('cannot ingest', { exact: false })).toBeVisible()
+
+  const [req] = await Promise.all([
+    page.waitForRequest(
+      (r) => r.url().includes('/api/v1/api-keys') && r.method() === 'POST',
+    ),
+    page.getByRole('button', { name: 'Create MCP key' }).click(),
+  ])
+  expect(req.postDataJSON()).toEqual({ scope: 'mcp' })
+  await expect(page.getByText('pn8nm_testplaintext')).toBeVisible()
+})
