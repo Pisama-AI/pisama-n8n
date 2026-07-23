@@ -1,17 +1,21 @@
 # pisama-n8n-engine
 
-Failure detection for n8n workflows — the standalone Pisama detection engine.
+Standalone failure detection for n8n workflows.
 
-Pure-Python, dependency-free for the six structural detectors. Imports with zero
+Pure Python and dependency-free for the six structural detectors. Imports with zero
 configuration (no database, no settings, no secrets).
 
-```python
-from pisama_n8n_engine.orchestrator import analyze
+```bash
+pip install pisama-n8n-engine
+```
 
-# Structural lane — analyze a workflow definition:
+```python
+from pisama_n8n_engine import analyze
+
+# Structural lane: analyze a workflow definition.
 report = analyze(workflow_json=my_workflow)
 
-# Runtime lane — analyze a captured execution's real timing/errors/output:
+# Runtime lane: analyze a captured execution's timing, errors, and output.
 from pisama_n8n_engine.trace.execution import execution_to_turns_and_metadata
 turns, meta = execution_to_turns_and_metadata(my_execution)
 report = analyze(turns=turns, metadata=meta)
@@ -34,9 +38,11 @@ from pisama_n8n_engine.guardrails import input_schema_guardrail
 guard = input_schema_guardrail(["body.required.value"], position=(220, 0))
 ```
 
-See [`docs/input-schema-guardrail.md`](../docs/input-schema-guardrail.md) for wiring and
-data-handling details.
+See the
+[input-schema guardrail guide](https://github.com/Pisama-AI/pisama-n8n/blob/main/docs/input-schema-guardrail.md)
+for wiring and data-handling details.
 
 The detectors are vendored from the Pisama monorepo (the single source of truth) via
-`scripts/extract_from_monorepo.py`; a parity check guards against drift. Fair-code
-(Sustainable Use License) — see the repository LICENSE.
+`scripts/extract_from_monorepo.py`; a parity check guards against drift. This
+package uses the fair-code
+[Pisama Sustainable Use License](https://github.com/Pisama-AI/pisama-n8n/blob/main/LICENSE).
