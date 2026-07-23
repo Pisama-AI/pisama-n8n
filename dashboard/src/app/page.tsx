@@ -88,6 +88,24 @@ const PACKAGES = [
   },
 ]
 
+const LAYERED = [
+  {
+    tag: '$0 · structural',
+    title: 'Read the workflow graph',
+    desc: 'Cycles with no exit, tangled control flow, a missing error route. Caught from the workflow itself, before an execution ever runs.',
+  },
+  {
+    tag: '$0 · runtime',
+    title: 'Read every execution',
+    desc: 'Real timings, real errors, real payload sizes. Evidence-gated, so a detection fires only when the recorded run proves it.',
+  },
+  {
+    tag: 'on approval · cloud',
+    title: 'Fix only when it is needed',
+    desc: 'The cloud tier drafts the fix and applies it once you approve, with a snapshot to roll back. Detection itself stays free.',
+  },
+]
+
 const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
   ['Code license', 'Fair-code', 'Hosted service', 'Hosted service'],
@@ -372,8 +390,38 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* channels */}
+      {/* why layered: catch early, catch cheap */}
       <section className="border-t border-rule">
+        <div className="mx-auto max-w-5xl px-6 py-16">
+          <SectionLabel>Catch it early, catch it cheap</SectionLabel>
+          <h2 className="font-serif text-2xl mb-3 max-w-2xl">
+            Cheap checks run first. An AI fix runs only when a detection needs one.
+          </h2>
+          <p className="text-ink-3 max-w-2xl mb-10">
+            Waiting for a failed run to tell you something went wrong is the expensive way
+            to learn it. Both detection lanes are free and evidence-gated, so Pisama reads
+            every workflow and every execution up front, then saves the paid AI fix for the
+            detections that actually need action.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {LAYERED.map((step, index) => (
+              <div key={step.title} className="rounded-lg border border-rule bg-paper-2 p-5">
+                <div className="flex items-baseline justify-between gap-3 mb-3">
+                  <span className="font-mono text-xs text-evidence">0{index + 1}</span>
+                  <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-4">
+                    {step.tag}
+                  </span>
+                </div>
+                <div className="font-semibold text-sm mb-1.5">{step.title}</div>
+                <p className="text-sm text-ink-3 leading-relaxed">{step.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* channels */}
+      <section className="border-t border-rule bg-paper-2/40">
         <div className="mx-auto max-w-5xl px-6 py-16">
           <SectionLabel>Three ways in</SectionLabel>
           <h2 className="font-serif text-2xl mb-10">
@@ -392,7 +440,7 @@ export default function Landing() {
       </section>
 
       {/* packages */}
-      <section className="border-t border-rule bg-paper-2/40">
+      <section className="border-t border-rule">
         <div className="mx-auto max-w-5xl px-6 py-16">
           <SectionLabel>Packages</SectionLabel>
           <h2 className="font-serif text-2xl mb-3">Use the integration or embed the engine</h2>
