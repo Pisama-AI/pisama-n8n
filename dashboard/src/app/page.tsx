@@ -71,6 +71,23 @@ const CHANNELS = [
   },
 ]
 
+const PACKAGES = [
+  {
+    name: 'n8n-nodes-pisama',
+    label: 'n8n community node',
+    desc: 'Install by package name under n8n Settings, Community Nodes. It signs and sends execution data to hosted or self-hosted Pisama.',
+    href: 'https://www.npmjs.com/package/n8n-nodes-pisama',
+    cta: 'View on npm',
+  },
+  {
+    name: 'pisama-n8n-engine',
+    label: 'Python engine',
+    desc: 'Embed the dependency-free structural detector lane directly in a Python service. The source package uses the Pisama Sustainable Use License.',
+    href: 'https://github.com/Pisama-AI/pisama-n8n/tree/main/engine',
+    cta: 'View engine source',
+  },
+]
+
 const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
   ['n8n connections', 'You manage them', '1', '5'],
@@ -370,6 +387,36 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* packages */}
+      <section className="border-t border-rule bg-paper-2/40">
+        <div className="mx-auto max-w-5xl px-6 py-16">
+          <SectionLabel>Packages</SectionLabel>
+          <h2 className="font-serif text-2xl mb-3">Use the integration or embed the engine</h2>
+          <p className="text-ink-3 max-w-2xl mb-10">
+            The community node delivers executions to Pisama. The Python engine runs
+            detection inside your own application. They are independent packages, so
+            install only the surface your deployment needs.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {PACKAGES.map((pkg) => (
+              <article key={pkg.name} className="rounded-lg border border-rule bg-paper p-6">
+                <div className="font-mono text-xs uppercase tracking-[0.16em] text-evidence">
+                  {pkg.label}
+                </div>
+                <h3 className="mt-3 font-mono text-base text-ink">{pkg.name}</h3>
+                <p className="mt-3 text-sm text-ink-3 leading-relaxed">{pkg.desc}</p>
+                <a
+                  href={pkg.href}
+                  className="mt-5 inline-block text-sm text-evidence hover:underline"
+                >
+                  {pkg.cta}
+                </a>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* footer */}
       <footer className="border-t border-rule">
         <div className="mx-auto max-w-5xl px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-sm text-ink-4">
@@ -389,6 +436,12 @@ export default function Landing() {
               className="hover:text-ink-2 transition-colors"
             >
               n8n node
+            </a>
+            <a
+              href="https://github.com/Pisama-AI/pisama-n8n/tree/main/engine"
+              className="hover:text-ink-2 transition-colors"
+            >
+              Python engine
             </a>
             <a href="https://pisama.ai" className="hover:text-ink-2 transition-colors">
               pisama.ai
