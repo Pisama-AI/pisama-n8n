@@ -285,7 +285,8 @@ export default function Landing() {
             <p className="mt-6 max-w-2xl text-lg text-ink-2 leading-relaxed">
               Pisama reads real workflow executions and surfaces the failures that slip
               through: timeouts, swallowed errors, runaway loops, and exploding payloads.
-              Connect your n8n and see the evidence behind each detection.
+              Connect your n8n to see the evidence behind every detection, and
+              let the cloud tier draft and apply the fix once you approve.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-4">
               <a

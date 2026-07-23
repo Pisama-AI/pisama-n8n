@@ -27,7 +27,7 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: 'Pisama · n8n',
-  description: 'Self-hosted failure detection for n8n workflows.',
+  description: 'Failure detection for n8n workflows, self-hosted or in the Pisama cloud.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
