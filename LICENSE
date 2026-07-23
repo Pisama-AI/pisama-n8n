@@ -103,6 +103,6 @@ never as "open source".
 
 Scope: this license covers the `engine/`, `server/`, `dashboard/`, and `deploy/`
 directories. The n8n community node (`n8n-nodes-pisama`) is licensed separately under
-the MIT License and lives in its own repository and on npm, not here. Fix generation and
-auto-fixing are paid features served from the Pisama cloud and are not included in this
-repository.
+the MIT License and lives in its own repository and on npm, not here. Deterministic
+input-guard and error-route repairs are included in this repository. Model-generated
+fixes are paid features served from the Pisama cloud and are not included here.

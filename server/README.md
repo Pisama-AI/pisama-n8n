@@ -13,9 +13,10 @@ platform.
   dashboard can read the API.
 - Both detection lanes run per execution: structural (from the workflow JSON) + runtime
   (from the execution's runData), merged into one stored report.
-- **Repair safety**: cloud-generated proposals are persisted server-side. Apply and rollback
-  accept a repair id, never client-supplied workflow JSON or snapshots. Both reject a stale
-  workflow rather than overwriting an operator's later edit.
+- **Repair safety**: deterministic and cloud-generated proposals are persisted
+  server-side. Apply and rollback accept a repair id, never client-supplied workflow
+  JSON or snapshots. Both reject a stale workflow rather than overwriting an
+  operator's later edit.
 
 ## Ingestion channels
 

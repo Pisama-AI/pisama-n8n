@@ -2,14 +2,16 @@
 
 [![CI](https://github.com/Pisama-AI/pisama-n8n/actions/workflows/ci.yml/badge.svg)](https://github.com/Pisama-AI/pisama-n8n/actions/workflows/ci.yml)
 
-Failure detection for n8n workflows. Fair-code and self-hostable; the paid tier (fix
-suggestions and auto-fixing) runs in the Pisama cloud.
+Failure detection and deterministic repairs for n8n workflows. The fair-code,
+self-hostable product includes detection plus guarded input and error-route repairs.
+Model-generated fixes are the paid Pisama cloud tier.
 
 > **Status: early release (fair-code).** The engine (structural detection), the
 > self-host server (webhook + API-polling ingestion, SQLite, live SSE), and the
 > dashboard all work and are verified end-to-end against a real n8n. The n8n community
-> node ships separately on npm (`n8n-nodes-pisama`). The paid cloud tier (fix
-> suggestions + auto-apply) is gated behind a cloud key.
+> node ships separately on npm (`n8n-nodes-pisama`). Deterministic guardrail and
+> error-route repairs are included. Model-generated fix suggestions and their
+> apply path are gated behind a cloud key.
 >
 > **Honest about quality:** detector *precision* is measured on real n8n templates and is
 > solid. *Recall* was validated in 2026-07 against failures mined from real community
@@ -112,11 +114,14 @@ run only on parsed execution evidence via
   hosting. NOT OSI "open source"; call it "fair-code". See [LICENSE](LICENSE).
 - The **n8n community node** (`n8n-nodes-pisama`, MIT) is published separately, in its
   own repo and on npm, not in this repository (n8n's verified-node program requires MIT).
-- **Fix suggestions and auto-fixing** are NOT in this repo. They run in the Pisama cloud
-  and are the paid tier. The self-host server calls the cloud with an API key; the user's
-  n8n credentials never leave their network. A suggestion is stored as a server-owned,
-  reviewable repair record. When auto-apply is enabled, Pisama refuses to overwrite a
-  workflow changed since the proposal and preserves a guarded rollback point.
+- **Deterministic repairs are included.** Input-schema guardrails and error-route
+  repairs are derived without a model, reviewed by an operator, applied with a stale
+  workflow check, and stored with a rollback point.
+- **Model-generated fixes are the paid tier.** Generation runs in the Pisama cloud.
+  The self-host server calls it with an API key, while the user's n8n credentials stay
+  in their network. The returned suggestion becomes a server-owned, reviewable repair
+  record. When model-fix apply is enabled, the same stale check and rollback safeguards
+  protect the live workflow.
 
 ## Single source of truth
 
