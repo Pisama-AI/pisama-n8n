@@ -5,12 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "pisama-n8n-engine"
 version = "0.1.0"
-description = "Failure detection for n8n workflows — the standalone Pisama detection engine."
+description = "Standalone failure detection for n8n workflows"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "SUL-1.0" }  # Sustainable Use License (fair-code) — see ../LICENSE
-authors = [{ name = "Pisama" }]
-keywords = ["n8n", "workflow", "failure-detection", "observability", "reliability"]
+license = { file = "LICENSE" }
+authors = [{ name = "Pisama Team", email = "team@pisama.ai" }]
+keywords = ["n8n", "workflow", "failure-detection", "observability", "reliability", "ai-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
 
 # The 6 structural detectors are pure-Python and dependency-free. The optional
 # execution-lane semantic checks use embeddings; install the extra for those.
@@ -21,10 +33,23 @@ embeddings = ["sentence-transformers>=2.2", "numpy>=1.24"]
 test = ["pytest"]
 
 [project.urls]
-Homepage = "https://github.com/Pisama-AI/pisama-n8n"
+Homepage = "https://pisama.ai"
+Documentation = "https://github.com/Pisama-AI/pisama-n8n/tree/main/engine"
+Repository = "https://github.com/Pisama-AI/pisama-n8n"
+Issues = "https://github.com/Pisama-AI/pisama-n8n/issues"
+Changelog = "https://github.com/Pisama-AI/pisama-n8n/blob/main/engine/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pisama_n8n_engine"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/pisama_n8n_engine",
+    "/tests",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
