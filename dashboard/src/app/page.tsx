@@ -17,7 +17,7 @@ import { PisamaMark } from '@/components/common/PisamaMark'
 export const metadata: Metadata = {
   title: 'Pisama for n8n: failure detection for your workflows',
   description:
-    'Detect failures in n8n workflow executions. Self-host the fair-code version, or use the free and Pro cloud plans for AI fixes and approvals.',
+    'Compare fair-code self-hosting, Cloud Free, and the Pro preview for n8n failure detection and guarded repairs.',
 }
 
 const DETECTORS = [
@@ -90,10 +90,13 @@ const PACKAGES = [
 
 const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
+  ['Code license', 'Fair-code', 'Hosted service', 'Hosted service'],
+  ['Execution data', 'Your environment', 'Pisama-managed', 'Pisama-managed'],
   ['n8n connections', 'You manage them', '1', '5'],
   ['Failure detection', 'Evidence-gated detectors', 'Evidence-gated detectors', 'Evidence-gated detectors'],
-  ['AI fix suggestions', 'With a cloud key', 'Not included', 'Monthly allocation'],
-  ['Apply approved fixes', 'With a cloud key', 'Not included', 'Snapshots and rollback'],
+  ['Deterministic repairs', 'Included', 'Included', 'Included'],
+  ['Model-generated fixes', 'Paid cloud key', 'Not included', 'Monthly allocation'],
+  ['Apply model fixes', 'Cloud key + opt-in', 'Not included', 'Snapshot and rollback'],
 ]
 
 const FIRST_DETECTION_STEPS = [
@@ -157,7 +160,7 @@ function PlanComparison() {
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                You control deployment and updates
+                Deterministic guardrail and error-route repairs
               </li>
             </ul>
             <a
@@ -174,7 +177,8 @@ function PlanComparison() {
             </div>
             <h3 className="font-serif text-2xl mb-3">Free</h3>
             <p className="text-sm text-ink-3 leading-relaxed mb-6">
-              Get hosted detection and a dashboard for one connected n8n instance.
+              Get hosted detection, a dashboard, and deterministic repairs for one
+              connected n8n instance.
             </p>
             <ul className="space-y-3 text-sm text-ink-2 mb-8">
               <li className="flex gap-2">
@@ -187,7 +191,7 @@ function PlanComparison() {
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Detection stays free
+                Deterministic guardrail and error-route repairs
               </li>
             </ul>
             <a
@@ -198,9 +202,9 @@ function PlanComparison() {
             </a>
           </article>
 
-          <article className="rounded-lg border border-evidence bg-paper-3 p-6 flex flex-col shadow-[0_0_0_1px_rgba(232,179,65,0.12)]">
+          <article className="rounded-lg border border-evidence bg-paper-3 p-6 flex flex-col">
             <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-evidence mb-5">
-              <Sparkles size={15} /> Pro cloud
+              <Sparkles size={15} /> Pro preview
             </div>
             <h3 className="font-serif text-2xl mb-3">Fix and approve</h3>
             <p className="text-sm text-ink-2 leading-relaxed mb-6">
@@ -222,23 +226,23 @@ function PlanComparison() {
               </li>
             </ul>
             <a
-              href="https://app.n8n.pisama.ai/sign-in"
+              href="mailto:team@pisama.ai?subject=Pisama%20for%20n8n%20Pro%20access"
               className="mt-auto inline-block w-fit px-4 py-2 rounded-lg bg-evidence text-evidence-ink text-sm font-semibold hover:bg-evidence-2 transition-colors"
             >
-              Start free, then upgrade
+              Request Pro access
             </a>
           </article>
         </div>
 
         <div className="mt-8 overflow-x-auto rounded-lg border border-rule bg-paper">
           <table className="w-full min-w-[660px] text-left text-sm">
-            <caption className="sr-only">Comparison of self-host, free cloud, and Pro cloud options</caption>
+            <caption className="sr-only">Comparison of self-host, free cloud, and Pro preview options</caption>
             <thead className="border-b border-rule text-xs uppercase tracking-[0.14em] text-ink-4">
               <tr>
                 <th scope="col" className="px-5 py-4 font-medium">Includes</th>
                 <th scope="col" className="px-5 py-4 font-medium">Self-host</th>
                 <th scope="col" className="px-5 py-4 font-medium">Free cloud</th>
-                <th scope="col" className="px-5 py-4 font-medium text-evidence">Pro cloud</th>
+                <th scope="col" className="px-5 py-4 font-medium text-evidence">Pro preview</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-rule text-ink-2">
@@ -302,8 +306,8 @@ export default function Landing() {
             <p className="mt-6 max-w-2xl text-lg text-ink-2 leading-relaxed">
               Pisama reads real workflow executions and surfaces the failures that slip
               through: timeouts, swallowed errors, runaway loops, and exploding payloads.
-              Connect your n8n to see the evidence behind every detection, and
-              let the cloud tier draft and apply the fix once you approve.
+              Free deterministic repairs can add guards and error routes after approval.
+              Pro adds model-generated fixes for the failures that need more context.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-4">
               <a
