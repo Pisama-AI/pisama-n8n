@@ -122,6 +122,11 @@ run only on parsed execution evidence via
   in their network. The returned suggestion becomes a server-owned, reviewable repair
   record. When model-fix apply is enabled, the same stale check and rollback safeguards
   protect the live workflow.
+- **Pro preview includes 200 model-fix generations per month.** The allocation is
+  enforced before any model call. Deterministic repairs do not consume it.
+- **Commercial operation stays commercial.** Internal self-hosting is included.
+  Competing hosted or embedded offerings, managed deployment support, and commercial
+  service terms require a separate agreement.
 
 ## Single source of truth
 

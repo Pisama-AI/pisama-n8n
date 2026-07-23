@@ -121,6 +121,8 @@ Paid tier (cloud key required):
 - `GET /api/v1/paid/status`: paid-tier availability, gated on `PISAMA_CLOUD_KEY`.
 - `POST /api/v1/n8n/fix`: generate and persist a read-only paid repair proposal
   (applied and rolled back via the shared `/n8n/apply` + `/n8n/rollback` above).
+- Hosted Pro currently includes 200 model-fix generations per calendar month.
+  Deterministic repairs are free and do not consume that allocation.
 
 Liveness:
 

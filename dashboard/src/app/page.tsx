@@ -115,6 +115,7 @@ const PLAN_FEATURES = [
   ['Deterministic repairs', 'Included', 'Included', 'Included'],
   ['Model-generated fixes', 'Paid cloud key', 'Not included', 'Monthly allocation'],
   ['Apply model fixes', 'Cloud key + opt-in', 'Not included', 'Snapshot and rollback'],
+  ['Operations', 'You operate it', 'Pisama managed', 'Pisama managed'],
 ]
 
 const FIRST_DETECTION_STEPS = [
@@ -236,7 +237,7 @@ function PlanComparison() {
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Monthly AI fix allocation
+                200 AI fix generations each month
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -275,6 +276,11 @@ function PlanComparison() {
             </tbody>
           </table>
         </div>
+        <p className="mt-4 text-xs leading-relaxed text-ink-4">
+          Self-hosting is free for internal use under the Pisama Sustainable Use
+          License. Managed service operation, competing hosted or embedded use,
+          and commercial support require a separate agreement.
+        </p>
       </div>
     </section>
   )
@@ -285,20 +291,20 @@ export default function Landing() {
     <main className="min-h-screen bg-paper text-ink">
       {/* nav */}
       <header className="border-b border-rule">
-        <div className="mx-auto max-w-5xl px-6 py-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="mx-auto max-w-5xl px-6 py-5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 whitespace-nowrap">
             <PisamaMark size={26} color="var(--ink)" />
             <span className="font-serif text-lg">
               pisama <span className="text-ink-3">for n8n</span>
             </span>
           </div>
-          <nav className="flex items-center gap-5 text-sm">
-            <a href="#plans" className="text-ink-3 hover:text-ink transition-colors">
+          <nav className="flex items-center gap-5 text-sm shrink-0">
+            <a href="#plans" className="hidden sm:inline text-ink-3 hover:text-ink transition-colors">
               Compare options
             </a>
             <a
               href="https://github.com/Pisama-AI/pisama-n8n"
-              className="text-ink-3 hover:text-ink transition-colors"
+              className="hidden sm:inline text-ink-3 hover:text-ink transition-colors"
             >
               GitHub
             </a>
