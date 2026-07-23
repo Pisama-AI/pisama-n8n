@@ -13,6 +13,7 @@ import {
   Check,
 } from 'lucide-react'
 import { PisamaMark } from '@/components/common/PisamaMark'
+import productManifest from '@/data/product-capabilities.generated.json'
 
 export const metadata: Metadata = {
   title: 'Pisama for n8n: failure detection for your workflows',
@@ -106,16 +107,71 @@ const LAYERED = [
   },
 ]
 
+function productById(id: string) {
+  const product = productManifest.products.find((candidate) => candidate.id === id)
+  if (!product) throw new Error(`Missing product capability definition: ${id}`)
+  return product
+}
+
+const CAPABILITY_LABELS = Object.fromEntries(
+  productManifest.capabilities.map((capability) => [capability.id, capability.label]),
+)
+const N8N_SELF_HOSTED = productById('n8n_self_hosted')
+const N8N_CLOUD_FREE = productById('n8n_cloud_free')
+const N8N_PRO = productById('n8n_pro')
+
 const PLAN_FEATURES = [
   ['Deployment', 'Self-hosted', 'Pisama cloud', 'Pisama cloud'],
   ['Code license', 'Fair-code', 'Hosted service', 'Hosted service'],
   ['Execution data', 'Your environment', 'Pisama-managed', 'Pisama-managed'],
-  ['n8n connections', 'You manage them', '1', '5'],
-  ['Failure detection', 'Evidence-gated detectors', 'Evidence-gated detectors', 'Evidence-gated detectors'],
-  ['Deterministic repairs', 'Included', 'Included', 'Included'],
-  ['Model-generated fixes', 'Paid cloud key', 'Not included', 'Monthly allocation'],
-  ['Apply model fixes', 'Cloud key + opt-in', 'Not included', 'Snapshot and rollback'],
-  ['Operations', 'You operate it', 'Pisama managed', 'Pisama managed'],
+  [
+    'n8n connections',
+    String(N8N_SELF_HOSTED.allowances.n8n_connections),
+    String(N8N_CLOUD_FREE.allowances.n8n_connections),
+    String(N8N_PRO.allowances.n8n_connections),
+  ],
+  [
+    CAPABILITY_LABELS.local_heuristic_detection,
+    N8N_SELF_HOSTED.capabilities.local_heuristic_detection,
+    N8N_CLOUD_FREE.capabilities.local_heuristic_detection,
+    N8N_PRO.capabilities.local_heuristic_detection,
+  ],
+  [
+    CAPABILITY_LABELS.evidence_backed_diagnosis,
+    N8N_SELF_HOSTED.capabilities.evidence_backed_diagnosis,
+    N8N_CLOUD_FREE.capabilities.evidence_backed_diagnosis,
+    N8N_PRO.capabilities.evidence_backed_diagnosis,
+  ],
+  [
+    CAPABILITY_LABELS.deterministic_repairs,
+    N8N_SELF_HOSTED.capabilities.deterministic_repairs,
+    N8N_CLOUD_FREE.capabilities.deterministic_repairs,
+    N8N_PRO.capabilities.deterministic_repairs,
+  ],
+  [
+    CAPABILITY_LABELS.model_generated_fixes,
+    N8N_SELF_HOSTED.capabilities.model_generated_fixes,
+    N8N_CLOUD_FREE.capabilities.model_generated_fixes,
+    N8N_PRO.capabilities.model_generated_fixes,
+  ],
+  [
+    CAPABILITY_LABELS.advanced_detection,
+    N8N_SELF_HOSTED.capabilities.advanced_detection,
+    N8N_CLOUD_FREE.capabilities.advanced_detection,
+    N8N_PRO.capabilities.advanced_detection,
+  ],
+  [
+    CAPABILITY_LABELS.managed_operations,
+    N8N_SELF_HOSTED.capabilities.managed_operations,
+    N8N_CLOUD_FREE.capabilities.managed_operations,
+    N8N_PRO.capabilities.managed_operations,
+  ],
+  [
+    CAPABILITY_LABELS.team_governance,
+    N8N_SELF_HOSTED.capabilities.team_governance,
+    N8N_CLOUD_FREE.capabilities.team_governance,
+    N8N_PRO.capabilities.team_governance,
+  ],
 ]
 
 const FIRST_DETECTION_STEPS = [
@@ -171,7 +227,7 @@ function PlanComparison() {
             <ul className="space-y-3 text-sm text-ink-2 mb-8">
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Evidence-gated detectors
+                {CAPABILITY_LABELS.local_heuristic_detection}
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -179,7 +235,7 @@ function PlanComparison() {
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Deterministic guardrail and error-route repairs
+                {CAPABILITY_LABELS.deterministic_repairs}: guardrails and error routes
               </li>
             </ul>
             <a
@@ -202,15 +258,15 @@ function PlanComparison() {
             <ul className="space-y-3 text-sm text-ink-2 mb-8">
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                One n8n connection
+                {N8N_CLOUD_FREE.allowances.n8n_connections} n8n connection
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Evidence-gated detectors
+                {CAPABILITY_LABELS.evidence_backed_diagnosis}
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Deterministic guardrail and error-route repairs
+                {CAPABILITY_LABELS.deterministic_repairs}: guardrails and error routes
               </li>
             </ul>
             <a
@@ -233,11 +289,12 @@ function PlanComparison() {
             <ul className="space-y-3 text-sm text-ink mb-8">
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                Five n8n connections
+                {N8N_PRO.allowances.n8n_connections} n8n connections
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
-                200 AI fix generations each month
+                {N8N_PRO.allowances.model_fix_generations_per_month} model-generated fix
+                generations each month
               </li>
               <li className="flex gap-2">
                 <Check size={16} className="text-evidence shrink-0" />
@@ -265,10 +322,10 @@ function PlanComparison() {
               </tr>
             </thead>
             <tbody className="divide-y divide-rule text-ink-2">
-              {PLAN_FEATURES.map(([feature, oss, free, pro]) => (
+              {PLAN_FEATURES.map(([feature, selfHosted, free, pro]) => (
                 <tr key={feature}>
                   <th scope="row" className="px-5 py-4 font-medium text-ink">{feature}</th>
-                  <td className="px-5 py-4">{oss}</td>
+                  <td className="px-5 py-4">{selfHosted}</td>
                   <td className="px-5 py-4">{free}</td>
                   <td className="px-5 py-4 text-ink">{pro}</td>
                 </tr>
@@ -281,6 +338,12 @@ function PlanComparison() {
           License. Managed service operation, competing hosted or embedded use,
           and commercial support require a separate agreement.
         </p>
+        <a
+          href={productManifest.comparison_url}
+          className="mt-4 inline-block border-b border-ink pb-0.5 text-sm font-medium text-ink"
+        >
+          Compare the full Pisama product family
+        </a>
       </div>
     </section>
   )

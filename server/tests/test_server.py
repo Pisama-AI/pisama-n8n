@@ -62,7 +62,9 @@ def test_execution_persistence_redacts_http_credential_headers():
         }
     }
     redacted = redact_execution_payload(payload)
-    headers = redacted["workflowData"]["nodes"][0]["parameters"]["headerParameters"]["parameters"]
+    headers = redacted["workflowData"]["nodes"][0]["parameters"]["headerParameters"][
+        "parameters"
+    ]
     assert headers[0]["value"] == "[redacted]"
     assert headers[1]["value"] == "application/json"
 
@@ -185,6 +187,26 @@ def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok", "build_revision": "unknown"}
+
+
+def test_product_capability_contract_is_public_and_explicit(client):
+    resp = client.get("/api/v1/capabilities")
+    assert resp.status_code == 200
+    manifest = resp.json()
+    products = {product["id"]: product for product in manifest["products"]}
+    labels = {
+        capability["id"]: capability["label"] for capability in manifest["capabilities"]
+    }
+
+    assert labels["deterministic_repairs"] == "Deterministic repairs"
+    assert labels["model_generated_fixes"] == "Model-generated fixes"
+    assert products["n8n_self_hosted"]["category"] == "fair_code"
+    assert (
+        products["n8n_self_hosted"]["capabilities"]["deterministic_repairs"]
+        == "Input guardrails and error-route repairs"
+    )
+    assert products["n8n_cloud_free"]["allowances"]["n8n_connections"] == 1
+    assert products["n8n_pro"]["allowances"]["model_fix_generations_per_month"] == 200
 
 
 def test_detection_retains_configured_build_revision(client, monkeypatch):

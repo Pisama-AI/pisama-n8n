@@ -1,5 +1,5 @@
 // Plain fetch client. Two modes:
-//   OSS self-host (default): direct calls to the server, bearer key from
+//   fair-code self-host (default): direct calls to the server, bearer key from
 //   localStorage (Settings) or NEXT_PUBLIC_API_KEY. Single-tenant.
 //   SaaS (NEXT_PUBLIC_SAAS=1): same-origin BFF proxy (/api/backend) — the session
 //   cookie authenticates, the proxy attaches the tenant JWT server-side, and no
@@ -22,7 +22,7 @@ export function resolveKey(): string | undefined {
   return process.env.NEXT_PUBLIC_API_KEY || undefined
 }
 
-// OSS self-host: persist / clear the bearer key the dashboard sends on POSTs
+// fair-code self-host: persist / clear the bearer key the dashboard sends on POSTs
 // (used when the server sets PISAMA_API_KEY). Set from the Settings page.
 export function setStoredKey(key: string): void {
   if (typeof window !== 'undefined') window.localStorage.setItem(KEY_STORAGE, key)

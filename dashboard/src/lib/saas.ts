@@ -1,4 +1,4 @@
-// SaaS-mode switch. OFF (default): the OSS self-host dashboard, byte-identical
+// SaaS-mode switch. OFF (default): the fair-code self-host dashboard, byte-identical
 // behavior — direct API calls with a bearer key. ON (NEXT_PUBLIC_SAAS=1, the
 // hosted app.n8n.pisama.ai deployment): Google sign-in via NextAuth and all API
 // calls through the same-origin BFF proxy, which attaches the backend JWT

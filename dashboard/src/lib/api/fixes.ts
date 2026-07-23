@@ -14,7 +14,7 @@ export interface FixSuggestion {
   patch_ops: PatchOp[]
   mutated_workflow: Record<string, unknown>
   workflow_id: string | null
-  // OSS returns a durable local repair id. The hosted API may use its own repair
+  // self-host returns a durable local repair id. The hosted API may use its own repair
   // lifecycle while the two products converge, so this remains optional here.
   repair_id?: number
   repair_status?: 'proposed'
@@ -40,12 +40,12 @@ export interface PaidStatus {
   fixesUsed?: number
 }
 
-// Endpoint families differ between the OSS self-host server and the SaaS API.
+// Endpoint families differ between the fair-code self-host server and the SaaS API.
 const FIX = IS_SAAS ? '/api/v1/fixes' : '/api/v1/n8n/fix'
 
 export async function getPaidStatus(): Promise<PaidStatus> {
   const raw = await fetchApi<Record<string, unknown>>('/api/v1/paid/status')
-  // OSS returns {enabled}; SaaS returns {plan, fix_quota, fixes_used, fixes_enabled}.
+  // self-host returns {enabled}; SaaS returns {plan, fix_quota, fixes_used, fixes_enabled}.
   if (IS_SAAS) {
     return {
       enabled: Boolean(raw.fixes_enabled),
@@ -61,7 +61,7 @@ export function requestFix(detectionId: string): Promise<FixSuggestion> {
   return postApi(FIX, { detection_id: Number(detectionId) })
 }
 
-// Apply/rollback diverge by product, mirroring guardrail.ts: the OSS server shares one
+// Apply/rollback diverge by product, mirroring guardrail.ts: the fair-code server shares one
 // repair-apply endpoint (POST /n8n/apply {repair_id}); the SaaS server runs BOTH repair
 // kinds (guardrails and model fixes) through REST-nested per-repair paths
 // (POST /n8n/repairs/{id}/apply, no body). Same {repair} response either way. The fix

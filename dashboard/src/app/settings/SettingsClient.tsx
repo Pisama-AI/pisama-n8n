@@ -16,7 +16,7 @@ import {
   getMe,
   listConnections,
   syncConnection,
-  syncOss,
+  syncSelfHosted,
   openBillingPortal,
   listIngestKeys,
   createIngestKey,
@@ -35,7 +35,7 @@ function CardTitleRow({ icon: Icon, children }: { icon: React.ElementType; child
   )
 }
 
-// ── OSS self-host cards ─────────────────────────────────────────────────────
+// ── fair-code self-host cards ─────────────────────────────────────────────────────
 
 // The one real gap: the dashboard reads a bearer key from localStorage but had no
 // way to set it. Needed when the server runs with PISAMA_API_KEY.
@@ -103,7 +103,7 @@ function SyncCard() {
     setBusy(true)
     setMsg(null)
     try {
-      const summary = await syncOss()
+      const summary = await syncSelfHosted()
       qc.invalidateQueries({ queryKey: ['detections'] })
       setMsg({ ok: true, text: `Ingested ${summary.new ?? 0} new execution(s).` })
     } catch (e) {

@@ -25,7 +25,7 @@ function errorMessage(e: unknown, fallback: string): string {
   return err?.message || fallback
 }
 
-// Operator UI for the deterministic input-schema guardrail repair (OSS self-host
+// Operator UI for the deterministic input-schema guardrail repair (fair-code self-host
 // AND multi-tenant SaaS). Flow: propose -> pick/confirm required paths -> pick
 // destination -> preview the generated subgraph -> apply (with the same
 // confirm/rollback affordance as FixPanel). In SaaS, apply is Pro-gated (402).

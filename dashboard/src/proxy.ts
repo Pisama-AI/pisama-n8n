@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 
 // Next 16 "proxy" convention. Two deploy modes gate the dashboard routes;
-// OSS self-host (neither flag set) is a pass-through, so public-repo behavior
+// fair-code self-host (neither flag set) is a pass-through, so public-repo behavior
 // is unchanged.
 //   NEXT_PUBLIC_READONLY=1 — the marketing-only deploy (n8n.pisama.ai). The
 //     retired public demo: dashboard routes redirect to the landing.

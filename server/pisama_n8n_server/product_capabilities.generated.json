@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "canonical_url": "https://pisama.ai/product-capabilities.json",
+  "comparison_url": "https://pisama.ai/compare/products",
+  "principles": [
+    "Align the product promise and capability names, not identical runtime inventories.",
+    "Keep local heuristic detection, evidence-backed diagnosis, and runtime-appropriate deterministic repairs available without a managed plan.",
+    "Keep model-generated fixes, advanced detection, managed operations, and team governance inside Pisama-managed services or commercial agreements.",
+    "Let quotas and runtime-specific features differ when their cost structures and operator workflows differ."
+  ],
+  "terms": {
+    "open_source": {
+      "label": "Open source",
+      "definition": "Software distributed under an OSI-approved license. Pisama uses this term only for packages such as the MIT-licensed core SDKs and n8n community node."
+    },
+    "fair_code": {
+      "label": "Fair-code",
+      "definition": "Source-available software that is free for permitted internal use but restricts competing hosted or embedded commercial offerings. Pisama for n8n self-hosting uses the Sustainable Use License."
+    },
+    "hosted_service": {
+      "label": "Hosted service",
+      "definition": "A Pisama-managed service governed by hosted service or commercial terms. A plan may have a free allowance without becoming open source or fair-code."
+    }
+  },
+  "capabilities": [
+    {
+      "id": "local_heuristic_detection",
+      "label": "Local heuristic detection",
+      "description": "Deterministic or evidence-gated checks that can run without a Pisama-managed model call."
+    },
+    {
+      "id": "evidence_backed_diagnosis",
+      "label": "Evidence-backed diagnosis",
+      "description": "Failure explanations tied to trace, workflow, or execution evidence."
+    },
+    {
+      "id": "deterministic_repairs",
+      "label": "Deterministic repairs",
+      "description": "Rule-based repair primitives with operator review where the runtime supports a safe change."
+    },
+    {
+      "id": "model_generated_fixes",
+      "label": "Model-generated fixes",
+      "description": "Contextual fix generation that uses a Pisama-managed model workflow."
+    },
+    {
+      "id": "advanced_detection",
+      "label": "Advanced detection",
+      "description": "Safety, ML, advanced evaluation, or custom detector tiers beyond the local baseline."
+    },
+    {
+      "id": "managed_operations",
+      "label": "Managed operations",
+      "description": "Pisama-operated ingestion, storage, upgrades, availability, and service monitoring."
+    },
+    {
+      "id": "team_governance",
+      "label": "Team governance",
+      "description": "Shared administration, audit controls, SSO, RBAC, and commercial governance."
+    }
+  ],
+  "products": [
+    {
+      "id": "main_local",
+      "family": "main",
+      "name": "Pisama local SDKs",
+      "category": "open_source",
+      "license": "MIT for the core SDKs; optional packages declare their own license",
+      "deployment": "Your Python or TypeScript process",
+      "data_location": "Your environment",
+      "capabilities": {
+        "local_heuristic_detection": "32 local heuristic detectors",
+        "evidence_backed_diagnosis": "Included",
+        "deterministic_repairs": "Local repair primitives",
+        "model_generated_fixes": "Not included",
+        "advanced_detection": "Not included",
+        "managed_operations": "Not included",
+        "team_governance": "Not included"
+      },
+      "allowances": {
+        "hosted_events_per_month": null,
+        "hosted_healing_actions_per_month": null
+      },
+      "runtime_specific": [
+        "Python and TypeScript SDKs",
+        "CLI and CI failure gates",
+        "Local MCP workflows",
+        "Framework adapters"
+      ],
+      "upgrade": "Add Pisama Cloud for managed history, model-generated fixes, advanced detection, and team controls."
+    },
+    {
+      "id": "n8n_self_hosted",
+      "family": "n8n",
+      "name": "Pisama for n8n self-hosted",
+      "category": "fair_code",
+      "license": "Pisama Sustainable Use License",
+      "deployment": "Your infrastructure",
+      "data_location": "Your environment",
+      "capabilities": {
+        "local_heuristic_detection": "Evidence-gated workflow and execution detectors",
+        "evidence_backed_diagnosis": "Included",
+        "deterministic_repairs": "Input guardrails and error-route repairs",
+        "model_generated_fixes": "Requires a cloud key",
+        "advanced_detection": "Not included",
+        "managed_operations": "You operate it",
+        "team_governance": "Not included"
+      },
+      "allowances": {
+        "n8n_connections": "You manage them",
+        "model_fix_generations_per_month": 0
+      },
+      "runtime_specific": [
+        "Self-host server and dashboard",
+        "Webhook and API-polling ingestion",
+        "SQLite by default",
+        "Live execution stream"
+      ],
+      "upgrade": "Add Pisama for n8n Cloud for managed operation and Pro for model-generated fixes."
+    },
+    {
+      "id": "main_cloud_free",
+      "family": "main",
+      "name": "Pisama Cloud Free",
+      "category": "hosted_service",
+      "license": "Hosted service terms",
+      "deployment": "Pisama Cloud",
+      "data_location": "Pisama-managed",
+      "capabilities": {
+        "local_heuristic_detection": "Core production heuristics",
+        "evidence_backed_diagnosis": "Included",
+        "deterministic_repairs": "Included where supported",
+        "model_generated_fixes": "Limited hosted allowance",
+        "advanced_detection": "Not included",
+        "managed_operations": "Included",
+        "team_governance": "Not included"
+      },
+      "allowances": {
+        "hosted_events_per_month": 5000,
+        "hosted_healing_actions_per_month": 10,
+        "projects": 1,
+        "retention_days": 7
+      },
+      "runtime_specific": [
+        "Hosted ingestion API",
+        "Browser dashboard",
+        "Managed trace history"
+      ],
+      "upgrade": "Indie adds the safety pack, Pro adds ML detection, Team adds advanced evaluations and governance, and Enterprise adds custom deployment terms."
+    },
+    {
+      "id": "n8n_cloud_free",
+      "family": "n8n",
+      "name": "Pisama for n8n Cloud Free",
+      "category": "hosted_service",
+      "license": "Hosted service terms",
+      "deployment": "Pisama Cloud",
+      "data_location": "Pisama-managed",
+      "capabilities": {
+        "local_heuristic_detection": "Evidence-gated workflow and execution detectors",
+        "evidence_backed_diagnosis": "Included",
+        "deterministic_repairs": "Input guardrails and error-route repairs",
+        "model_generated_fixes": "Not included",
+        "advanced_detection": "Not included",
+        "managed_operations": "Included",
+        "team_governance": "Not included"
+      },
+      "allowances": {
+        "n8n_connections": 1,
+        "model_fix_generations_per_month": 0
+      },
+      "runtime_specific": [
+        "Hosted n8n connection",
+        "Managed dashboard",
+        "Managed polling and ingestion"
+      ],
+      "upgrade": "Pro adds five n8n connections and 200 model-generated fix generations per month."
+    },
+    {
+      "id": "main_paid_cloud",
+      "family": "main",
+      "name": "Pisama paid Cloud",
+      "category": "hosted_service",
+      "license": "Commercial service terms",
+      "deployment": "Pisama Cloud or an Enterprise deployment",
+      "data_location": "Pisama-managed or contract-specific",
+      "capabilities": {
+        "local_heuristic_detection": "Included",
+        "evidence_backed_diagnosis": "Included",
+        "deterministic_repairs": "Included where supported",
+        "model_generated_fixes": "Included by plan",
+        "advanced_detection": "Safety, ML, advanced evaluation, and custom tiers by plan",
+        "managed_operations": "Included",
+        "team_governance": "Team and Enterprise"
+      },
+      "allowances": {
+        "hosted_events_per_month": "Plan-specific",
+        "hosted_healing_actions_per_month": "Plan-specific",
+        "projects": "Plan-specific",
+        "retention_days": "Plan-specific"
+      },
+      "runtime_specific": [
+        "Alerts and integrations",
+        "Longer retention",
+        "Team controls",
+        "Enterprise deployment options"
+      ],
+      "upgrade": "Choose Indie, Pro, Team, or Enterprise based on detection tier, capacity, and governance needs."
+    },
+    {
+      "id": "n8n_pro",
+      "family": "n8n",
+      "name": "Pisama for n8n Pro",
+      "category": "hosted_service",
+      "license": "Commercial service terms",
+      "deployment": "Pisama Cloud",
+      "data_location": "Pisama-managed",
+      "capabilities": {
+        "local_heuristic_detection": "Included",
+        "evidence_backed_diagnosis": "Included",
+        "deterministic_repairs": "Included",
+        "model_generated_fixes": "200 generations per month",
+        "advanced_detection": "Runtime-specific additions as released",
+        "managed_operations": "Included",
+        "team_governance": "Commercial support and service terms"
+      },
+      "allowances": {
+        "n8n_connections": 5,
+        "model_fix_generations_per_month": 200
+      },
+      "runtime_specific": [
+        "Reviewable model-generated fixes",
+        "Stale-workflow checks",
+        "Snapshots and rollback"
+      ],
+      "upgrade": "Contact Pisama for higher capacity, managed deployment support, or embedded commercial use."
+    }
+  ]
+}

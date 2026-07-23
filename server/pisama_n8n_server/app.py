@@ -20,10 +20,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -170,7 +173,9 @@ async def require_auth(request: Request) -> None:
         if not nonce:
             raise HTTPException(status_code=401, detail="Webhook nonce required.")
         if not _valid_hmac_signature(await request.body(), signature, timestamp):
-            raise HTTPException(status_code=401, detail="Invalid or stale webhook signature.")
+            raise HTTPException(
+                status_code=401, detail="Invalid or stale webhook signature."
+            )
         # Only a request that proved knowledge of the secret may consume a
         # nonce — otherwise unauthenticated garbage could burn future nonces.
         if not _consume_nonce(nonce):
@@ -207,6 +212,19 @@ async def healthz() -> Dict[str, str]:
     # (baseURL {apiUrl} + "/health"); aliasing it here makes the credential
     # validate green against a self-hosted server. Unauthenticated, like /healthz.
     return {"status": "ok", "build_revision": build_revision()}
+
+
+@lru_cache(maxsize=1)
+def _product_capabilities() -> Dict[str, Any]:
+    path = Path(__file__).with_name("product_capabilities.generated.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/v1/capabilities")
+async def product_capabilities() -> Dict[str, Any]:
+    """Public license, deployment, allowance, and capability contract."""
+
+    return _product_capabilities()
 
 
 @app.post("/api/v1/n8n/webhook", dependencies=[Depends(require_auth)])
@@ -555,7 +573,9 @@ async def n8n_error_route(
     guard_config = {
         "kind": "error_route",
         "target_workflow_id": None,
-        "previous_error_workflow": (workflow.get("settings") or {}).get("errorWorkflow"),
+        "previous_error_workflow": (workflow.get("settings") or {}).get(
+            "errorWorkflow"
+        ),
         "source_failure_mode": detection.get("failure_mode"),
     }
     proposal = storage.create_guardrail_proposal(
@@ -775,7 +795,9 @@ async def n8n_guardrail(
             await client.aclose()
     issues = (detection.get("evidence") or {}).get("issues") or []
     if not issues:
-        raise HTTPException(status_code=422, detail="Detection carries no failing node.")
+        raise HTTPException(
+            status_code=422, detail="Detection carries no failing node."
+        )
     failing_node = issues[0].get("node")
     error_message = issues[0].get("message") or ""
     node_def = next(
@@ -878,7 +900,9 @@ async def set_guardrail_destination(
         raise HTTPException(status_code=404, detail="Unknown repair_id.")
     guard = existing.get("guard_config")
     if not guard:
-        raise HTTPException(status_code=422, detail="Repair is not a guardrail proposal.")
+        raise HTTPException(
+            status_code=422, detail="Repair is not a guardrail proposal."
+        )
     if existing["status"] != "proposed":
         raise HTTPException(
             status_code=409, detail=f"Repair is already {existing['status']}."
@@ -905,9 +929,7 @@ async def set_guardrail_destination(
         "rejected_node": built["rejected_node"],
     }
     try:
-        updated = storage.set_guardrail_destination(
-            repair_id, built["workflow"], guard
-        )
+        updated = storage.set_guardrail_destination(repair_id, built["workflow"], guard)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"repair": updated}
@@ -1096,9 +1118,7 @@ async def n8n_apply(
         # Durably record the restore point BEFORE mutating the live workflow. This is the
         # fix for the strand-on-failure bug: if the PUT lands but any later step raises,
         # the snapshot is already persisted, so the repair stays rollback-eligible.
-        storage.record_repair_snapshot(
-            repair_id, snapshot, repair["proposed_workflow"]
-        )
+        storage.record_repair_snapshot(repair_id, snapshot, repair["proposed_workflow"])
 
         # Phase 2 — the point of no return: the live PUT. If it raises, the mutation may
         # already have landed, so keep the repair rollback-eligible, never 'failed'.

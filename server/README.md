@@ -4,6 +4,18 @@ Single-tenant self-host server for the Pisama n8n detection engine. Run this nex
 own n8n instance to get detection reports without sending workflow data to Pisama's hosted
 platform.
 
+## Product boundary
+
+This server is **Fair-code** under the Pisama Sustainable Use License. Local
+heuristic detection, evidence-backed diagnosis, and **Deterministic repairs**
+run in the self-hosted product. **Model-generated fixes** require a Pisama cloud
+key. Advanced detection, Managed operations, and Team governance are commercial
+service capabilities.
+
+The public `GET /api/v1/capabilities` endpoint returns the same canonical
+capability names, license categories, runtime-specific features, and allowances
+used by the Pisama websites and main API.
+
 ## Design
 
 - **Storage**: real SQLite by default (`pisama_n8n.db`); set `DATABASE_URL` for Postgres.
@@ -67,6 +79,7 @@ No node changes needed; the node as published on npm works unmodified.
 
 Ingestion + detections:
 
+- `GET /api/v1/capabilities`: public cross-product capability and license contract.
 - `POST /api/v1/n8n/webhook`: ingest one execution (push channel).
 - `POST /api/v1/n8n/sync`: poll the configured n8n and ingest new executions.
 - `GET /api/v1/detections`: every stored detection (each carries the ingest timestamp).

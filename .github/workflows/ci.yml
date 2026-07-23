@@ -23,6 +23,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e "engine[test]"
           pip install -e "server[test,mcp]"
+      - name: Product capability contract
+        run: python scripts/product_capabilities.py
       - name: Engine tests
         working-directory: engine
         run: python -m pytest -q
@@ -48,12 +50,12 @@ jobs:
       - name: Typecheck
         working-directory: dashboard
         run: npx tsc --noEmit
-      - name: Build (OSS mode)
+      - name: Build (self-hosted mode)
         working-directory: dashboard
         run: npm run build
       - name: Install Playwright browser
         working-directory: dashboard
         run: npx playwright install --with-deps chromium
-      - name: E2E (SaaS smoke + OSS dashboard, sequential configs)
+      - name: E2E (SaaS smoke + self-hosted dashboard, sequential configs)
         working-directory: dashboard
         run: npm run test:e2e

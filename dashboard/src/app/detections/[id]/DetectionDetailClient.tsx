@@ -218,7 +218,7 @@ export function DetectionDetailClient({ id }: { id: string }) {
                 )}
 
                 {detection.detected && detection.failure_mode === 'n8n_data_contract' ? (
-                  // The input-schema guardrail works in both products (OSS self-host and
+                  // The input-schema guardrail works in both products (fair-code self-host and
                   // multi-tenant SaaS); the client picks the right apply/rollback paths.
                   <GuardPanel detectionId={id} onRepairApplied={() => void refetch()} />
                 ) : (

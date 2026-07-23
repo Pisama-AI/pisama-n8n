@@ -2,7 +2,7 @@ import { IS_SAAS } from '@/lib/saas'
 import { postApi } from './client'
 import type { ApplyResult } from './fixes'
 
-// Input-schema guardrail repair (OSS self-host AND multi-tenant SaaS server).
+// Input-schema guardrail repair (fair-code self-host AND multi-tenant SaaS server).
 // Deterministic path derivation + destination wiring, distinct from the
 // AI-generated FixPanel flow in fixes.ts. Propose + set-destination share one
 // path shape across both products; apply/rollback diverge (see below).
@@ -81,7 +81,7 @@ export function setGuardrailDestination(
   })
 }
 
-// Apply/rollback diverge by product. The OSS self-host server shares one
+// Apply/rollback diverge by product. The fair-code self-host server shares one
 // repair-apply endpoint with the AI-fix flow (POST /n8n/apply {repair_id}); the
 // multi-tenant SaaS server exposes the guardrail lifecycle under REST-nested
 // per-repair paths (POST /n8n/repairs/{id}/apply, no body). Same {repair}

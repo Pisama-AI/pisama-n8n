@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:e2e": "playwright test --config playwright.config.ts && playwright test --config playwright.oss.config.ts"
+    "test:e2e": "playwright test --config playwright.config.ts && playwright test --config playwright.self-host.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.9",

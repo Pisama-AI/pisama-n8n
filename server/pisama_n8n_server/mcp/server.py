@@ -46,7 +46,7 @@ ERROR_TARGETS_TIMEOUT = 60.0
 
 
 class PisamaN8nMCPClient:
-    """Async HTTP client for a Pisama-for-n8n server (OSS or SaaS).
+    """Async HTTP client for a Pisama-for-n8n server (self-host or SaaS).
 
     ``transport`` is the test seam: pass httpx.ASGITransport(app=...) to run the
     real FastAPI app in-process instead of mocking anything.

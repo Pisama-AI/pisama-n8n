@@ -1,6 +1,6 @@
 import { deleteApi, fetchApi, postApi } from './client'
 
-// Shapes mirror the SaaS backend (saas_server/app.py). OSS mode only uses syncOss.
+// Shapes mirror the SaaS backend (saas_server/app.py). Self-hosted mode only uses syncSelfHosted.
 export interface Me {
   tenant_id: string
   name?: string // sign-in email for SaaS tenants
@@ -31,12 +31,12 @@ export function listConnections(): Promise<Connection[]> {
   return fetchApi('/api/v1/connections')
 }
 
-// SaaS: poll one tenant connection now. OSS: the env-configured single connection.
+// SaaS: poll one tenant connection now. self-host: the env-configured single connection.
 export function syncConnection(id: string): Promise<SyncSummary> {
   return postApi(`/api/v1/connections/${id}/sync`, {})
 }
 
-export function syncOss(): Promise<SyncSummary> {
+export function syncSelfHosted(): Promise<SyncSummary> {
   return postApi('/api/v1/n8n/sync', {})
 }
 

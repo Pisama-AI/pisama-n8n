@@ -17,13 +17,13 @@ interface Me {
   plan?: string
 }
 
-// The right-side indicator. OSS self-host shows a static "Self-host" pill; the hosted
+// The right-side indicator. fair-code self-host shows a static "Self-host" pill; the hosted
 // SaaS build (NEXT_PUBLIC_SAAS=1) shows the signed-in account's plan + email + sign out.
 function StatusPill() {
   const { data } = useQuery<Me>({
     queryKey: ['me'],
     queryFn: () => fetchApi('/api/v1/me'),
-    enabled: IS_SAAS, // build-time constant; the query never runs in OSS mode
+    enabled: IS_SAAS, // build-time constant; the query never runs in self-host mode
     staleTime: 60_000,
   })
 

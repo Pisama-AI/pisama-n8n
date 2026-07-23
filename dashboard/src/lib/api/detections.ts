@@ -74,7 +74,7 @@ export interface ReliabilityCase {
   failure_mode: string | null
   status: 'observing' | 'recurred' | 'prevented' | 'inconclusive' | 'rolled_back' | 'drifted'
   outcome: ReliabilityOutcome | 'recurred' | null
-  // Failure-rate window fields — present on an OSS model-fix case; the SaaS
+  // Failure-rate window fields — present on an self-host model-fix case; the SaaS
   // guardrail case is focused on the two routing probes and omits them.
   baseline_execution_count?: number
   baseline_failure_count?: number
@@ -188,7 +188,7 @@ export function getCandidateExecutions(caseId: number): Promise<CandidateExecuti
 // its internal id (from the picker) or its n8n source id (manual entry). The server
 // verifies the routing from the execution's runData (rejection destination ran + guarded
 // consumer skipped for malformed; the inverse for valid) and returns 409 on a mismatch or
-// an execution that has not been ingested yet. Same path on the OSS and SaaS servers.
+// an execution that has not been ingested yet. Same path on the self-host and SaaS servers.
 export function recordGuardVerification(
   caseId: number,
   kind: GuardVerificationKind,

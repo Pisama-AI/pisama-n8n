@@ -128,6 +128,27 @@ run only on parsed execution evidence via
   Competing hosted or embedded offerings, managed deployment support, and commercial
   service terms require a separate agreement.
 
+## Shared product capability contract
+
+Pisama uses the same capability names across the main platform and Pisama for
+n8n, while keeping runtime-specific features and allowances separate:
+
+| Capability | n8n self-hosted | n8n Cloud Free | n8n Pro |
+|---|---|---|---|
+| **Local heuristic detection** | Evidence-gated workflow and execution detectors | Included | Included |
+| **Evidence-backed diagnosis** | Included | Included | Included |
+| **Deterministic repairs** | Input guardrails and error-route repairs | Included | Included |
+| **Model-generated fixes** | Requires a cloud key | Not included | 200 generations per month |
+| **Advanced detection** | Not included | Not included | Runtime-specific additions as released |
+| **Managed operations** | You operate it | Included | Included |
+| **Team governance** | Not included | Not included | Commercial support and service terms |
+
+This table aligns the product promise, not every interface. The main product is
+SDK, CLI, CI, and MCP oriented. This product includes an n8n-specific server,
+dashboard, polling, webhook ingestion, and workflow repairs. See the
+[full Pisama product comparison](https://pisama.ai/compare/products) and the
+[canonical machine-readable manifest](https://pisama.ai/product-capabilities.json).
+
 ## Single source of truth
 
 Shared detectors originate in the Pisama monorepo, where the golden data, judges, and

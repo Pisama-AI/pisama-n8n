@@ -388,7 +388,7 @@ def test_recurrence_reduction_surfaces_non_null(tmp_path, monkeypatch):
 # ── data-shape diversity: cells that map to real branches ────────────────────
 
 def test_corrupt_guard_config_classifies_without_crashing(tmp_path, monkeypatch):
-    """OSS guard_config is a TEXT column; a corrupt/truncated JSON blob must
+    """self-host guard_config is a TEXT column; a corrupt/truncated JSON blob must
     classify as input_schema (the documented fallback for a truthy config) rather
     than crash the whole summary."""
     appmod, c = _client(tmp_path, monkeypatch)

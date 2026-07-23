@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test'
-import { OSS_API_BASE } from '../playwright.oss.config'
+import { SELF_HOST_API_BASE } from '../playwright.self-host.config'
 
 // Server rows in the exact shape GET /api/v1/detections returns (ServerDetection).
 // Three fired detections across three executions plus one non-fired row, so the
@@ -95,27 +95,27 @@ const TRACE = {
   ],
 }
 
-// Intercept every call the OSS dashboard makes to the self-host server. The SSE
+// Intercept every call the self-host dashboard makes to the self-host server. The SSE
 // stream is fulfilled with a long client-retry hint so EventSource does not
 // reconnect-spam within a test's lifetime.
 async function mockServerApi(page: Page) {
-  await page.route(`${OSS_API_BASE}/api/v1/stream**`, (route) =>
+  await page.route(`${SELF_HOST_API_BASE}/api/v1/stream**`, (route) =>
     route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
       body: 'retry: 60000\n\n',
     }),
   )
-  await page.route(`${OSS_API_BASE}/api/v1/detections`, (route) =>
+  await page.route(`${SELF_HOST_API_BASE}/api/v1/detections`, (route) =>
     route.fulfill({ json: ROWS }),
   )
-  await page.route(`${OSS_API_BASE}/api/v1/detections/1`, (route) =>
+  await page.route(`${SELF_HOST_API_BASE}/api/v1/detections/1`, (route) =>
     route.fulfill({ json: ROWS[0] }),
   )
-  await page.route(`${OSS_API_BASE}/api/v1/detections/1/trace`, (route) =>
+  await page.route(`${SELF_HOST_API_BASE}/api/v1/detections/1/trace`, (route) =>
     route.fulfill({ json: TRACE }),
   )
-  await page.route(`${OSS_API_BASE}/api/v1/paid/status`, (route) =>
+  await page.route(`${SELF_HOST_API_BASE}/api/v1/paid/status`, (route) =>
     route.fulfill({ json: { enabled: false } }),
   )
 }

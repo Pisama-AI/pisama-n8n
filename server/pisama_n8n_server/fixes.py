@@ -1,8 +1,8 @@
 """Paid-tier seam: request fixes from the Pisama cloud, apply them to the user's n8n.
 
-The OSS/paid boundary lives here. Fix GENERATION is the closed, paid IP and runs in the
+The self-host/paid boundary lives here. Fix GENERATION is the closed, paid IP and runs in the
 Pisama cloud (PISAMA_CLOUD_URL) — this module only *calls* it with a cloud key. Fix
-APPLICATION is mechanical (PUT a returned workflow JSON) and stays OSS. The user's n8n
+APPLICATION is mechanical (PUT a returned workflow JSON) and stays self-host. The user's n8n
 credentials never leave their network: the cloud sees the detection + workflow you send it,
 and returns a mutated workflow; the server applies it locally.
 

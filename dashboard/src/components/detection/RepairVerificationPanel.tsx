@@ -118,7 +118,7 @@ function GuardVerificationSection({
       try {
         setCandidates(await getCandidateExecutions(caseRecord.id))
       } catch {
-        setCandidates([]) // OSS server or fetch error → manual entry only
+        setCandidates([]) // fair-code server or fetch error → manual entry only
       } finally {
         setLoadingCandidates(false)
       }
@@ -267,7 +267,7 @@ export function RepairVerificationPanel({
 
   // A guardrail case is verified by the two routing probes, not the failure-rate window.
   const isGuardrail = caseRecord.failure_mode === 'n8n_data_contract'
-  // The failure-rate window only exists on an OSS model-fix case (SaaS omits it).
+  // The failure-rate window only exists on an self-host model-fix case (SaaS omits it).
   const hasFailureWindow = caseRecord.required_successful_executions != null
   const successful = caseRecord.successful_execution_count ?? 0
   const required = caseRecord.required_successful_executions ?? 0
