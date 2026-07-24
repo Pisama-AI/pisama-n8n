@@ -13,20 +13,23 @@ authors = [{ name = "Pisama" }]
 keywords = ["n8n", "workflow", "failure-detection", "self-host", "server"]
 
 dependencies = [
-    "pisama-n8n-engine",
-    "fastapi",
-    "uvicorn",
-    "sqlalchemy",
-    "httpx",
+    "pisama-n8n-engine>=0.1,<0.2",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "sqlalchemy>=2.0,<3",
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-asyncio"]
+test = ["pytest", "pytest-asyncio", "pytest-cov>=7.0"]
 # Optional so the prod server install never inherits mcp's transitive pins.
 mcp = ["mcp>=1.6,<2"]
 
 [project.urls]
 Homepage = "https://github.com/Pisama-AI/pisama-n8n"
+Documentation = "https://github.com/Pisama-AI/pisama-n8n/tree/main/server"
+Repository = "https://github.com/Pisama-AI/pisama-n8n"
+Issues = "https://github.com/Pisama-AI/pisama-n8n/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pisama_n8n_server"]

@@ -48,7 +48,7 @@ _poll_task: Optional[asyncio.Task] = None
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    global _poll_task
+    global _poll_task, _storage
     interval = float(os.environ.get("PISAMA_POLL_INTERVAL", "0") or "0")
     if interval > 0 and client_from_env() is not None:
         _poll_task = asyncio.create_task(_poll_loop(interval))
@@ -58,6 +58,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         if _poll_task is not None:
             _poll_task.cancel()
+        if _storage is not None:
+            _storage.close()
+            _storage = None
 
 
 app = FastAPI(

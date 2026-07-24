@@ -36,6 +36,7 @@ def client(tmp_path, monkeypatch):
         c.storage = storage  # type: ignore[attr-defined]
         yield c
     app.dependency_overrides.clear()
+    storage.close()
 
 
 def _fired(response_json: dict, detector: str) -> bool:

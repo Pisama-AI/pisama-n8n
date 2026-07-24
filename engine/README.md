@@ -42,7 +42,8 @@ See the
 [input-schema guardrail guide](https://github.com/Pisama-AI/pisama-n8n/blob/main/docs/input-schema-guardrail.md)
 for wiring and data-handling details.
 
-The detectors are vendored from the Pisama monorepo (the single source of truth) via
-`scripts/extract_from_monorepo.py`; a parity check guards against drift. This
-package uses the fair-code
+The detector core is vendored from the Pisama monorepo (the single source of truth) via
+`scripts/extract_from_monorepo.py`; a golden-corpus parity check guards detector behavior.
+Standalone trace models and n8n execution parsing stay local so the package has no
+undeclared web-service dependencies. This package uses the fair-code
 [Pisama Sustainable Use License](https://github.com/Pisama-AI/pisama-n8n/blob/main/LICENSE).

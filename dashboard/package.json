@@ -9,7 +9,8 @@
     "test:e2e": "playwright test --config playwright.config.ts && playwright test --config playwright.self-host.config.ts"
   },
   "overrides": {
-    "sharp": "0.35.3"
+    "sharp": "0.35.3",
+    "postcss": "8.5.22"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.9",

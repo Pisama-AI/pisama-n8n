@@ -1,16 +1,14 @@
 import { defineConfig, devices } from '@playwright/test'
-import { NEXTAUTH_KEY } from './tests/_auth'
-
 const PORT = 3555
 const BASE = `http://localhost:${PORT}`
+const NEXTAUTH_KEY = 'pisama-n8n-e2e-key-at-least-32-characters-xx'
 
-// Smoke config: boots the dashboard in SaaS mode (billing on) and runs specs that
-// forge a session + mock the BFF, so no Google auth or cloud backend is required.
+// Public SaaS verification. Authenticated settings require a real Google account
+// and live cloud backend, so this local suite checks only the real unauthenticated
+// journey and never forges a session or substitutes an API.
 export default defineConfig({
   testDir: './tests',
-  // Only the SaaS specs. Self-hosted specs run under playwright.self-host.config.ts.
-  // in a separate invocation (Next 16 allows one `next dev` per project dir).
-  testMatch: /settings\.saas\.spec\.ts/,
+  testMatch: /saas\.public\.spec\.ts/,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -27,9 +25,6 @@ export default defineConfig({
       NEXT_PUBLIC_BILLING: '1',
       NEXTAUTH_URL: BASE,
       NEXTAUTH_SECRET: NEXTAUTH_KEY,
-      // The BFF forwards here, but every /api/backend call is browser-mocked, so
-      // this is never actually reached.
-      SAAS_API_URL: 'http://127.0.0.1:59999',
     },
   },
 })

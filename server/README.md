@@ -4,6 +4,19 @@ Single-tenant self-host server for the Pisama n8n detection engine. Run this nex
 own n8n instance to get detection reports without sending workflow data to Pisama's hosted
 platform.
 
+## Install and run
+
+Python 3.11 or newer is required.
+
+```bash
+pip install pisama-n8n-server
+PISAMA_API_KEY=replace-with-a-long-random-secret \
+  python -m uvicorn pisama_n8n_server.app:app --host 0.0.0.0 --port 8400
+```
+
+Then open `http://localhost:8400/healthz`. Set `DATABASE_URL` to choose a persistent
+database location before ingesting production executions.
+
 ## Product boundary
 
 This server is **Fair-code** under the Pisama Sustainable Use License. Local
