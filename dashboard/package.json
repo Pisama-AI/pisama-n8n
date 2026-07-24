@@ -8,6 +8,9 @@
     "start": "next start",
     "test:e2e": "playwright test --config playwright.config.ts && playwright test --config playwright.self-host.config.ts"
   },
+  "overrides": {
+    "sharp": "0.35.3"
+  },
   "dependencies": {
     "@tanstack/react-query": "^5.17.9",
     "@vercel/analytics": "^2.0.1",
@@ -28,7 +31,7 @@
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.17",
-    "postcss": "^8.4.33",
+    "postcss": "8.5.22",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3"
   }

@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /engine
+    schedule:
+      interval: weekly
+    groups:
+      engine-maintenance:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /server
+    schedule:
+      interval: weekly
+    groups:
+      server-maintenance:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+    groups:
+      dashboard-maintenance:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-maintenance:
+        patterns: ["*"]
