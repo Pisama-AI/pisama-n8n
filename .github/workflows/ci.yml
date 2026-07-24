@@ -14,8 +14,8 @@ jobs:
     name: engine parity + server tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       - name: Install engine + server (with test deps)
@@ -27,7 +27,7 @@ jobs:
         run: python scripts/product_capabilities.py
       - name: Engine tests
         working-directory: engine
-        run: python -m pytest -q
+        run: python -m pytest -q --cov=pisama_n8n_engine --cov-report=term --cov-fail-under=45
       - name: Parity / regression gate (engine vs golden corpus)
         run: python benchmarks/parity_check.py
       - name: Server tests
@@ -38,8 +38,8 @@ jobs:
     name: dashboard typecheck + build + e2e
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
           cache: npm
