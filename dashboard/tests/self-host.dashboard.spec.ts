@@ -1,130 +1,39 @@
-import { test, expect, Page } from '@playwright/test'
-import { SELF_HOST_API_BASE } from '../playwright.self-host.config'
+import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
-// Server rows in the exact shape GET /api/v1/detections returns (ServerDetection).
-// Three fired detections across three executions plus one non-fired row, so the
-// list's fired-only filter and the overview counts have something real to chew on.
-const NOW = Date.now()
-const iso = (hoursAgo: number) => new Date(NOW - hoursAgo * 3_600_000).toISOString()
+import { SELF_HOST_API_BASE, SELF_HOST_API_KEY } from '../playwright.self-host.config'
 
-const ROWS = [
-  {
-    id: 1,
-    execution_id: 11,
-    detector: 'timeout',
-    detected: true,
-    confidence: 0.9,
-    failure_mode: 'node_timeout',
-    explanation: 'Webhook call took 64.0s',
-    received_at: iso(2),
-    workflow_id: 'wf-a',
-    workflow_name: 'Order sync',
-    n8n_execution_id: '901',
-  },
-  {
-    id: 2,
-    execution_id: 12,
-    detector: 'error',
-    detected: true,
-    confidence: 0.95,
-    failure_mode: 'node_error',
-    explanation: 'Error rate 50%',
-    received_at: iso(5),
-    workflow_id: 'wf-a',
-    workflow_name: 'Order sync',
-    n8n_execution_id: '902',
-  },
-  {
-    id: 3,
-    execution_id: 13,
-    detector: 'resource',
-    detected: true,
-    confidence: 0.7,
-    failure_mode: 'resource_growth',
-    explanation: 'Output grew 40x across the run',
-    received_at: iso(26),
-    workflow_id: 'wf-b',
-    workflow_name: 'Lead enrichment',
-    n8n_execution_id: '903',
-  },
-  {
-    id: 4,
-    execution_id: 14,
-    detector: 'timeout',
-    detected: false,
-    confidence: 0.1,
-    failure_mode: null,
-    explanation: '',
-    received_at: iso(1),
-    workflow_id: 'wf-b',
-    workflow_name: 'Lead enrichment',
-    n8n_execution_id: '904',
-  },
-]
+const CAPTURE = resolve(
+  __dirname,
+  '../../server/tests/fixtures/executions/data_contract/CLOUD-112117-missing-required-value.json',
+)
 
-const TRACE = {
-  available: true,
-  kind: 'runtime',
-  status: 'success',
-  finished: true,
-  duration_ms: 64_500,
-  error: null,
-  last_node: 'Slow Webhook',
-  node_count: 2,
-  nodes: [
-    {
-      name: 'Manual Trigger',
-      type: 'n8n-nodes-base.manualTrigger',
-      ran: true,
-      status: 'success',
-      execution_time_ms: 3,
-      items_out: 1,
-      error: null,
-      runs: 1,
-    },
-    {
-      name: 'Slow Webhook',
-      type: 'n8n-nodes-base.httpRequest',
-      ran: true,
-      status: 'success',
-      execution_time_ms: 64_000,
-      items_out: 1,
-      error: null,
-      runs: 1,
-    },
-  ],
-}
+let schemaDetectionId: number
 
-// Intercept every call the self-host dashboard makes to the self-host server. The SSE
-// stream is fulfilled with a long client-retry hint so EventSource does not
-// reconnect-spam within a test's lifetime.
-async function mockServerApi(page: Page) {
-  await page.route(`${SELF_HOST_API_BASE}/api/v1/stream**`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: 'retry: 60000\n\n',
-    }),
-  )
-  await page.route(`${SELF_HOST_API_BASE}/api/v1/detections`, (route) =>
-    route.fulfill({ json: ROWS }),
-  )
-  await page.route(`${SELF_HOST_API_BASE}/api/v1/detections/1`, (route) =>
-    route.fulfill({ json: ROWS[0] }),
-  )
-  await page.route(`${SELF_HOST_API_BASE}/api/v1/detections/1/trace`, (route) =>
-    route.fulfill({ json: TRACE }),
-  )
-  await page.route(`${SELF_HOST_API_BASE}/api/v1/paid/status`, (route) =>
-    route.fulfill({ json: { enabled: false } }),
-  )
-}
+test.beforeAll(async ({ request }) => {
+  const execution = JSON.parse(await readFile(CAPTURE, 'utf8'))
+  const ingested = await request.post(`${SELF_HOST_API_BASE}/api/v1/n8n/webhook`, {
+    headers: { Authorization: `Bearer ${SELF_HOST_API_KEY}` },
+    data: execution,
+  })
+  expect(ingested.ok(), await ingested.text()).toBeTruthy()
 
-test.beforeEach(async ({ page }) => {
-  await mockServerApi(page)
+  const detections = await request.get(`${SELF_HOST_API_BASE}/api/v1/detections`, {
+    headers: { Authorization: `Bearer ${SELF_HOST_API_KEY}` },
+  })
+  expect(detections.ok(), await detections.text()).toBeTruthy()
+  const rows = (await detections.json()) as Array<{
+    id: number
+    detector: string
+    detected: boolean
+  }>
+  const schema = rows.find((row) => row.detector === 'schema' && row.detected)
+  expect(schema).toBeDefined()
+  schemaDetectionId = schema!.id
 })
 
-test('overview renders stats, failure breakdown, and recent activity from server rows', async ({
+test('overview renders persisted findings and operational health from the real server', async ({
   page,
 }) => {
   await page.goto('/overview')
@@ -132,49 +41,62 @@ test('overview renders stats, failure breakdown, and recent activity from server
   await expect(page.getByText('Executions analyzed', { exact: true })).toBeVisible()
   await expect(page.getByText('Detections fired', { exact: true })).toBeVisible()
   await expect(page.getByText('Failures over time')).toBeVisible()
-
-  // 3 of the 4 rows are fired; the non-fired row must not count. The StatCard
-  // renders label and value inside one card element.
-  const firedCard = page.getByText('Detections fired', { exact: true }).locator('..')
-  await expect(firedCard).toContainText('3')
-
   await expect(page.getByText('Most common failures')).toBeVisible()
-  // Recent activity shows the plain-English label of the latest fired rows.
-  await expect(page.getByText('Recent activity')).toBeVisible()
-  await expect(page.getByText('Node took too long').first()).toBeVisible()
+  await expect(page.getByText('Data shape mismatch').first()).toBeVisible()
   await expect(page.getByText('A node errored out').first()).toBeVisible()
+  await expect(page.getByText('No failure alert workflow').first()).toBeVisible()
+  await expect(page.getByText('Operational health')).toBeVisible()
+  await expect(page.getByText('Pisama prevention experiment baseline', { exact: false })).toBeVisible()
 })
 
-test('detections list shows fired rows only and the type filter narrows them', async ({
-  page,
-}) => {
+test('detections list filters the persisted real execution by detector type', async ({ page }) => {
   await page.goto('/detections')
 
-  // Fired rows render (asserted on their explanation text, which is unique to a
-  // row — the plain-English labels also appear as hidden <option>s in the type
-  // filter, so they are not safe row markers). The non-fired row is absent.
-  await expect(page.getByText('Webhook call took 64.0s')).toBeVisible()
-  await expect(page.getByText('Error rate 50%')).toBeVisible()
-  await expect(page.getByText('Output grew 40x across the run')).toBeVisible()
+  await expect(page.getByRole('link', { name: /Data shape mismatch/ })).toBeVisible()
+  await expect(page.getByRole('link', { name: /A node errored out/ })).toBeVisible()
+  await expect(page.getByRole('link', { name: /No failure alert workflow/ })).toBeVisible()
 
-  // Filter to timeout: the error/resource rows disappear.
-  await page.locator('select').first().selectOption('timeout')
-  await expect(page.getByText('Webhook call took 64.0s')).toBeVisible()
-  await expect(page.getByText('Error rate 50%')).toHaveCount(0)
-  await expect(page.getByText('Output grew 40x across the run')).toHaveCount(0)
+  await page.getByLabel('Filter by type').selectOption('schema')
+  await expect(page.getByRole('link', { name: /Data shape mismatch/ })).toBeVisible()
+  await expect(page.getByRole('link', { name: /A node errored out/ })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /No failure alert workflow/ })).toHaveCount(0)
 })
 
-test('detection detail deep link renders the narrative and the execution trace', async ({
-  page,
-}) => {
-  // A cold deep link: resolves via GET /detections/1 without the list loaded.
-  await page.goto('/detections/1')
+test('detection deep link renders evidence and the recorded node trace', async ({ page }) => {
+  await page.goto(`/detections/${schemaDetectionId}`)
 
   await expect(page.getByText('What happened')).toBeVisible()
-  await expect(page.getByText('Webhook call took 64.0s').first()).toBeVisible()
-  await expect(page.getByText('Order sync').first()).toBeVisible()
+  await expect(page.getByText('Data shape mismatch').first()).toBeVisible()
+  await expect(page.getByText('Evidence used')).toBeVisible()
+  await expect(page.getByText('Observed missing field', { exact: false }).first()).toBeVisible()
+  await expect(page.getByText('Baseline webhook').first()).toBeVisible()
+  await expect(page.getByText('Cannot read properties of undefined', { exact: false }).first()).toBeVisible()
+})
 
-  // The in-app trace panel renders per-node rows from GET /detections/1/trace.
-  await expect(page.getByText('Slow Webhook').first()).toBeVisible()
-  await expect(page.getByText('Manual Trigger').first()).toBeVisible()
+test('unauthorized API reads are rejected while the configured dashboard remains usable', async ({
+  request,
+  page,
+}) => {
+  const unauthorized = await request.get(`${SELF_HOST_API_BASE}/api/v1/detections`)
+  expect(unauthorized.status()).toBe(401)
+
+  await page.goto('/detections')
+  await expect(page.getByRole('link', { name: /Data shape mismatch/ })).toBeVisible()
+})
+
+test('settings shows the real self-host connection and paid-feature state', async ({ page }) => {
+  await page.goto('/settings')
+
+  await expect(page.getByRole('heading', { name: 'Settings', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Dashboard API key' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'n8n connection' })).toBeVisible()
+  await expect(page.getByText('Not configured. Set')).toBeVisible()
+  await expect(page.getByText(SELF_HOST_API_BASE)).toBeVisible()
+})
+
+test('self-host onboarding routes to the supported settings flow', async ({ page }) => {
+  await page.goto('/onboarding')
+
+  await expect(page).toHaveURL('/settings')
+  await expect(page.getByText('Connection and access for this self-hosted instance.')).toBeVisible()
 })

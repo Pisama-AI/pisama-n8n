@@ -19,7 +19,14 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL('/', req.url))
   }
 
-  if (process.env.NEXT_PUBLIC_SAAS !== '1') return NextResponse.next()
+  if (process.env.NEXT_PUBLIC_SAAS !== '1') {
+    // The connection form is a hosted-only API flow. Self-host users configure
+    // their n8n URL and key on the server, then manage it from Settings.
+    if (pathname === '/onboarding') {
+      return NextResponse.redirect(new URL('/settings', req.url))
+    }
+    return NextResponse.next()
+  }
 
   if (!PROTECTED.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return NextResponse.next()

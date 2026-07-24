@@ -57,12 +57,15 @@ def client(tmp_path, monkeypatch):
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+    storage.close()
 
 
 @pytest.fixture()
 def body() -> str:
-    """The raw JSON string the node would sign and send."""
-    return json.dumps(_load("executions/healthy/HEALTHY-01.json"))
+    """A captured n8n Cloud execution serialized exactly as the node sends it."""
+    return json.dumps(
+        _load("executions/data_contract/CLOUD-112117-missing-required-value.json")
+    )
 
 
 # 1. A valid HMAC signature (secret = PISAMA_API_KEY fallback) is accepted.
@@ -120,11 +123,18 @@ def test_future_timestamp_401(client, body):
     assert resp.status_code == 401, resp.text
 
 
+def test_non_numeric_timestamp_401(client, body):
+    headers = _sign(body, API_KEY)
+    headers["X-Pisama-Timestamp"] = "not-a-timestamp"
+    resp = client.post("/api/v1/n8n/webhook", content=body, headers=headers)
+    assert resp.status_code == 401, resp.text
+
+
 # 5. The signature covers the body: tampering after signing is rejected.
 
 def test_tampered_body_401(client, body):
     headers = _sign(body, API_KEY)
-    tampered = body.replace("HEALTHY-01", "TAMPERED-01")
+    tampered = body.replace("Observed missing field", "Tampered node")
     assert tampered != body, "fixture must contain the marker being replaced"
     resp = client.post("/api/v1/n8n/webhook", content=tampered, headers=headers)
     assert resp.status_code == 401, resp.text

@@ -24,12 +24,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-# The 6 structural detectors are pure-Python and dependency-free. The optional
-# execution-lane semantic checks use embeddings; install the extra for those.
+# The structural and execution-lane detectors are pure Python and dependency-free.
 dependencies = []
 
 [project.optional-dependencies]
-embeddings = ["sentence-transformers>=2.2", "numpy>=1.24"]
 test = ["pytest", "pytest-cov>=5.0"]
 
 [project.urls]

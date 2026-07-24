@@ -807,6 +807,10 @@ class Storage:
             bind=self.engine, expire_on_commit=False, future=True
         )
 
+    def close(self) -> None:
+        """Release pooled database connections owned by this storage instance."""
+        self.engine.dispose()
+
     def save_report(
         self,
         execution_data: Dict[str, Any],

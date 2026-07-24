@@ -27,4 +27,7 @@ server's API.
 ## Status
 
 Implemented. The dashboard typechecks, production-builds, and has Playwright coverage for
-the hosted settings view plus the self-host overview, detection list, and trace detail.
+the public hosted journey. Its self-host checks run against a real FastAPI server, the
+published engine interfaces, and a fresh SQLite database. They cover overview, detection
+filtering, trace detail, deep links, settings, onboarding routing, and authenticated API
+boundaries.

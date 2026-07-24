@@ -1,4 +1,3 @@
-# VENDORED from the pisama monorepo by scripts/extract_from_monorepo.py — do not edit here.
 """Universal trace abstraction for Agent Forensics.
 
 This module provides a framework-agnostic trace representation that works across:
@@ -11,7 +10,7 @@ This module provides a framework-agnostic trace representation that works across
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 import hashlib
@@ -38,6 +37,16 @@ class SpanStatus(Enum):
 
 
 @dataclass
+class StateSnapshot:
+    """Dependency-free compatibility shape consumed by state-based detectors."""
+
+    agent_id: str
+    state_delta: Dict[str, Any]
+    content: str
+    sequence_num: int = 0
+
+
+@dataclass
 class UniversalSpan:
     """Framework-agnostic span representation for Agent Forensics.
 
@@ -54,7 +63,9 @@ class UniversalSpan:
     status: SpanStatus = SpanStatus.OK
 
     # Timing
-    start_time: datetime = field(default_factory=datetime.utcnow)
+    start_time: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
     end_time: Optional[datetime] = None
     duration_ms: int = 0
 
@@ -127,14 +138,12 @@ class UniversalSpan:
         }, sort_keys=True, default=str)
         return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()[:16]  # nosec B324
 
-    def to_state_snapshot(self) -> "StateSnapshot":  # noqa: F821 - StateSnapshot defined in app.detection.loop/corruption, kept as forward ref to avoid cross-package cycle
+    def to_state_snapshot(self) -> StateSnapshot:
         """Convert to StateSnapshot format for detection algorithms.
 
         This provides compatibility with existing detection modules that
         expect the StateSnapshot dataclass.
         """
-        from app.detection.loop import StateSnapshot
-
         # Build content string from available data
         content_parts = []
         if self.prompt:
@@ -271,7 +280,7 @@ class UniversalTrace:
         """Get all spans with errors."""
         return [s for s in self.spans if s.has_error]
 
-    def to_state_snapshots(self) -> List["StateSnapshot"]:  # noqa: F821 - see to_state_snapshot()
+    def to_state_snapshots(self) -> List[StateSnapshot]:
         """Convert all spans to StateSnapshot format for detection."""
         snapshots = []
         for i, span in enumerate(self.spans):

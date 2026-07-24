@@ -2,17 +2,16 @@ import { defineConfig, devices } from '@playwright/test'
 
 const PORT = 3556
 const BASE = `http://localhost:${PORT}`
+const SERVER_PORT = 8455
+const E2E_DB = `/tmp/pisama-n8n-dashboard-e2e-${process.pid}.db`
+const PYTHON = process.env.PISAMA_E2E_PYTHON || 'python'
 
-// Where the self-host dashboard believes the self-host server lives. Nothing listens
-// here — every call is intercepted in-browser by page.route() — but pinning it
-// keeps the specs hermetic even if a real server is running on :8400.
-export const SELF_HOST_API_BASE = 'http://127.0.0.1:8455'
+export const SELF_HOST_API_BASE = `http://127.0.0.1:${SERVER_PORT}`
+export const SELF_HOST_API_KEY = 'pisama-e2e-real-server-key'
 
-// self-host mode smoke: boots the dashboard exactly as a self-hoster runs it
-// (NEXT_PUBLIC_SAAS unset/0, direct API calls) and mocks the server API at the
-// browser boundary. Runs as a SEPARATE playwright invocation from the SaaS
-// config because Next 16 allows only one `next dev` per project directory —
-// see package.json's test:e2e, which chains the two configs sequentially.
+// Self-host verification boots the real FastAPI server, a fresh real SQLite
+// database, and the dashboard. The spec ingests a sanitized n8n Cloud capture
+// through the authenticated HTTP endpoint before exercising the browser flow.
 export default defineConfig({
   testDir: './tests',
   testMatch: /self-host\..*\.spec\.ts/,
@@ -22,14 +21,29 @@ export default defineConfig({
   reporter: 'list',
   use: { baseURL: BASE, trace: 'off' },
   projects: [{ name: 'chromium-self-host', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: `npx next dev -p ${PORT}`,
-    url: BASE,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: {
-      NEXT_PUBLIC_SAAS: '0',
-      NEXT_PUBLIC_API_BASE: SELF_HOST_API_BASE,
+  webServer: [
+    {
+      command: `${PYTHON} -m uvicorn pisama_n8n_server.app:app --host 127.0.0.1 --port ${SERVER_PORT}`,
+      url: `${SELF_HOST_API_BASE}/healthz`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        DATABASE_URL: `sqlite:///${E2E_DB}`,
+        PISAMA_API_KEY: SELF_HOST_API_KEY,
+        PISAMA_CORS_ORIGINS: BASE,
+        PISAMA_BUILD_REVISION: 'dashboard-e2e',
+      },
     },
-  },
+    {
+      command: `npx next dev -p ${PORT}`,
+      url: BASE,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        NEXT_PUBLIC_SAAS: '0',
+        NEXT_PUBLIC_API_BASE: SELF_HOST_API_BASE,
+        NEXT_PUBLIC_API_KEY: SELF_HOST_API_KEY,
+      },
+    },
+  ],
 })

@@ -27,12 +27,12 @@ jobs:
         run: python scripts/product_capabilities.py
       - name: Engine tests
         working-directory: engine
-        run: python -m pytest -q --cov=pisama_n8n_engine --cov-report=term --cov-fail-under=45
+        run: python -m pytest -q --cov=pisama_n8n_engine --cov-report=term --cov-fail-under=60
       - name: Parity / regression gate (engine vs golden corpus)
         run: python benchmarks/parity_check.py
       - name: Server tests
         working-directory: server
-        run: python -m pytest -q
+        run: python -m pytest -q --cov=pisama_n8n_server --cov-report=term --cov-fail-under=80
 
   dashboard:
     name: dashboard typecheck + build + e2e
@@ -44,6 +44,13 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install self-host server for real browser flow
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e engine -e server
       - name: Install
         working-directory: dashboard
         run: npm ci
@@ -56,6 +63,6 @@ jobs:
       - name: Install Playwright browser
         working-directory: dashboard
         run: npx playwright install --with-deps chromium
-      - name: E2E (SaaS smoke + self-hosted dashboard, sequential configs)
+      - name: E2E (public SaaS journey + real self-host server and SQLite)
         working-directory: dashboard
         run: npm run test:e2e
