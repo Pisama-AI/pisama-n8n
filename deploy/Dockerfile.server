@@ -3,12 +3,11 @@
 #   docker build -f deploy/Dockerfile.server -t pisama-n8n-server .
 FROM python:3.11-slim
 
-ARG PISAMA_BUILD_REVISION=unknown
-ENV PISAMA_BUILD_REVISION=${PISAMA_BUILD_REVISION}
-
 WORKDIR /app
-COPY engine /app/engine
-COPY server /app/server
+COPY engine/pyproject.toml engine/README.md engine/LICENSE /app/engine/
+COPY engine/pisama_n8n_engine /app/engine/pisama_n8n_engine
+COPY server/pyproject.toml server/README.md /app/server/
+COPY server/pisama_n8n_server /app/server/pisama_n8n_server
 
 # Install the engine first (pure-Python, no deps), then the server so its
 # pisama-n8n-engine requirement resolves to the local build, not PyPI.
@@ -16,6 +15,11 @@ COPY server /app/server
 # and pre-bake the MiniLM model so cold start doesn't hit the network.
 RUN pip install --no-cache-dir /app/engine \
  && pip install --no-cache-dir /app/server
+
+ARG PISAMA_BUILD_REVISION=unknown
+ARG PISAMA_SOURCE_REVISION_URL=
+ENV PISAMA_BUILD_REVISION=${PISAMA_BUILD_REVISION}
+ENV PISAMA_SOURCE_REVISION_URL=${PISAMA_SOURCE_REVISION_URL}
 
 EXPOSE 8400
 CMD ["uvicorn", "pisama_n8n_server.app:app", "--host", "0.0.0.0", "--port", "8400"]

@@ -56,7 +56,7 @@
     {
       "id": "team_governance",
       "label": "Team governance",
-      "description": "Shared administration, audit controls, SSO, RBAC, and commercial governance."
+      "description": "Tenant-scoped API and authentication audit logs plus commercial governance."
     }
   ],
   "products": [
@@ -87,7 +87,7 @@
         "Local MCP workflows",
         "Framework adapters"
       ],
-      "upgrade": "Add Pisama Cloud for managed history, model-generated fixes, advanced detection, and team controls."
+      "upgrade": "Add Pisama Cloud for managed history, model-generated fixes, advanced detection, and audit visibility."
     },
     {
       "id": "n8n_self_hosted",
@@ -130,7 +130,7 @@
         "local_heuristic_detection": "Core production heuristics",
         "evidence_backed_diagnosis": "Included",
         "deterministic_repairs": "Included where supported",
-        "model_generated_fixes": "Limited hosted allowance",
+        "model_generated_fixes": "Not included",
         "advanced_detection": "Not included",
         "managed_operations": "Included",
         "team_governance": "Not included"
@@ -202,7 +202,7 @@
       "runtime_specific": [
         "Alerts and integrations",
         "Longer retention",
-        "Team controls",
+        "Tenant audit visibility",
         "Enterprise deployment options"
       ],
       "upgrade": "Choose Indie, Pro, Team, or Enterprise based on detection tier, capacity, and governance needs."
@@ -222,7 +222,7 @@
         "model_generated_fixes": "200 generations per month",
         "advanced_detection": "Runtime-specific additions as released",
         "managed_operations": "Included",
-        "team_governance": "Commercial support and service terms"
+        "team_governance": "Not included"
       },
       "allowances": {
         "n8n_connections": 5,

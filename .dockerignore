@@ -3,5 +3,15 @@
 **/.venv
 **/node_modules
 **/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage*
+**/.env*
+**/.DS_Store
+**/.next
+**/dist
+**/*.egg-info
+.git
+data/external
 server/tests
 **/*.db

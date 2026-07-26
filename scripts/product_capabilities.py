@@ -35,6 +35,7 @@ PUBLIC_CLAIMS = {
         "Advanced detection",
         "Managed operations",
         "Team governance",
+        "| **Team governance** | Not included | Not included | Not included |",
         'NOT OSI "open source"',
     },
     ROOT / "dashboard" / "src" / "app" / "page.tsx": {
@@ -45,10 +46,16 @@ PUBLIC_CLAIMS = {
         "Fair-code",
         "Deterministic repairs",
         "Model-generated fixes",
+        "Team governance is not\nincluded in the current n8n plans.",
     },
     ROOT / "server" / "pisama_n8n_server" / "app.py": {
         '@app.get("/api/v1/capabilities")',
         "product_capabilities.generated.json",
+    },
+    ROOT / "dashboard" / "src" / "app" / "api" / "v1" / "capabilities" / "route.ts": {
+        "product-capabilities.generated.json",
+        "X-Pisama-Build-Revision",
+        "X-Pisama-Source-Repository",
     },
 }
 
