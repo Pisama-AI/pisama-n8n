@@ -9,13 +9,20 @@ platform.
 Python 3.11 or newer is required.
 
 ```bash
-pip install pisama-n8n-server
+git clone https://github.com/Pisama-AI/pisama-n8n.git
+cd pisama-n8n
+python3 -m venv .venv
+. .venv/bin/activate
+pip install ./engine ./server
 PISAMA_API_KEY=replace-with-a-long-random-secret \
   python -m uvicorn pisama_n8n_server.app:app --host 0.0.0.0 --port 8400
 ```
 
 Then open `http://localhost:8400/healthz`. Set `DATABASE_URL` to choose a persistent
 database location before ingesting production executions.
+
+`pisama-n8n-engine` and `pisama-n8n-server` are not currently published on
+PyPI. Install both from this repository so their versions stay compatible.
 
 ## Product boundary
 
