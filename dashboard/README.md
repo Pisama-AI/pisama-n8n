@@ -12,6 +12,15 @@ need to run the larger multi-platform application.
 - `/settings` — server connection, polling, and cloud-fix status.
 - `/onboarding` and `/sign-in` — connection and hosted-account flows.
 
+## Public machine-readable routes
+
+- `/api/v1/capabilities` returns the committed canonical capability and license
+  contract without requiring a session. Provenance headers identify the source
+  repository and deployed revision.
+- `/api/version` returns the dashboard package version, build revision, source
+  repository, and immutable source commit URL when the public deployment preflight
+  verified and injected the revision.
+
 The detection detail defaults to guidance only. One-click apply is feature-flagged off by
 default. When enabled, it uses a server-owned repair id and the server rejects stale
 workflow updates or unsafe rollback attempts.

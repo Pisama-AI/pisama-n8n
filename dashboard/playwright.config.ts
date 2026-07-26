@@ -25,6 +25,8 @@ export default defineConfig({
       NEXT_PUBLIC_BILLING: '1',
       NEXTAUTH_URL: BASE,
       NEXTAUTH_SECRET: NEXTAUTH_KEY,
+      // A full but unverified SHA must never gain an official source URL.
+      VERCEL_GIT_COMMIT_SHA: 'f'.repeat(40),
     },
   },
 })

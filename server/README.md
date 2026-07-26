@@ -29,12 +29,15 @@ PyPI. Install both from this repository so their versions stay compatible.
 This server is **Fair-code** under the Pisama Sustainable Use License. Local
 heuristic detection, evidence-backed diagnosis, and **Deterministic repairs**
 run in the self-hosted product. **Model-generated fixes** require a Pisama cloud
-key. Advanced detection, Managed operations, and Team governance are commercial
-service capabilities.
+key. Managed operations is included only with the hosted service. Advanced detection
+is limited to runtime-specific additions as released, and Team governance is not
+included in the current n8n plans.
 
-The public `GET /api/v1/capabilities` endpoint returns the same canonical
+This server's public `GET /api/v1/capabilities` endpoint returns the same canonical
 capability names, license categories, runtime-specific features, and allowances
-used by the Pisama websites and main API.
+used by the Pisama websites. A
+[live unauthenticated copy](https://pisama-n8n-api.fly.dev/api/v1/capabilities)
+is available for evaluation without running the stack.
 
 ## Design
 
@@ -157,10 +160,12 @@ Paid tier (cloud key required):
 - Hosted Pro currently includes 200 model-fix generations per calendar month.
   Deterministic repairs are free and do not consume that allocation.
 
-Liveness:
+Liveness and provenance:
 
-- `GET /healthz` (alias `GET /api/v1/health`): liveness; the alias is the community
-  node's credential-Test path.
+- `GET /healthz` (alias `GET /api/v1/health`): liveness plus server version, engine
+  version, source repository, build revision, and a source commit URL when the image
+  was built by the verified public deployment path. The alias is the community node's
+  credential-Test path.
 
 ## Status
 

@@ -141,13 +141,18 @@ n8n, while keeping runtime-specific features and allowances separate:
 | **Model-generated fixes** | Requires a cloud key | Not included | 200 generations per month |
 | **Advanced detection** | Not included | Not included | Runtime-specific additions as released |
 | **Managed operations** | You operate it | Included | Included |
-| **Team governance** | Not included | Not included | Commercial support and service terms |
+| **Team governance** | Not included | Not included | Not included |
 
 This table aligns the product promise, not every interface. The main product is
 SDK, CLI, CI, and MCP oriented. This product includes an n8n-specific server,
 dashboard, polling, webhook ingestion, and workflow repairs. See the
 [full Pisama product comparison](https://pisama.ai/compare/products) and the
 [canonical machine-readable manifest](https://pisama.ai/product-capabilities.json).
+For a live, unauthenticated n8n-specific copy, use
+[`GET /api/v1/capabilities`](https://pisama-n8n-api.fly.dev/api/v1/capabilities).
+The self-host server and dashboard builds from this source expose that same path
+from their own origins. CI compares both bundled copies with the canonical public
+manifest so product or licensing drift fails before merge.
 
 ## Single source of truth
 

@@ -3,9 +3,9 @@
 #
 # Always bakes the current git SHA into PISAMA_BUILD_REVISION so GET /healthz reports
 # real image provenance. Without it the Dockerfile defaults the arg to "unknown", and
-# the dogfood evidence gate silently skips --require-current-build. fly.toml cannot do
-# this itself: a static [build.args] value would go stale the moment you commit again,
-# so the live SHA has to be passed at deploy time — which is what this script is for.
+# the dogfood evidence gate silently skips --require-current-build. The preflight also
+# refuses dirty or unmerged trees so the public source link identifies the exact
+# image contents.
 #
 # Usage:  ./deploy/deploy-demo-api.sh            (deploy current HEAD)
 #         ./deploy/deploy-demo-api.sh --now      (any extra flags pass through to flyctl)
@@ -14,9 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."  # repo root, so relative --config/--dockerfile paths resolve
 
 rev="$(git rev-parse HEAD)"
-if ! git diff --quiet HEAD -- . 2>/dev/null; then
-  echo "WARNING: working tree is dirty — build_revision=$rev will NOT match the deployed code." >&2
-fi
+source deploy/verify-public-revision.sh
+source_revision_url="$(verified_public_source_revision_url "$rev")"
 
 app="pisama-n8n-api"
 echo "Deploying $app at build_revision=$rev"
@@ -25,6 +24,7 @@ flyctl deploy . \
   --dockerfile deploy/Dockerfile.server \
   -a "$app" \
   --build-arg PISAMA_BUILD_REVISION="$rev" \
+  --build-arg PISAMA_SOURCE_REVISION_URL="$source_revision_url" \
   "$@"
 
 # The deploy changed this app's live SHA, so any deployment snapshot that pins it is now

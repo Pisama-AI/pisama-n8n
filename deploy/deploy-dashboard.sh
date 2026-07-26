@@ -5,7 +5,8 @@
 # serving — the same provenance contract the backends give via /healthz.
 #
 # Both Vercel projects have NO Git integration (`link: null`) by founder decision
-# (2026-07-17): they deploy ONLY via this script, never on push. There is no CI here.
+# (2026-07-17): they deploy ONLY via this script, never on push. The preflight refuses
+# dirty or unmerged trees, then injects the verified public commit URL.
 #
 # Targets (both share this repo; the SaaS build sets NEXT_PUBLIC_SAAS=1 in Vercel env):
 #   - SaaS  -> Vercel `pisama-n8n-app` (app.n8n.pisama.ai) — uses the local .vercel link.
@@ -42,9 +43,8 @@ done
 cd "$(dirname "$0")/.."  # repo root, so dashboard/ and ../pisama-n8n-cloud/ resolve
 
 rev="$(git rev-parse HEAD)"
-if ! git diff --quiet HEAD -- . 2>/dev/null; then
-  echo "WARNING: working tree is dirty — build_revision=$rev will NOT match the deployed code." >&2
-fi
+source deploy/verify-public-revision.sh
+source_revision_url="$(verified_public_source_revision_url "$rev")"
 
 # Deploy one dashboard target. $1 = human label; the remaining args are an env prefix
 # (empty for SaaS = use the local .vercel link; VERCEL_*_ID for the demo project).
@@ -53,7 +53,9 @@ deploy_one() {
   echo "Deploying $label dashboard at build_revision=$rev"
   (cd dashboard && env "$@" vercel deploy --prod --yes \
     -e NEXT_PUBLIC_BUILD_REVISION="$rev" \
-    -b NEXT_PUBLIC_BUILD_REVISION="$rev")
+    -e NEXT_PUBLIC_SOURCE_REVISION_URL="$source_revision_url" \
+    -b NEXT_PUBLIC_BUILD_REVISION="$rev" \
+    -b NEXT_PUBLIC_SOURCE_REVISION_URL="$source_revision_url")
   echo "Deploy complete: $label is now build_revision ${rev:0:7}."
 }
 

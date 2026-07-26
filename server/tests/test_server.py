@@ -29,6 +29,7 @@ def client(tmp_path, monkeypatch):
     """A TestClient backed by a fresh temp-file SQLite Storage. Auth off by default."""
     monkeypatch.delenv("PISAMA_API_KEY", raising=False)
     monkeypatch.delenv("PISAMA_BUILD_REVISION", raising=False)
+    monkeypatch.delenv("PISAMA_SOURCE_REVISION_URL", raising=False)
     db_path = tmp_path / "test.db"
     storage = Storage(url=f"sqlite:///{db_path}")
     app.dependency_overrides[get_storage] = lambda: storage
@@ -187,12 +188,25 @@ def test_auth_required_when_key_set(client, monkeypatch):
 def test_healthz(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "build_revision": "unknown"}
+    assert resp.json() == {
+        "status": "ok",
+        "service": "pisama-n8n-server",
+        "version": "0.1.0",
+        "engine_version": "0.1.0",
+        "build_revision": "unknown",
+        "source_repository": "https://github.com/Pisama-AI/pisama-n8n",
+        "source_revision_url": None,
+    }
 
 
 def test_product_capability_contract_is_public_and_explicit(client):
     resp = client.get("/api/v1/capabilities")
     assert resp.status_code == 200
+    assert resp.headers["x-pisama-build-revision"] == "unknown"
+    assert (
+        resp.headers["x-pisama-source-repository"]
+        == "https://github.com/Pisama-AI/pisama-n8n"
+    )
     manifest = resp.json()
     products = {product["id"]: product for product in manifest["products"]}
     labels = {
@@ -208,6 +222,7 @@ def test_product_capability_contract_is_public_and_explicit(client):
     )
     assert products["n8n_cloud_free"]["allowances"]["n8n_connections"] == 1
     assert products["n8n_pro"]["allowances"]["model_fix_generations_per_month"] == 200
+    assert products["n8n_pro"]["capabilities"]["team_governance"] == "Not included"
 
 
 def test_detection_retains_configured_build_revision(client, monkeypatch):
@@ -221,6 +236,34 @@ def test_detection_retains_configured_build_revision(client, monkeypatch):
         "dogfood-current-source"
     }
     assert client.get("/healthz").json()["build_revision"] == "dogfood-current-source"
+
+
+def test_source_link_requires_verified_public_deployment(client, monkeypatch):
+    revision = "71421beb2a42b96196bea2d6ea823977a9c4ba43"
+    monkeypatch.setenv("PISAMA_BUILD_REVISION", revision)
+
+    health = client.get("/healthz").json()
+    assert health["source_revision_url"] is None
+    assert (
+        "x-pisama-source-revision-url" not in client.get("/api/v1/capabilities").headers
+    )
+
+    source_url = "https://github.com/Pisama-AI/pisama-n8n/commit/" + revision
+    monkeypatch.setenv("PISAMA_SOURCE_REVISION_URL", source_url)
+    health = client.get("/healthz").json()
+    assert health["source_revision_url"] == source_url
+
+    capabilities = client.get("/api/v1/capabilities")
+    assert (
+        capabilities.headers["x-pisama-source-revision-url"]
+        == health["source_revision_url"]
+    )
+
+    monkeypatch.setenv(
+        "PISAMA_SOURCE_REVISION_URL",
+        "https://github.com/another-owner/fork/commit/" + revision,
+    )
+    assert client.get("/healthz").json()["source_revision_url"] is None
 
 
 # 6. Enriched detection rows: workflow name/id + n8n execution id are surfaced.

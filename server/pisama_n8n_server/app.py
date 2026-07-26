@@ -23,13 +23,15 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -40,6 +42,41 @@ from pisama_n8n_server.processing import process_execution
 from pisama_n8n_server.storage import Storage, build_revision
 
 logger = logging.getLogger("pisama_n8n_server")
+
+_SOURCE_REPOSITORY = "https://github.com/Pisama-AI/pisama-n8n"
+_FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+
+
+def _installed_version(distribution: str) -> str:
+    try:
+        return version(distribution)
+    except PackageNotFoundError:
+        return "unknown"
+
+
+_SERVER_VERSION = _installed_version("pisama-n8n-server")
+_ENGINE_VERSION = _installed_version("pisama-n8n-engine")
+
+
+def _verified_source_revision_url(revision: str) -> Optional[str]:
+    expected = f"{_SOURCE_REPOSITORY}/commit/{revision}"
+    configured = os.environ.get("PISAMA_SOURCE_REVISION_URL", "").strip()
+    if _FULL_GIT_SHA.fullmatch(revision) and configured == expected:
+        return configured
+    return None
+
+
+def _deployment_provenance() -> Dict[str, Any]:
+    revision = build_revision()
+    return {
+        "service": "pisama-n8n-server",
+        "version": _SERVER_VERSION,
+        "engine_version": _ENGINE_VERSION,
+        "build_revision": revision,
+        "source_repository": _SOURCE_REPOSITORY,
+        "source_revision_url": _verified_source_revision_url(revision),
+    }
+
 
 # The self-driving poll task (armed at startup when PISAMA_POLL_INTERVAL > 0 and n8n is
 # configured). Off by default — /api/v1/n8n/sync stays available for external cron.
@@ -66,7 +103,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Pisama n8n Server",
     description="Self-host detection server for n8n workflow executions.",
-    version="0.1.0",
+    version=_SERVER_VERSION,
     lifespan=lifespan,
 )
 
@@ -210,11 +247,11 @@ def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
 
 @app.get("/healthz")
 @app.get("/api/v1/health")  # the published community node's credential-test path
-async def healthz() -> Dict[str, str]:
+async def healthz() -> Dict[str, Any]:
     # /api/v1/health is where n8n-nodes-pisama's credential "Test" button GETs
     # (baseURL {apiUrl} + "/health"); aliasing it here makes the credential
     # validate green against a self-hosted server. Unauthenticated, like /healthz.
-    return {"status": "ok", "build_revision": build_revision()}
+    return {"status": "ok", **_deployment_provenance()}
 
 
 @lru_cache(maxsize=1)
@@ -224,9 +261,16 @@ def _product_capabilities() -> Dict[str, Any]:
 
 
 @app.get("/api/v1/capabilities")
-async def product_capabilities() -> Dict[str, Any]:
+async def product_capabilities(response: Response) -> Dict[str, Any]:
     """Public license, deployment, allowance, and capability contract."""
 
+    provenance = _deployment_provenance()
+    response.headers["X-Pisama-Build-Revision"] = provenance["build_revision"]
+    response.headers["X-Pisama-Source-Repository"] = provenance["source_repository"]
+    if provenance["source_revision_url"]:
+        response.headers["X-Pisama-Source-Revision-URL"] = provenance[
+            "source_revision_url"
+        ]
     return _product_capabilities()
 
 

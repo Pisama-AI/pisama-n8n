@@ -24,7 +24,71 @@ jobs:
           pip install -e "engine[test]"
           pip install -e "server[test,mcp]"
       - name: Product capability contract
-        run: python scripts/product_capabilities.py
+        run: python scripts/product_capabilities.py --remote
+      - name: Deployment provenance scripts
+        run: |
+          bash -n \
+            deploy/verify-public-revision.sh \
+            deploy/deploy-demo-api.sh \
+            deploy/deploy-dashboard.sh \
+            deploy/deploy-cloud-dogfood.sh
+          source deploy/verify-public-revision.sh
+          canonical_revision="$(git ls-remote "$PISAMA_PUBLIC_GIT_URL" refs/heads/main | cut -f1)"
+          unrelated_url="https://github.com/octocat/Hello-World.git"
+          unrelated_revision="$(git ls-remote "$unrelated_url" refs/heads/master | cut -f1)"
+          touch .deployment-preflight-dirty
+          if verified_public_source_revision_url "$canonical_revision" >/dev/null 2>&1; then
+            echo "ERROR: dirty tree passed the public deployment check" >&2
+            exit 1
+          fi
+          unlink .deployment-preflight-dirty
+          git fetch --quiet --no-tags "$unrelated_url" refs/heads/master
+          original_origin="$(git remote get-url origin)"
+          trap 'git remote set-url origin "$original_origin"' EXIT
+          git remote set-url origin "$unrelated_url"
+          verified_url="$(verified_public_source_revision_url "$canonical_revision")"
+          test "$verified_url" = "https://github.com/Pisama-AI/pisama-n8n/commit/$canonical_revision"
+          if verified_public_source_revision_url HEAD >/dev/null 2>&1; then
+            echo "ERROR: symbolic revision passed the canonical source check" >&2
+            exit 1
+          fi
+          if verified_public_source_revision_url "$unrelated_revision" >/dev/null 2>&1; then
+            echo "ERROR: unrelated revision passed the canonical source check" >&2
+            exit 1
+          fi
+          git remote set-url origin "$original_origin"
+          trap - EXIT
+      - name: Server image context and provenance
+        env:
+          PISAMA_BUILD_REVISION: ${{ github.sha }}
+          PISAMA_SOURCE_REVISION_URL: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          cleanup_context_sentinels() {
+            unlink engine/.env
+            unlink server/.env
+            unlink engine/dist/private
+            unlink server/pisama_n8n_server.egg-info/PKG-INFO
+            rmdir engine/dist server/pisama_n8n_server.egg-info
+          }
+          trap cleanup_context_sentinels EXIT
+          touch engine/.env server/.env
+          mkdir -p engine/dist server/pisama_n8n_server.egg-info
+          touch engine/dist/private server/pisama_n8n_server.egg-info/PKG-INFO
+          docker build \
+            --build-arg "PISAMA_BUILD_REVISION=$PISAMA_BUILD_REVISION" \
+            --build-arg "PISAMA_SOURCE_REVISION_URL=$PISAMA_SOURCE_REVISION_URL" \
+            --file deploy/Dockerfile.server \
+            --tag pisama-n8n-server:contract .
+          docker run --rm --entrypoint python pisama-n8n-server:contract -c \
+            "from pathlib import Path; assert not any(Path('/app').rglob('.env')); assert not any(Path('/app').rglob('dist')); assert not any(Path('/app').rglob('*.egg-info'))"
+          docker run --rm --entrypoint python pisama-n8n-server:contract -c \
+            "from pisama_n8n_server.app import _deployment_provenance; p = _deployment_provenance(); assert p['build_revision'] == '$PISAMA_BUILD_REVISION'; assert p['source_revision_url'] == '$PISAMA_SOURCE_REVISION_URL'; assert p['version'] == '0.1.0'; assert p['engine_version'] == '0.1.0'"
+          docker build \
+            --build-arg "PISAMA_BUILD_REVISION=$PISAMA_BUILD_REVISION" \
+            --file deploy/Dockerfile.server \
+            --tag pisama-n8n-server:dogfood-contract .
+          docker run --rm --entrypoint python pisama-n8n-server:dogfood-contract -c \
+            "from pisama_n8n_server.app import _deployment_provenance; p = _deployment_provenance(); assert p['build_revision'] == '$PISAMA_BUILD_REVISION'; assert p['source_revision_url'] is None"
       - name: Engine tests
         working-directory: engine
         run: python -m pytest -q --cov=pisama_n8n_engine --cov-report=term --cov-fail-under=60

@@ -41,5 +41,36 @@ test('build provenance route is reachable without a session', async ({ request }
   const response = await request.get('/api/version')
 
   expect(response.ok()).toBeTruthy()
-  await expect(response.json()).resolves.toMatchObject({ build_revision: 'unknown' })
+  expect(response.headers()['cache-control']).toBe('public, max-age=0, must-revalidate')
+  await expect(response.json()).resolves.toEqual({
+    service: 'pisama-n8n-dashboard',
+    version: '0.1.0',
+    build_revision: 'f'.repeat(40),
+    source_repository: 'https://github.com/Pisama-AI/pisama-n8n',
+    source_revision_url: null,
+  })
+})
+
+test('capability contract is public at the documented route', async ({ request }) => {
+  const response = await request.get('/api/v1/capabilities')
+
+  expect(response.ok()).toBeTruthy()
+  expect(response.headers()['cache-control']).toBe('public, max-age=0, must-revalidate')
+  expect(response.headers()['x-pisama-build-revision']).toBe('f'.repeat(40))
+  expect(response.headers()['x-pisama-source-repository']).toBe(
+    'https://github.com/Pisama-AI/pisama-n8n',
+  )
+  expect(response.headers()['x-pisama-source-revision-url']).toBeUndefined()
+
+  const manifest = await response.json()
+  expect(manifest.schema_version).toBe(1)
+  expect(manifest.canonical_url).toBe('https://pisama.ai/product-capabilities.json')
+  expect(manifest.products.map((product: { id: string }) => product.id)).toEqual(
+    expect.arrayContaining(['n8n_self_hosted', 'n8n_cloud_free', 'n8n_pro']),
+  )
+  const n8nPro = manifest.products.find(
+    (product: { id: string; capabilities: Record<string, string> }) =>
+      product.id === 'n8n_pro',
+  )
+  expect(n8nPro.capabilities.team_governance).toBe('Not included')
 })
