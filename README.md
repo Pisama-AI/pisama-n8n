@@ -71,7 +71,7 @@ handler workflow; the repair UI warns when the chosen target is inactive.
 ## What's here
 
 ```
-engine/     pisama-n8n-engine: the detection engine (PyPI target). Pure Python, the
+engine/     pisama-n8n-engine: the Python detection engine. Pure Python, the
             structural detectors import with ZERO config (no DB, no settings). Fair-code.
 server/     FastAPI self-host server: single-tenant, SQLite default, webhook ingest
             (bearer-token auth, plus the community node's HMAC signatures via

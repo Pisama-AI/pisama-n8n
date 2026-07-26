@@ -6,8 +6,15 @@ Pure Python and dependency-free for the six structural detectors. Imports with z
 configuration (no database, no settings, no secrets).
 
 ```bash
-pip install pisama-n8n-engine
+git clone https://github.com/Pisama-AI/pisama-n8n.git
+cd pisama-n8n
+python3 -m venv .venv
+. .venv/bin/activate
+pip install ./engine
 ```
+
+`pisama-n8n-engine` is not currently published on PyPI. Install it from this
+repository so the command resolves to the reviewed source.
 
 ```python
 from pisama_n8n_engine import analyze
