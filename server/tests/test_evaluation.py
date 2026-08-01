@@ -437,6 +437,45 @@ def test_evaluation_case_correction_requires_new_review_and_keeps_history(client
         "self-host:test",
         recovery_protocol["id"],
     )
+    with pytest.raises(ValueError, match="already been released"):
+        client.storage.create_evaluation_run(
+            "1",
+            "test-engine",
+            "second-candidate",
+            "self-host:test",
+            recovery_protocol["id"],
+        )
     assert client.storage.claim_evaluation_run(interrupted["id"]) is not None
     assert interrupted["id"] in client.storage.recover_evaluation_runs()
     assert client.storage.get_evaluation_run(interrupted["id"])["status"] == "pending"
+
+
+def test_canonical_corpus_import_is_complete_and_idempotent(tmp_path):
+    from scripts.import_closed_loop_corpus import import_corpus
+
+    repo_root = Path(__file__).parents[2]
+    manifest = repo_root / "eval" / "closed_loop_cases.json"
+    database_url = f"sqlite:///{tmp_path / 'corpus.db'}"
+
+    first = import_corpus(repo_root, manifest, database_url)
+    second = import_corpus(repo_root, manifest, database_url)
+
+    assert first == second
+    assert first["case_count"] == 19
+    assert first["by_split"] == {"regression": 18, "holdout": 1}
+    storage = Storage(url=database_url)
+    try:
+        cases = storage.list_evaluation_cases()
+        assert len(cases) == 19
+        assert len({case["corpus_case_id"] for case in cases}) == 19
+        assert storage.operational_summary()["executions_analyzed"] == 19
+        protocol = storage.create_evaluation_protocol(
+            "full corpus", "baseline", "corpus:test"
+        )
+        run = storage.create_evaluation_run(
+            "1", "test-engine", "candidate", "corpus:test", protocol["id"]
+        )
+        assert run["case_count"] == 19
+        assert len(protocol["registered_cases"]) == 1
+    finally:
+        storage.close()

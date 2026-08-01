@@ -57,9 +57,12 @@ PISAMA_API_KEY=choose-a-secret uvicorn pisama_n8n_server.app:app --port 8400
 Dashboard without Docker (Node 20 or newer): `cd dashboard && npm ci && npm run dev`,
 with `NEXT_PUBLIC_API_BASE` pointing at the server (default `http://localhost:8400`).
 
-To run reviewed real-execution datasets through n8n's Evaluation UI, import the
-[closed-loop evaluation workflow](examples/pisama-closed-loop-evaluation.json) and follow
-the [dataset and review guide](docs/closed-loop-evaluation.md).
+To launch the complete reviewed 19-case demo from an empty local state, run
+`scripts/run_closed_loop_demo.sh`. It provisions n8n, the Data table, workflow, Pisama
+API, production dashboard, sealed holdout protocol, and immutable audit run. See the
+[closed-loop evaluation guide](docs/closed-loop-evaluation.md). n8n's native batch
+Evaluations UI requires a registered or licensed n8n instance; the Pisama audit loop is
+available without that n8n UI.
 
 ### Supported n8n versions
 

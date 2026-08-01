@@ -353,6 +353,10 @@ class EvaluationCase(Base):
     )
     created_by_principal: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     payload_sha256: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    corpus_case_id: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, unique=True, index=True
+    )
+    corpus_provenance: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -367,6 +371,10 @@ class EvaluationCase(Base):
             "feedback_id": self.feedback_id,
             "created_by_principal": self.created_by_principal,
             "payload_sha256": self.payload_sha256,
+            "corpus_case_id": self.corpus_case_id,
+            "corpus_provenance": (
+                json.loads(self.corpus_provenance) if self.corpus_provenance else None
+            ),
             "created_at": self.created_at,
         }
 
@@ -1125,6 +1133,24 @@ def _migration_006_sealed_holdout_protocols(connection: Any) -> None:
     )
 
 
+def _migration_007_corpus_provenance(connection: Any) -> None:
+    _add_missing_columns(
+        connection,
+        {
+            "evaluation_cases": {
+                "corpus_case_id": "VARCHAR",
+                "corpus_provenance": "TEXT",
+            }
+        },
+    )
+    connection.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_evaluation_cases_corpus_case "
+            "ON evaluation_cases(corpus_case_id) WHERE corpus_case_id IS NOT NULL"
+        )
+    )
+
+
 _MIGRATIONS: Tuple[Tuple[str, Callable[[Any], None]], ...] = (
     ("001_legacy_columns", _migration_001_legacy_columns),
     ("002_source_execution_dedup", _migration_002_source_execution_dedup),
@@ -1132,6 +1158,7 @@ _MIGRATIONS: Tuple[Tuple[str, Callable[[Any], None]], ...] = (
     ("004_idempotent_evaluation_ingest", _migration_004_idempotent_evaluation_ingest),
     ("005_durable_evaluation_runs", _migration_005_durable_evaluation_runs),
     ("006_sealed_holdout_protocols", _migration_006_sealed_holdout_protocols),
+    ("007_corpus_provenance", _migration_007_corpus_provenance),
 )
 
 
@@ -1600,6 +1627,77 @@ class Storage:
                 raise DuplicateEvaluationCase(detection_id, existing_id) from None
             return self._evaluation_case_dict(session, row)
 
+    def import_corpus_evaluation_case(
+        self,
+        execution_id: int,
+        corpus_case_id: str,
+        expected_modes: Sequence[str],
+        split: str,
+        label_evidence: str,
+        taxonomy_version: str,
+        provenance: Dict[str, Any],
+        created_by_principal: str,
+    ) -> Dict[str, Any]:
+        """Idempotently import one independently reviewed canonical corpus label."""
+        with self._Session() as session:
+            existing = session.execute(
+                select(EvaluationCase).where(
+                    EvaluationCase.corpus_case_id == corpus_case_id
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                current = self._evaluation_case_dict(session, existing)
+                if (
+                    current["expected_modes"] != sorted(set(expected_modes))
+                    or current["split"] != split
+                    or current["payload_sha256"]
+                    != provenance.get("retained_payload_sha256")
+                ):
+                    raise ValueError(
+                        f"Corpus case {corpus_case_id} conflicts with its prior import."
+                    )
+                return current
+            execution = session.get(Execution, execution_id)
+            if execution is None:
+                raise ValueError("The retained corpus execution is unavailable.")
+            detection = session.execute(
+                select(DetectionRow)
+                .where(DetectionRow.execution_id == execution_id)
+                .order_by(desc(DetectionRow.detected), DetectionRow.id)
+                .limit(1)
+            ).scalar_one_or_none()
+            if detection is None:
+                raise ValueError(
+                    "The detector produced no auditable verdict rows for this execution."
+                )
+            now = datetime.now(timezone.utc).isoformat()
+            feedback = DetectionFeedback(
+                detection_id=detection.id,
+                verdict="useful",
+                note="Imported independently reviewed canonical corpus label.",
+                actor_principal=created_by_principal,
+                created_at=now,
+            )
+            session.add(feedback)
+            session.flush()
+            row = EvaluationCase(
+                detection_id=detection.id,
+                execution_id=execution_id,
+                expected_modes=self._encode(sorted(set(expected_modes))),
+                split=split,
+                label_evidence=label_evidence.strip()[:2000],
+                taxonomy_version=taxonomy_version,
+                feedback_id=feedback.id,
+                created_by_principal=created_by_principal,
+                payload_sha256=execution_payload_sha256(execution.raw),
+                corpus_case_id=corpus_case_id,
+                corpus_provenance=self._encode(provenance),
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return self._evaluation_case_dict(session, row)
+
     def revise_evaluation_case(
         self,
         case_id: int,
@@ -1824,6 +1922,107 @@ class Storage:
             "released_at": protocol.released_at,
         }
 
+    def _evaluation_run_registrations(
+        self,
+        session: Any,
+        protocol_id: Optional[int],
+        detector_build_revision: str,
+    ) -> Dict[int, Dict[str, Any]]:
+        if protocol_id is None:
+            return {}
+        protocol = session.get(EvaluationProtocol, protocol_id)
+        if protocol is None:
+            raise ValueError("Unknown evaluation protocol id.")
+        if protocol.status != "sealed":
+            raise ValueError("Evaluation protocol has already been released.")
+        if protocol.baseline_build_revision == detector_build_revision:
+            raise ValueError(
+                "Candidate build must differ from the pre-registered baseline."
+            )
+        return {
+            item["evaluation_case_id"]: item
+            for item in json.loads(protocol.registered_cases)
+        }
+
+    def _verify_holdout_registration(
+        self,
+        case_id: int,
+        metadata: Dict[str, Any],
+        registration: Optional[Dict[str, Any]],
+    ) -> bool:
+        if registration is None:
+            return False
+        label_sha256 = hashlib.sha256(
+            self._encode(metadata["expected_modes"]).encode("utf-8")
+        ).hexdigest()
+        sealed_values = (
+            registration["case_revision"],
+            registration["payload_sha256"],
+            registration["label_sha256"],
+        )
+        current_values = (
+            metadata["revision"],
+            metadata["payload_sha256"],
+            label_sha256,
+        )
+        if sealed_values != current_values:
+            raise ValueError(f"Holdout case {case_id} changed after protocol sealing.")
+        return True
+
+    def _evaluation_case_snapshot(
+        self,
+        session: Any,
+        case: EvaluationCase,
+        taxonomy_version: str,
+        registered: Dict[int, Dict[str, Any]],
+    ) -> Optional[Tuple[EvaluationCase, Dict[str, Any]]]:
+        metadata = self._evaluation_case_dict(session, case)
+        split = metadata["split"]
+        if split == "holdout" and not self._verify_holdout_registration(
+            case.id, metadata, registered.get(case.id)
+        ):
+            return None
+        if split not in {"regression", "holdout"}:
+            return None
+        if metadata["taxonomy_version"] != taxonomy_version:
+            raise ValueError(
+                f"Evaluation case {case.id} uses taxonomy "
+                f"v{metadata['taxonomy_version']}, not v{taxonomy_version}."
+            )
+        execution = session.get(Execution, case.execution_id)
+        if execution is None:
+            raise ValueError(f"Evaluation case {case.id} has no retained execution.")
+        if execution_payload_sha256(execution.raw) != metadata["payload_sha256"]:
+            raise ValueError(
+                f"Evaluation case {case.id} retained payload failed its integrity check."
+            )
+        return case, metadata
+
+    @staticmethod
+    def _consume_evaluation_protocol(
+        session: Any,
+        protocol_id: Optional[int],
+        run: EvaluationRun,
+        released_at: str,
+    ) -> None:
+        if protocol_id is None:
+            return
+        consumed = session.execute(
+            update(EvaluationProtocol)
+            .where(
+                EvaluationProtocol.id == protocol_id,
+                EvaluationProtocol.status == "sealed",
+            )
+            .values(
+                status="released",
+                candidate_build_revision=run.build_revision,
+                evaluation_run_id=run.id,
+                released_at=released_at,
+            )
+        )
+        if consumed.rowcount != 1:
+            raise ValueError("Evaluation protocol has already been released.")
+
     def create_evaluation_run(
         self,
         taxonomy_version: str,
@@ -1841,63 +2040,16 @@ class Storage:
             )
             if not cases:
                 raise ValueError("At least one reviewed evaluation case is required.")
-            protocol = (
-                session.get(EvaluationProtocol, protocol_id) if protocol_id else None
+            registered = self._evaluation_run_registrations(
+                session, protocol_id, detector_build_revision
             )
-            if protocol_id and protocol is None:
-                raise ValueError("Unknown evaluation protocol id.")
-            if protocol is not None:
-                if protocol.status != "sealed":
-                    raise ValueError("Evaluation protocol has already been released.")
-                if protocol.baseline_build_revision == detector_build_revision:
-                    raise ValueError(
-                        "Candidate build must differ from the pre-registered baseline."
-                    )
-                registered = {
-                    item["evaluation_case_id"]: item
-                    for item in json.loads(protocol.registered_cases)
-                }
-            else:
-                registered = {}
             snapshots = []
             for case in cases:
-                metadata = self._evaluation_case_dict(session, case)
-                if metadata["split"] == "holdout":
-                    registration = registered.get(case.id)
-                    if registration is None:
-                        continue
-                    label_sha256 = hashlib.sha256(
-                        self._encode(metadata["expected_modes"]).encode("utf-8")
-                    ).hexdigest()
-                    if (
-                        registration["case_revision"] != metadata["revision"]
-                        or registration["payload_sha256"] != metadata["payload_sha256"]
-                        or registration["label_sha256"] != label_sha256
-                    ):
-                        raise ValueError(
-                            f"Holdout case {case.id} changed after protocol sealing."
-                        )
-                elif metadata["split"] != "regression":
-                    continue
-                if metadata["taxonomy_version"] != taxonomy_version:
-                    raise ValueError(
-                        f"Evaluation case {case.id} uses taxonomy "
-                        f"v{metadata['taxonomy_version']}, not v{taxonomy_version}."
-                    )
-                execution = session.get(Execution, case.execution_id)
-                if execution is None:
-                    raise ValueError(
-                        f"Evaluation case {case.id} has no retained execution."
-                    )
-                if (
-                    execution_payload_sha256(execution.raw)
-                    != metadata["payload_sha256"]
-                ):
-                    raise ValueError(
-                        f"Evaluation case {case.id} retained payload failed its "
-                        "integrity check."
-                    )
-                snapshots.append((case, metadata))
+                snapshot = self._evaluation_case_snapshot(
+                    session, case, taxonomy_version, registered
+                )
+                if snapshot is not None:
+                    snapshots.append(snapshot)
             now = datetime.now(timezone.utc).isoformat()
             run = EvaluationRun(
                 status="pending",
@@ -1915,6 +2067,7 @@ class Storage:
                 )
             session.add(run)
             session.flush()
+            self._consume_evaluation_protocol(session, protocol_id, run, now)
             for case, metadata in snapshots:
                 session.add(
                     EvaluationRunCase(
@@ -2012,12 +2165,12 @@ class Storage:
             run.result_json = self._encode(result)
             if run.protocol_id is not None:
                 protocol = session.get(EvaluationProtocol, run.protocol_id)
-                if protocol is None or protocol.status != "sealed":
-                    raise ValueError("Evaluation protocol is not releasable.")
-                protocol.status = "released"
-                protocol.candidate_build_revision = run.build_revision
-                protocol.evaluation_run_id = run.id
-                protocol.released_at = run.completed_at
+                if (
+                    protocol is None
+                    or protocol.status != "released"
+                    or protocol.evaluation_run_id != run.id
+                ):
+                    raise ValueError("Evaluation protocol release is inconsistent.")
             session.commit()
             return self.get_evaluation_run(run_id)
 
@@ -2136,6 +2289,8 @@ class Storage:
             "payload_sha256": result.get("payload_sha256"),
             "revision": result["revision"],
         }
+        if result.get("corpus_provenance"):
+            result["source"]["corpus"] = result["corpus_provenance"]
         return result
 
     @staticmethod

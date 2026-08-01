@@ -96,16 +96,24 @@ test('reviewed detection closes the loop through freeze, score, and export', asy
   await page.getByRole('link', { name: 'Open evaluation scorecard' }).click()
   await expect(page).toHaveURL('/evaluation')
   await expect(page.getByRole('heading', { name: 'Closed-loop evaluation' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Reviewed corpus' })).toBeVisible()
+
+  const runResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/v1/evaluation-runs') &&
+      response.request().method() === 'POST',
+  )
+  await page.getByRole('button', { name: 'Run regression suite' }).click()
+  expect((await runResponse).status()).toBe(202)
+
+  await expect(page.getByText('Immutable run 1')).toBeVisible()
+  await expect(page.getByText('succeeded', { exact: true })).toBeVisible()
   await expect(page.getByText('Exact set accuracy')).toBeVisible()
   await expect(page.getByText('100%')).toBeVisible()
-  await expect(page.getByText('Exact match', { exact: true })).toBeVisible()
+  await expect(page.getByText('Exact match', { exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
   await expect(page.getByText('build dashboard-e2e')).toBeVisible()
-
-  const scoreResponse = page.waitForResponse((response) =>
-    response.url().endsWith('/api/v1/evaluation-cases/score')
-  )
-  await page.getByRole('button', { name: 'Run evaluation suite' }).click()
-  expect((await scoreResponse).ok()).toBeTruthy()
 
   const downloadStarted = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Download corpus' }).click()

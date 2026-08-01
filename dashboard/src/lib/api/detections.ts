@@ -86,6 +86,8 @@ export interface EvaluationCase {
   revision: number
   revision_count: number
   created_at: string
+  corpus_case_id: string | null
+  corpus_provenance: Record<string, unknown> | null
   source: {
     capture: string
     execution_id: string | null
@@ -98,6 +100,20 @@ export interface EvaluationCase {
     payload_sha256: string | null
     revision: number
   }
+}
+
+export interface EvaluationCaseRevision {
+  evaluation_case_id: number
+  revision: number
+  feedback_id: number | null
+  expected_modes: string[]
+  split: EvaluationSplit
+  label_evidence: string
+  taxonomy_version: string
+  created_by_principal: string | null
+  payload_sha256: string | null
+  created_at: string
+  reviewer_principal: string | null
 }
 
 export interface EvaluationCaseExport {
@@ -134,6 +150,36 @@ export interface EvaluationScore {
   per_mode: Record<string, Record<string, number | null>>
   by_split: Record<EvaluationSplit, EvaluationSplitScore>
   cases: EvaluationScoreCase[]
+}
+
+export interface EvaluationRunCase {
+  evaluation_case_id: number
+  case_revision: number
+  payload_sha256: string
+  split: EvaluationSplit
+  expected_modes: string[]
+  label_evidence: string
+  actual_modes: string[]
+  missing_modes: string[]
+  unexpected_modes: string[]
+  exact_match: boolean | null
+}
+
+export interface EvaluationRun {
+  id: number
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  taxonomy_version: string
+  engine_version: string
+  build_revision: string
+  requested_by_principal: string
+  requested_at: string
+  started_at: string | null
+  completed_at: string | null
+  case_count: number
+  protocol_id: number | null
+  result: EvaluationScore | null
+  error: string | null
+  cases: EvaluationRunCase[]
 }
 
 export interface ReliabilityCase {
@@ -254,8 +300,33 @@ export function getEvaluationCases(): Promise<EvaluationCase[]> {
   return fetchApi('/api/v1/evaluation-cases')
 }
 
-export function scoreEvaluationCases(): Promise<EvaluationScore> {
-  return fetchApi('/api/v1/evaluation-cases/score')
+export function getEvaluationCaseRevisions(caseId: number): Promise<EvaluationCaseRevision[]> {
+  return fetchApi(`/api/v1/evaluation-cases/${caseId}/revisions`)
+}
+
+export function reviseEvaluationCase(
+  caseId: number,
+  expectedModes: string[],
+  split: EvaluationSplit,
+  labelEvidence: string
+): Promise<EvaluationCase> {
+  return postApi(`/api/v1/evaluation-cases/${caseId}/revisions`, {
+    expected_modes: expectedModes,
+    split,
+    label_evidence: labelEvidence,
+  })
+}
+
+export function createEvaluationRun(): Promise<EvaluationRun> {
+  return postApi('/api/v1/evaluation-runs', {})
+}
+
+export function getEvaluationRuns(): Promise<EvaluationRun[]> {
+  return fetchApi('/api/v1/evaluation-runs')
+}
+
+export function getEvaluationRun(runId: number): Promise<EvaluationRun> {
+  return fetchApi(`/api/v1/evaluation-runs/${runId}`)
 }
 
 export function concludeReliabilityCase(
