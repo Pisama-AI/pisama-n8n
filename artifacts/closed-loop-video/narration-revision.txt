@@ -1,0 +1,1 @@
+Every reviewed case has an append-only revision history. A correction requires new evidence and creates a new revision, so earlier run records and hashes remain auditable.

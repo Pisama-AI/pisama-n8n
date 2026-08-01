@@ -1,0 +1,47 @@
+1
+00:00:00,000 --> 00:00:05,000
+Five synthetic teaching cases: two clean and three failures. They are excluded from release accuracy claims.
+
+2
+00:00:05,000 --> 00:00:10,000
+n8n sends every execution through Pisama detection and idempotent retention.
+
+3
+00:00:10,000 --> 00:00:16,000
+The clean cases have empty mode sets. The timeout is independently labeled F13.
+
+4
+00:00:16,000 --> 00:00:23,000
+Expected and actual failure modes match exactly for all five teaching cases.
+
+5
+00:00:23,000 --> 00:00:30,000
+The repeat run is deduplicated, so n8n reruns cannot create duplicate retained executions.
+
+6
+00:00:30,000 --> 00:00:36,000
+Pisama immediately surfaces the synthetic failure findings for review.
+
+7
+00:00:36,000 --> 00:00:43,000
+The timeout evidence retains the 64-second duration, threshold, node, and F13 mode.
+
+8
+00:00:43,000 --> 00:00:49,000
+A human marks the finding useful, completing the review step.
+
+9
+00:00:49,000 --> 00:00:55,000
+The synthetic teaching cases remain outside the verified 19-case release corpus.
+
+10
+00:00:55,000 --> 00:01:01,000
+Immutable run 2 scores 18 regression cases at 100 percent. The holdout stays excluded.
+
+11
+00:01:01,000 --> 00:01:07,000
+Every reviewed case exposes its append-only label history and evidence.
+
+12
+00:01:07,000 --> 00:01:12,000
+Corrections create new revisions, preserving earlier labels, hashes, and score records.
