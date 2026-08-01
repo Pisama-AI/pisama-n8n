@@ -200,16 +200,19 @@ async def require_auth(request: Request) -> None:
     expected = os.environ.get("PISAMA_API_KEY")
     if not expected:
         logger.warning("PISAMA_API_KEY unset — running open (dev mode).")
+        request.state.auth_principal = "self-host:development"
         return
     authorization = request.headers.get("authorization")
     if authorization is not None and hmac.compare_digest(
         authorization.encode(), f"Bearer {expected}".encode()
     ):
+        request.state.auth_principal = _credential_principal("api-key", expected)
         return
     api_key_header = request.headers.get("x-pisama-api-key")
     if api_key_header is not None and hmac.compare_digest(
         api_key_header.encode(), expected.encode()
     ):
+        request.state.auth_principal = _credential_principal("api-key", expected)
         return
     signature = request.headers.get("x-pisama-signature")
     timestamp = request.headers.get("x-pisama-timestamp")
@@ -225,8 +228,16 @@ async def require_auth(request: Request) -> None:
         # nonce — otherwise unauthenticated garbage could burn future nonces.
         if not _consume_nonce(nonce):
             raise HTTPException(status_code=401, detail="Replay attack detected.")
+        secret = os.environ.get("PISAMA_WEBHOOK_SECRET") or expected
+        request.state.auth_principal = _credential_principal("webhook", secret)
         return
     raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+
+
+def _credential_principal(kind: str, secret: str) -> str:
+    """Return a stable audit identity without storing credential material."""
+    fingerprint = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
+    return f"self-host:{kind}:{fingerprint}"
 
 
 def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
@@ -406,6 +417,7 @@ async def mark_detection_seen(
 async def submit_detection_feedback(
     detection_id: int,
     body: Dict[str, Any],
+    request: Request,
     storage: Storage = Depends(get_storage),
 ) -> Dict[str, Any]:
     """Store an explicit local operator verdict. This never sends feedback to Pisama."""
@@ -420,7 +432,12 @@ async def submit_detection_feedback(
         raise HTTPException(
             status_code=422, detail="note must be a string when provided."
         )
-    feedback = storage.submit_detection_feedback(detection_id, verdict, note)
+    feedback = storage.submit_detection_feedback(
+        detection_id,
+        verdict,
+        note,
+        actor_principal=request.state.auth_principal,
+    )
     if feedback is None:
         raise HTTPException(status_code=404, detail="Unknown detection id.")
     storage.record_operational_event("feedback_recorded", {"verdict": verdict})
@@ -430,17 +447,9 @@ async def submit_detection_feedback(
 _EVALUATION_SPLITS = {"regression", "holdout"}
 
 
-@app.post(
-    "/api/v1/detections/{detection_id}/evaluation-case",
-    dependencies=[Depends(require_auth)],
-    status_code=201,
-)
-async def create_evaluation_case(
-    detection_id: int,
+def _validated_evaluation_label(
     body: Dict[str, Any],
-    storage: Storage = Depends(get_storage),
-) -> Dict[str, Any]:
-    """Freeze a feedback-reviewed real execution as an immutable labeled case."""
+) -> tuple[List[str], str, str]:
     modes = body.get("expected_modes")
     split = body.get("split")
     evidence = body.get("label_evidence")
@@ -464,6 +473,22 @@ async def create_evaluation_case(
         raise HTTPException(
             status_code=422, detail="label_evidence must be a non-empty string."
         )
+    return modes, split, evidence
+
+
+@app.post(
+    "/api/v1/detections/{detection_id}/evaluation-case",
+    dependencies=[Depends(require_auth)],
+    status_code=201,
+)
+async def create_evaluation_case(
+    detection_id: int,
+    body: Dict[str, Any],
+    request: Request,
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Freeze a feedback-reviewed real execution as an immutable labeled case."""
+    modes, split, evidence = _validated_evaluation_label(body)
     try:
         result = storage.create_evaluation_case(
             detection_id,
@@ -471,6 +496,7 @@ async def create_evaluation_case(
             split,
             evidence,
             TAXONOMY_VERSION,
+            created_by_principal=request.state.auth_principal,
         )
     except DuplicateEvaluationCase as exc:
         raise HTTPException(
@@ -488,12 +514,60 @@ async def create_evaluation_case(
     return result
 
 
-@app.get("/api/v1/evaluation-cases", dependencies=[Depends(require_read_auth)])
+@app.post(
+    "/api/v1/evaluation-cases/{case_id}/revisions",
+    dependencies=[Depends(require_auth)],
+    status_code=201,
+)
+async def revise_evaluation_case(
+    case_id: int,
+    body: Dict[str, Any],
+    request: Request,
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Append a correction after a new, explicitly recorded operator review."""
+    modes, split, evidence = _validated_evaluation_label(body)
+    try:
+        result = storage.revise_evaluation_case(
+            case_id,
+            modes,
+            split,
+            evidence,
+            TAXONOMY_VERSION,
+            created_by_principal=request.state.auth_principal,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if result is None:
+        raise HTTPException(status_code=404, detail="Unknown evaluation case id.")
+    storage.record_operational_event(
+        "evaluation_case_revised",
+        {"case_id": case_id, "revision": result["revision"]},
+    )
+    return result
+
+
+@app.get("/api/v1/evaluation-cases", dependencies=[Depends(require_auth)])
 async def list_evaluation_cases(
     storage: Storage = Depends(get_storage),
 ) -> List[Dict[str, Any]]:
     """List reviewed case metadata. Retained execution payloads are excluded."""
     return storage.list_evaluation_cases()
+
+
+@app.get(
+    "/api/v1/evaluation-cases/{case_id}/revisions",
+    dependencies=[Depends(require_auth)],
+)
+async def list_evaluation_case_revisions(
+    case_id: int,
+    storage: Storage = Depends(get_storage),
+) -> List[Dict[str, Any]]:
+    """Return every immutable review revision for audit and correction review."""
+    result = storage.list_evaluation_case_revisions(case_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Unknown evaluation case id.")
+    return result
 
 
 @app.get("/api/v1/evaluation-cases/export", dependencies=[Depends(require_auth)])

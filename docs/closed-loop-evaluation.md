@@ -40,7 +40,7 @@ On a detection detail page:
 1. Record an operator verdict.
 2. Verify all suggested modes against the retained n8n execution and workflow settings.
 3. Enter the independent evidence and choose `regression` or `holdout`.
-4. Freeze the case. One immutable case is allowed per retained execution.
+4. Freeze the case. One immutable case identity is allowed per retained execution.
 5. Export the credential-redacted manifest and score it with:
 
 ```bash
@@ -52,6 +52,15 @@ python eval/closed_loop_eval.py \
 Use `holdout` only when the case was labeled before the detector change being measured.
 The committed `legacy_holdout` preserves earlier evidence but is not presented as a new
 future-blind result.
+
+Every frozen label records the exact feedback id, a non-secret fingerprint of the
+authenticated credential that reviewed and froze it, and a SHA-256 hash of the retained
+payload. The scorer verifies the hash when it is present in an exported manifest.
+
+Labels are never silently edited. Record new operator feedback, then append a correction
+with `POST /api/v1/evaluation-cases/{case_id}/revisions`. Inspect the complete review
+history with `GET /api/v1/evaluation-cases/{case_id}/revisions`. Exports always use the
+latest revision while the earlier labels remain available for audit.
 
 ## CI gate
 

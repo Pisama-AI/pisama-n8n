@@ -13,6 +13,7 @@ No mocks: this is real SQLite via a real SQLAlchemy engine. Tests point
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from math import ceil
@@ -25,6 +26,7 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
     func,
     inspect,
@@ -106,6 +108,22 @@ def redact_execution_payload(value: Any) -> Any:
         else:
             result[key] = redact_execution_payload(item)
     return result
+
+
+def execution_payload_sha256(raw: str) -> str:
+    """Hash the semantic retained payload so JSON formatting cannot change identity."""
+    try:
+        value = json.loads(raw)
+        canonical = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        canonical = raw
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class Base(DeclarativeBase):
@@ -256,6 +274,7 @@ class DetectionFeedback(Base):
     )
     verdict: Mapped[str] = mapped_column(String, nullable=False, index=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actor_principal: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -264,6 +283,7 @@ class DetectionFeedback(Base):
             "detection_id": self.detection_id,
             "verdict": self.verdict,
             "note": self.note,
+            "actor_principal": self.actor_principal,
             "created_at": self.created_at,
         }
 
@@ -284,6 +304,11 @@ class EvaluationCase(Base):
     split: Mapped[str] = mapped_column(String, nullable=False, index=True)
     label_evidence: Mapped[str] = mapped_column(Text, nullable=False)
     taxonomy_version: Mapped[str] = mapped_column(String, nullable=False)
+    feedback_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("detection_feedback.id"), nullable=True, index=True
+    )
+    created_by_principal: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    payload_sha256: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -299,6 +324,55 @@ class EvaluationCase(Base):
             "split": self.split,
             "label_evidence": self.label_evidence,
             "taxonomy_version": self.taxonomy_version,
+            "feedback_id": self.feedback_id,
+            "created_by_principal": self.created_by_principal,
+            "payload_sha256": self.payload_sha256,
+            "created_at": self.created_at,
+        }
+
+
+class EvaluationCaseRevision(Base):
+    """Append-only correction to an evaluation case's reviewed label."""
+
+    __tablename__ = "evaluation_case_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_case_id", "revision_number", name="uq_evaluation_case_revision"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    evaluation_case_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_cases.id"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(nullable=False)
+    feedback_id: Mapped[int] = mapped_column(
+        ForeignKey("detection_feedback.id"), nullable=False, index=True
+    )
+    expected_modes: Mapped[str] = mapped_column(Text, nullable=False)
+    split: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    label_evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    taxonomy_version: Mapped[str] = mapped_column(String, nullable=False)
+    created_by_principal: Mapped[str] = mapped_column(String, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        try:
+            modes = json.loads(self.expected_modes)
+        except (TypeError, ValueError):
+            modes = []
+        return {
+            "id": self.id,
+            "evaluation_case_id": self.evaluation_case_id,
+            "revision": self.revision_number,
+            "feedback_id": self.feedback_id,
+            "expected_modes": modes if isinstance(modes, list) else [],
+            "split": self.split,
+            "label_evidence": self.label_evidence,
+            "taxonomy_version": self.taxonomy_version,
+            "created_by_principal": self.created_by_principal,
+            "payload_sha256": self.payload_sha256,
             "created_at": self.created_at,
         }
 
@@ -766,6 +840,14 @@ _ADDED_COLUMNS = {
         "evidence": "TEXT NOT NULL DEFAULT '{}'",
         "seen_at": "VARCHAR",
     },
+    "detection_feedback": {
+        "actor_principal": "VARCHAR",
+    },
+    "evaluation_cases": {
+        "feedback_id": "INTEGER",
+        "created_by_principal": "VARCHAR",
+        "payload_sha256": "VARCHAR",
+    },
     "reliability_cases": {
         "outcome": "VARCHAR",
         "baseline_execution_count": "INTEGER NOT NULL DEFAULT 0",
@@ -1081,7 +1163,11 @@ class Storage:
             return {"id": row.id, "seen_at": row.seen_at}
 
     def submit_detection_feedback(
-        self, detection_id: int, verdict: str, note: Optional[str] = None
+        self,
+        detection_id: int,
+        verdict: str,
+        note: Optional[str] = None,
+        actor_principal: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Record one opt-in operator verdict. None means the detection does not exist."""
         with self._Session() as session:
@@ -1091,6 +1177,7 @@ class Storage:
                 detection_id=detection_id,
                 verdict=verdict,
                 note=note.strip()[:1000] if note else None,
+                actor_principal=actor_principal,
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             session.add(feedback)
@@ -1114,6 +1201,7 @@ class Storage:
         split: str,
         label_evidence: str,
         taxonomy_version: str,
+        created_by_principal: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Freeze one feedback-reviewed execution and its independently entered label."""
         with self._Session() as session:
@@ -1123,14 +1211,18 @@ class Storage:
             if not detection.detected:
                 raise ValueError("Only a fired detection can seed an evaluation case.")
             feedback = session.execute(
-                select(DetectionFeedback.id)
+                select(DetectionFeedback)
                 .where(DetectionFeedback.detection_id == detection_id)
+                .order_by(desc(DetectionFeedback.id))
                 .limit(1)
             ).scalar_one_or_none()
             if feedback is None:
                 raise ValueError(
                     "Record operator feedback before promoting this detection."
                 )
+            execution = session.get(Execution, detection.execution_id)
+            if execution is None:
+                raise ValueError("The retained execution is no longer available.")
             row = EvaluationCase(
                 detection_id=detection_id,
                 execution_id=detection.execution_id,
@@ -1138,6 +1230,9 @@ class Storage:
                 split=split,
                 label_evidence=label_evidence.strip()[:2000],
                 taxonomy_version=taxonomy_version,
+                feedback_id=feedback.id,
+                created_by_principal=created_by_principal,
+                payload_sha256=execution_payload_sha256(execution.raw),
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             session.add(row)
@@ -1153,6 +1248,81 @@ class Storage:
                 raise DuplicateEvaluationCase(detection_id, existing_id) from None
             return self._evaluation_case_dict(session, row)
 
+    def revise_evaluation_case(
+        self,
+        case_id: int,
+        expected_modes: Sequence[str],
+        split: str,
+        label_evidence: str,
+        taxonomy_version: str,
+        created_by_principal: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Append a reviewed correction while retaining every previous label."""
+        with self._Session() as session:
+            case = session.get(EvaluationCase, case_id)
+            if case is None:
+                return None
+            latest_revision = self._latest_evaluation_revision(session, case.id)
+            current_feedback_id = (
+                latest_revision.feedback_id if latest_revision else case.feedback_id
+            )
+            feedback = session.execute(
+                select(DetectionFeedback)
+                .where(DetectionFeedback.detection_id == case.detection_id)
+                .order_by(desc(DetectionFeedback.id))
+                .limit(1)
+            ).scalar_one_or_none()
+            if feedback is None or feedback.id == current_feedback_id:
+                raise ValueError(
+                    "Record new operator feedback before correcting this evaluation case."
+                )
+            execution = session.get(Execution, case.execution_id)
+            if execution is None:
+                raise ValueError("The retained execution is no longer available.")
+            revision_number = (
+                latest_revision.revision_number + 1 if latest_revision else 1
+            )
+            revision = EvaluationCaseRevision(
+                evaluation_case_id=case.id,
+                revision_number=revision_number,
+                feedback_id=feedback.id,
+                expected_modes=self._encode(sorted(set(expected_modes))),
+                split=split,
+                label_evidence=label_evidence.strip()[:2000],
+                taxonomy_version=taxonomy_version,
+                created_by_principal=created_by_principal,
+                payload_sha256=execution_payload_sha256(execution.raw),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(revision)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise ValueError(
+                    "Evaluation case was corrected concurrently; reload and retry."
+                ) from None
+            return self._evaluation_case_dict(session, case)
+
+    def list_evaluation_case_revisions(
+        self, case_id: int
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Return the append-only label history without retained execution payloads."""
+        with self._Session() as session:
+            case = session.get(EvaluationCase, case_id)
+            if case is None:
+                return None
+            initial = self._evaluation_case_revision_dict(session, case, None)
+            revisions = session.execute(
+                select(EvaluationCaseRevision)
+                .where(EvaluationCaseRevision.evaluation_case_id == case.id)
+                .order_by(EvaluationCaseRevision.revision_number)
+            ).scalars()
+            return [initial] + [
+                self._evaluation_case_revision_dict(session, case, revision)
+                for revision in revisions
+            ]
+
     def list_evaluation_cases(self) -> List[Dict[str, Any]]:
         """List immutable case metadata without exposing retained execution payloads."""
         with self._Session() as session:
@@ -1167,8 +1337,11 @@ class Storage:
             rows = session.execute(
                 select(EvaluationCase).order_by(EvaluationCase.id)
             ).scalars().all()
+            metadata_rows = [self._evaluation_case_dict(session, row) for row in rows]
             mismatched = [
-                row.id for row in rows if row.taxonomy_version != taxonomy_version
+                metadata["id"]
+                for metadata in metadata_rows
+                if metadata["taxonomy_version"] != taxonomy_version
             ]
             if mismatched:
                 raise ValueError(
@@ -1176,7 +1349,7 @@ class Storage:
                     f"a v{taxonomy_version} manifest: {mismatched}"
                 )
             cases = []
-            for row in rows:
+            for row, metadata in zip(rows, metadata_rows):
                 execution = session.get(Execution, row.execution_id)
                 if execution is None:
                     continue
@@ -1184,15 +1357,14 @@ class Storage:
                     payload = json.loads(execution.raw)
                 except (TypeError, ValueError):
                     continue
-                metadata = self._evaluation_case_dict(session, row)
                 cases.append(
                     {
                         "id": f"tenant-evaluation-{row.id}",
                         "payload": payload,
-                        "split": row.split,
+                        "split": metadata["split"],
                         "expected_modes": metadata["expected_modes"],
                         "source": metadata["source"],
-                        "label_evidence": [row.label_evidence],
+                        "label_evidence": [metadata["label_evidence"]],
                     }
                 )
             return {
@@ -1210,14 +1382,50 @@ class Storage:
         session: Any, row: EvaluationCase
     ) -> Dict[str, Any]:
         result = row.to_dict()
+        revision = Storage._latest_evaluation_revision(session, row.id)
+        if revision is not None:
+            result.update(revision.to_dict())
+            result["id"] = row.id
+        result["revision"] = revision.revision_number if revision else 0
+        result["revision_count"] = result["revision"] + 1
         execution = session.get(Execution, row.execution_id)
+        feedback = session.get(DetectionFeedback, result.get("feedback_id"))
         result["source"] = {
             "capture": "reviewed Pisama retained n8n execution",
             "execution_id": execution.source_execution_id if execution else None,
             "workflow_id": execution.workflow_id if execution else None,
             "build_revision": execution.build_revision if execution else None,
             "detection_id": row.detection_id,
+            "feedback_id": result.get("feedback_id"),
+            "reviewer_principal": feedback.actor_principal if feedback else None,
+            "created_by_principal": result.get("created_by_principal"),
+            "payload_sha256": result.get("payload_sha256"),
+            "revision": result["revision"],
         }
+        return result
+
+    @staticmethod
+    def _latest_evaluation_revision(
+        session: Any, case_id: int
+    ) -> Optional[EvaluationCaseRevision]:
+        return session.execute(
+            select(EvaluationCaseRevision)
+            .where(EvaluationCaseRevision.evaluation_case_id == case_id)
+            .order_by(desc(EvaluationCaseRevision.revision_number))
+            .limit(1)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _evaluation_case_revision_dict(
+        session: Any,
+        case: EvaluationCase,
+        revision: Optional[EvaluationCaseRevision],
+    ) -> Dict[str, Any]:
+        result = revision.to_dict() if revision else case.to_dict()
+        result["evaluation_case_id"] = case.id
+        result["revision"] = revision.revision_number if revision else 0
+        feedback = session.get(DetectionFeedback, result.get("feedback_id"))
+        result["reviewer_principal"] = feedback.actor_principal if feedback else None
         return result
 
     def operational_summary(self) -> Dict[str, Any]:

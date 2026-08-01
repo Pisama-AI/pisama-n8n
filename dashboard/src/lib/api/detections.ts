@@ -66,6 +66,7 @@ export interface DetectionFeedback {
   detection_id: number
   verdict: FeedbackVerdict
   note: string | null
+  actor_principal: string | null
   created_at: string
 }
 
@@ -79,6 +80,11 @@ export interface EvaluationCase {
   split: EvaluationSplit
   label_evidence: string
   taxonomy_version: string
+  feedback_id: number | null
+  created_by_principal: string | null
+  payload_sha256: string | null
+  revision: number
+  revision_count: number
   created_at: string
   source: {
     capture: string
@@ -86,6 +92,11 @@ export interface EvaluationCase {
     workflow_id: string | null
     build_revision: string | null
     detection_id: number
+    feedback_id: number | null
+    reviewer_principal: string | null
+    created_by_principal: string | null
+    payload_sha256: string | null
+    revision: number
   }
 }
 

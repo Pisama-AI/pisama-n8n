@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -57,6 +58,7 @@ def _select_cases(cases: list[Any], split: Optional[str]) -> list[Dict[str, Any]
 
 def _prepare_case(case: Dict[str, Any], repo_root: Path):
     payload, reference = _load_payload(case, repo_root)
+    _verify_payload_hash(case, payload)
     labeled = (case["id"], payload, set(case["expected_modes"]))
     provenance = {
         "payload": reference,
@@ -65,6 +67,24 @@ def _prepare_case(case: Dict[str, Any], repo_root: Path):
         "label_evidence": case["label_evidence"],
     }
     return labeled, (case["id"], provenance)
+
+
+def _verify_payload_hash(case: Dict[str, Any], payload: Any) -> None:
+    expected = case["source"].get("payload_sha256")
+    if expected is None:
+        return
+    if not isinstance(expected, str) or len(expected) != 64:
+        raise ValueError(f"Case {case['id']} has an invalid payload_sha256.")
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if actual != expected:
+        raise ValueError(f"Case {case['id']} payload does not match its provenance hash.")
 
 
 def _load_payload(case: Dict[str, Any], repo_root: Path):
