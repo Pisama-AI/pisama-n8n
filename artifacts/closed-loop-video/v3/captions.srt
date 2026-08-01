@@ -1,0 +1,115 @@
+1
+00:00:00,000 --> 00:00:05,700
+Reliable automation is a loop, not a final score.
+
+2
+00:00:05,700 --> 00:00:16,480
+PISAMA makes six stages visible: design the controls, run the agent, retain the evidence, diagnose and heal, verify with evaluations, then prevent the same failure from returning.
+
+3
+00:00:18,200 --> 00:00:21,300
+Stage one is setup.
+
+4
+00:00:21,300 --> 00:00:32,500
+Before PISAMA sees a result, this n8n workflow declares five synthetic teaching cases, two clean and three failed, with expected failure modes written independently.
+
+5
+00:00:32,500 --> 00:00:37,000
+These cases teach the demo. They never enter the verified release claim.
+
+6
+00:00:39,700 --> 00:00:43,200
+Stage two is execution. I start the workflow in n8n.
+
+7
+00:00:43,200 --> 00:00:48,200
+One branch evaluates each trace. The other retains a stable case identity for review.
+
+8
+00:00:48,200 --> 00:00:58,350
+The workflow itself stays visible, so the evaluation is part of the operating system, not a separate spreadsheet.
+
+9
+00:01:01,200 --> 00:01:05,100
+Stage three is evidence. Clean cases return empty failure-mode sets.
+
+10
+00:01:05,100 --> 00:01:08,200
+The timeout returns F thirteen.
+
+11
+00:01:08,200 --> 00:01:15,100
+The missing-field case returns the contract and expression modes, and the node error is separate.
+
+12
+00:01:15,100 --> 00:01:18,300
+Expected and actual sets match.
+
+13
+00:01:18,300 --> 00:01:24,600
+On a repeat run, every receipt is deduplicated and keeps the original execution identity.
+
+14
+00:01:27,700 --> 00:01:32,100
+Stage four is diagnose and heal. PISAMA separates the failure classes, then keeps the evidence that supports each one.
+
+15
+00:01:32,100 --> 00:01:40,100
+The timeout shows sixty-four seconds against a thirty-second limit, the Slow Code node, and the trace behind F thirteen.
+
+16
+00:01:40,100 --> 00:01:46,300
+The contract finding preserves the missing field and failing expression.
+
+17
+00:01:46,300 --> 00:01:54,470
+Healing begins with an informed human verdict. It does not begin with an automatic mutation.
+
+18
+00:01:57,700 --> 00:02:02,300
+Stage five is verification. Nineteen provenance-backed cases are reviewed and frozen.
+
+19
+00:02:02,300 --> 00:02:06,000
+Eighteen enter the normal regression run. The protected holdout stays excluded.
+
+20
+00:02:06,000 --> 00:02:14,500
+A new asynchronous run succeeds at one hundred percent exact-set accuracy, with its build revision and per-case results stored immutably.
+
+21
+00:02:14,500 --> 00:02:23,870
+If a label changes, PISAMA appends evidence. Earlier scores do not move.
+
+22
+00:02:27,700 --> 00:02:33,100
+Stage six is prevention. For a proven data-contract failure, PISAMA proposes a deterministic input-schema guard.
+
+23
+00:02:33,100 --> 00:02:39,000
+The operator chooses where rejected input goes before apply is allowed.
+
+24
+00:02:39,000 --> 00:02:48,100
+Two real executions verify the result: malformed input is rejected before the consumer, and valid input still passes.
+
+25
+00:02:48,100 --> 00:02:54,160
+That is evidence of recurrence prevention, with rollback retained.
+
+26
+00:02:57,200 --> 00:03:00,100
+The loop is now closed.
+
+27
+00:03:00,100 --> 00:03:03,300
+A run creates evidence. Evidence creates a reviewed diagnosis.
+
+28
+00:03:03,300 --> 00:03:09,300
+The diagnosis changes a control. Evaluations verify the next build, and a real guard proves the failure stays out.
+
+29
+00:03:09,300 --> 00:03:15,430
+That is the PISAMA closed reliability loop.

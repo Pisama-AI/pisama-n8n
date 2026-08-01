@@ -1,0 +1,2 @@
+Stage three is evidence. Clean cases return empty failure-mode sets. The timeout returns F thirteen. The missing-field case returns the contract and expression modes, and the node error is separate. Expected and actual sets match. On a repeat run, every receipt is deduplicated and keeps the original execution identity.
+

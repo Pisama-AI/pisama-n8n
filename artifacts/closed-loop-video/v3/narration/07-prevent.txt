@@ -1,0 +1,2 @@
+Stage six is prevention. For a proven data-contract failure, PISAMA proposes a deterministic input-schema guard. The operator chooses where rejected input goes before apply is allowed. Two real executions verify the result: malformed input is rejected before the consumer, and valid input still passes. That is evidence of recurrence prevention, with rollback retained.
+

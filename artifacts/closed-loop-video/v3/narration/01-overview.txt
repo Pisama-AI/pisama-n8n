@@ -1,0 +1,2 @@
+Reliable automation is a loop, not a final score. PISAMA makes six stages visible: design the controls, run the agent, retain the evidence, diagnose and heal, verify with evaluations, then prevent the same failure from returning.
+

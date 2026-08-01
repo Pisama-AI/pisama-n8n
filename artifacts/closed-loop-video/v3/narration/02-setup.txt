@@ -1,0 +1,2 @@
+Stage one is setup. Before PISAMA sees a result, this n8n workflow declares five synthetic teaching cases, two clean and three failed, with expected failure modes written independently. These cases teach the demo. They never enter the verified release claim.
+

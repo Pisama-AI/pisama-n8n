@@ -1,0 +1,2 @@
+The loop is now closed. A run creates evidence. Evidence creates a reviewed diagnosis. The diagnosis changes a control. Evaluations verify the next build, and a real guard proves the failure stays out. That is the PISAMA closed reliability loop.
+

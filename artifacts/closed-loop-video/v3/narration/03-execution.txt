@@ -1,0 +1,2 @@
+Stage two is execution. I start the workflow in n-eight-n. One branch evaluates each trace. The other retains a stable case identity for review. The workflow itself stays visible, so the evaluation is part of the operating system, not a separate spreadsheet.
+

@@ -1,0 +1,2 @@
+Stage five is verification. Nineteen provenance-backed cases are reviewed and frozen. Eighteen enter the normal regression run. The protected holdout stays excluded. A new asynchronous run succeeds at one hundred percent exact-set accuracy, with its build revision and per-case results stored immutably. If a label changes, PISAMA appends evidence. Earlier scores do not move.
+
