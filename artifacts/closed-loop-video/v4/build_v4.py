@@ -21,9 +21,10 @@ LOOP_IMAGE = ASSETS / "pisama-reliability-loop.png"
 
 FPS = 30
 VOICE_SPEED = 1.03
-VOICE_DELAY = 0.25
-SCENE_TAIL = 0.55
-BUMPER_DURATION = 0.9
+VOICE_DELAY = 0.45
+HOOK_VOICE_DELAY = 1.0
+SCENE_TAIL = 1.2
+BUMPER_DURATION = 2.5
 
 X264 = [
     "-c:v",
@@ -62,6 +63,7 @@ class Scene:
     title: str
     audio: str
     callout: str
+    notes: tuple[tuple[str, str], ...] = ()
 
 
 SCENES = [
@@ -82,30 +84,75 @@ SCENES = [
         "01 SETUP  /  02 EXECUTION",
         "03-setup-execution-elevenlabs.mp3",
         "19 source-backed executions  ·  stable case identity",
+        (
+            ("SOURCE", "Each case comes from a recorded n8n execution."),
+            ("ACTION", "The operator runs the reviewed cases."),
+            ("RETAINED", "Stable case identity links each result to its source."),
+        ),
     ),
     Scene(
         "evidence",
         "03 EVIDENCE",
         "04-evidence-elevenlabs.mp3",
         "Missing body.required.value  ·  retained with the trace",
+        (
+            ("WHAT FAILED", "The consumer expected body.required.value."),
+            (
+                "WHAT IS RETAINED",
+                "The failed node, expression, and trace stay together.",
+            ),
+            ("HUMAN REVIEW", "The finding is reviewed before controls change."),
+        ),
     ),
     Scene(
         "diagnose",
         "04 DETECT + HEAL",
         "05-diagnose-elevenlabs.mp3",
         "64.0 s observed  ·  30.0 s limit  ·  human reviewed",
+        (
+            ("SECOND CASE", "This run took 64.0 seconds. The limit was 30.0."),
+            (
+                "PISAMA RECORDS",
+                "The affected node and measured timeout stay with the trace.",
+            ),
+            (
+                "DECISION BOUNDARY",
+                "A person decides whether to change the workflow.",
+            ),
+        ),
     ),
     Scene(
         "verify",
         "05 VERIFY",
         "06-verify-elevenlabs.mp3",
         "18 regression cases  ·  1 sealed holdout  ·  100% match",
+        (
+            ("REGRESSION SET", "18 reviewed cases are scored."),
+            ("HOLDOUT", "1 separate case remains excluded from the score."),
+            ("RESULT", "All expected failure sets matched in this run."),
+            (
+                "AUDIT RECORD",
+                "Run identity, build revision, and case results are stored.",
+            ),
+        ),
     ),
     Scene(
         "prevent",
         "06 PREVENT",
         "07-prevent-elevenlabs.mp3",
         "Malformed rejected  ·  valid passed  ·  rollback retained",
+        (
+            (
+                "AUTHORIZATION",
+                "The operator reviews the guard before workflow changes.",
+            ),
+            ("MALFORMED REQUEST", "Stopped before the consumer."),
+            ("VALID REQUEST", "Passed through to the consumer."),
+            (
+                "ROLLBACK",
+                "The workflow was restored and the audit record was retained.",
+            ),
+        ),
     ),
     Scene(
         "close",
@@ -114,6 +161,54 @@ SCENES = [
         "See what failed. Prove the fix. Prevent recurrence.",
     ),
 ]
+
+NOTE_WINDOWS = {
+    "verify": (
+        (6.05, 10.5),
+        (10.5, 15.5),
+        (15.5, 21.0),
+        (21.0, 27.5),
+    ),
+    "prevent": (
+        (6.05, 16.8),
+        (16.8, 21.0),
+        (21.0, 24.6),
+        (24.6, 28.5),
+    ),
+}
+
+FOCUS_BOXES = {
+    "verify": (
+        (6.4, 9.1, 790, 305, 315, 150),
+        (10.9, 14.0, 490, 195, 1230, 155),
+        (17.0, 18.2, 1495, 345, 195, 68),
+        (22.4, 23.7, 490, 850, 1230, 145),
+    ),
+    "prevent": (
+        (14.4, 16.4, 660, 705, 175, 62),
+        (18.3, 20.5, 660, 925, 475, 55),
+        (21.0, 23.4, 660, 978, 500, 55),
+        (24.8, 27.8, 865, 535, 155, 55),
+    ),
+}
+
+CURSOR_PATHS = {
+    "setup": ((1500, 180), (960, 985), (755, 620), (0.4, 2.5, 3.3, 5.8, 7.0)),
+    "execution": (
+        (1680, 160),
+        (1740, 430),
+        (960, 820),
+        (0.15, 1.0, 1.8, 5.0, 6.2),
+    ),
+    "verify": ((1300, 180), (1605, 145), (965, 380), (0.4, 3.0, 3.7, 5.8, 6.8)),
+    "prevent": ((1500, 190), (900, 825), (750, 740), (0.4, 3.2, 4.0, 8.5, 9.6)),
+    "hook-control": (
+        (1500, 180),
+        (835, 945),
+        (930, 1000),
+        (0.4, 3.0, 3.8, 5.8, 7.0),
+    ),
+}
 
 
 def run(*args: str, capture: bool = False) -> str:
@@ -132,6 +227,44 @@ def ffmpeg(*args: str) -> None:
 
 def number(value: float) -> str:
     return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def cursor_axis(
+    start: int,
+    first: int,
+    second: int,
+    times: tuple[float, float, float, float, float],
+    first_arc: int = 0,
+    second_arc: int = 0,
+) -> str:
+    move_start, first_stop, pause_stop, second_stop, _fade_stop = times
+    first_span = first_stop - move_start
+    second_span = second_stop - pause_stop
+    first_phase = f"(t-{number(move_start)})/{number(first_span)}"
+    second_phase = f"(t-{number(pause_stop)})/{number(second_span)}"
+    first_ease = f"(0.5-0.5*cos(PI*{first_phase}))"
+    second_ease = f"(0.5-0.5*cos(PI*{second_phase}))"
+    first_curve = f"{first_arc}*sin(PI*{first_phase})" if first_arc else "0"
+    second_curve = f"{second_arc}*sin(PI*{second_phase})" if second_arc else "0"
+    return (
+        f"if(lt(t,{number(move_start)}),{start},"
+        f"if(lt(t,{number(first_stop)}),"
+        f"{start}+{first - start}*{first_ease}+{first_curve},"
+        f"if(lt(t,{number(pause_stop)}),{first},"
+        f"if(lt(t,{number(second_stop)}),"
+        f"{first}+{second - first}*{second_ease}+{second_curve},{second}))))"
+    )
+
+
+def cursor_motion(name: str) -> tuple[str, str, float]:
+    start, first, second, times = CURSOR_PATHS[name]
+    x = cursor_axis(start[0], first[0], second[0], times)
+    y = cursor_axis(start[1], first[1], second[1], times, -70, 55)
+    return x, y, times[-1]
+
+
+def voice_delay(scene_key: str) -> float:
+    return HOOK_VOICE_DELAY if scene_key == "hook" else VOICE_DELAY
 
 
 def duration(path: Path) -> float:
@@ -281,6 +414,52 @@ def render_chip(scene: Scene) -> Path:
     )
 
 
+def render_side_notes(scene: Scene) -> list[Path]:
+    notes = []
+    for index, (eyebrow, body) in enumerate(scene.notes, start=1):
+        lines = textwrap.wrap(body, width=38, break_long_words=False)
+        assert len(lines) <= 2
+        text_rows = []
+        for line_index, line in enumerate(lines):
+            y = 98 + line_index * 32
+            text_rows.append(
+                f'<text x="30" y="{y}" fill="#f4efe2" '
+                f'font-family="Arial, sans-serif" font-size="22">'
+                f"{html.escape(line)}</text>"
+            )
+        notes.append(
+            svg_to_png(
+                GENERATED / f"side-note-{scene.key}-{index}.svg",
+                f"""<svg xmlns="http://www.w3.org/2000/svg" width="470" height="154">
+<rect width="470" height="154" rx="14" fill="#0b0d0b" fill-opacity="0.94"/>
+<rect width="6" height="154" rx="3" fill="#e9ad28"/>
+<text x="30" y="42" fill="#e9ad28" font-family="Arial, sans-serif"
+ font-size="17" font-weight="700" letter-spacing="2">{html.escape(eyebrow)}</text>
+<line x1="30" y1="58" x2="438" y2="58" stroke="#3d4039" stroke-width="1"/>
+{"".join(text_rows)}
+</svg>\n""",
+            )
+        )
+    return notes
+
+
+def render_focus_boxes(scene: Scene) -> list[Path]:
+    boxes = []
+    for index, (_start, _end, x, y, width, height) in enumerate(
+        FOCUS_BOXES.get(scene.key, ()), start=1
+    ):
+        boxes.append(
+            svg_to_png(
+                GENERATED / f"focus-{scene.key}-{index}.svg",
+                f"""<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
+<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="12"
+ fill="none" stroke="#e9ad28" stroke-width="4" stroke-opacity="0.92"/>
+</svg>\n""",
+            )
+        )
+    return boxes
+
+
 def render_bumper(key: str, index: int, assets: dict[str, Path]) -> Path:
     output = GENERATED / f"bumper-{key}.mp4"
     dots = []
@@ -322,7 +501,9 @@ def render_bumper(key: str, index: int, assets: dict[str, Path]) -> Path:
             "[0:v][card]overlay=(W-w)/2:(H-h)/2-34[base];"
             "[2:v]scale=474:36[progress];"
             "[base][progress]overlay=(W-w)/2:842,"
-            "fade=t=in:st=0:d=0.12,fade=t=out:st=0.72:d=0.18[v]"
+            "fade=t=in:st=0:d=0.45,fade=t=out:st=1.85:d=0.65,"
+            "setparams=range=tv:color_primaries=bt709:color_trc=bt709:"
+            "colorspace=bt709[v]"
         ),
         "-map",
         "[v]",
@@ -346,6 +527,7 @@ def render_capture_segment(
     output = GENERATED / f"capture-{name}.mp4"
     source = ASSETS / f"{key}-capture.mp4"
     speed = source_duration / output_duration
+    fade_out = max(0.45, output_duration - 0.65)
     command = [
         "-ss",
         number(source_start),
@@ -356,16 +538,25 @@ def render_capture_segment(
     ]
     if cursor:
         command.extend(["-loop", "1", "-i", str(GENERATED / "cursor.png")])
-        x = "if(lt(t,2.6),1400-250*t,if(lt(t,5.5),750+140*(t-2.6),1150))"
-        y = "if(lt(t,2.6),150+245*t,if(lt(t,5.5),790-75*(t-2.6),570))"
+        x, y, cursor_end = cursor_motion(name)
         filters = (
             f"[0:v]setpts=PTS/{number(speed)},fps={FPS}[base];"
-            "[1:v]scale=52:-1[cursor];"
-            f"[base][cursor]overlay=x='{x}':y='{y}'[v]"
+            "[1:v]scale=52:-1,format=rgba,fade=t=in:st=0.2:d=0.2:alpha=1,"
+            f"fade=t=out:st={number(cursor_end - 0.4)}:d=0.4:alpha=1[cursor];"
+            f"[base][cursor]overlay=x='{x}':y='{y}',"
+            f"fade=t=in:st=0:d=0.45,"
+            f"fade=t=out:st={number(fade_out)}:d=0.65[v]"
         )
         command.extend(["-filter_complex", filters, "-map", "[v]"])
     else:
-        command.extend(["-vf", f"setpts=PTS/{number(speed)},fps={FPS}"])
+        command.extend(
+            [
+                "-vf",
+                f"setpts=PTS/{number(speed)},fps={FPS},"
+                f"fade=t=in:st=0:d=0.45,"
+                f"fade=t=out:st={number(fade_out)}:d=0.65",
+            ]
+        )
     command.extend(
         [
             "-t",
@@ -403,8 +594,10 @@ def decorate_product(scene: Scene, product: Path, scene_duration: float) -> Path
     output = GENERATED / f"visual-{scene.key}.mp4"
     chip = render_chip(scene)
     label = render_label(scene.key, "VERIFIED PRODUCT EVIDENCE", scene.callout)
-    label_end = min(5.2, scene_duration - 0.3)
-    ffmpeg(
+    notes = render_side_notes(scene)
+    focus_boxes = render_focus_boxes(scene)
+    label_end = min(5.8, scene_duration - 0.3)
+    command = [
         "-i",
         str(product),
         "-loop",
@@ -415,19 +608,130 @@ def decorate_product(scene: Scene, product: Path, scene_duration: float) -> Path
         "1",
         "-i",
         str(label),
-        "-filter_complex",
-        (
-            "[0:v]setsar=1[base];"
-            "[1:v]format=rgba[chip];"
-            "[base][chip]overlay=36:30[with_chip];"
-            "[2:v]format=rgba,fade=t=in:st=0:d=0.18:alpha=1,"
-            f"fade=t=out:st={number(label_end - 0.28)}:d=0.28:alpha=1[label];"
-            f"[with_chip][label]overlay=48:H-h-44:enable='lt(t,{number(label_end)})'[v]"
+    ]
+    for note in notes:
+        command.extend(["-loop", "1", "-i", str(note)])
+    for focus_box in focus_boxes:
+        command.extend(["-loop", "1", "-i", str(focus_box)])
+
+    filters = [
+        "[0:v]setsar=1[base]",
+        "[1:v]format=rgba[chip]",
+        "[base][chip]overlay=36:30[with_chip]",
+        "[2:v]format=rgba,fade=t=in:st=0:d=0.3:alpha=1,"
+        f"fade=t=out:st={number(label_end - 0.5)}:d=0.5:alpha=1[label]",
+        f"[with_chip][label]overlay=48:H-h-44:enable='lt(t,{number(label_end)})'"
+        "[with_label]",
+    ]
+    note_start = label_end + 0.25
+    note_end = scene_duration - 1.0
+    note_duration = (note_end - note_start) / len(notes)
+    note_windows = NOTE_WINDOWS.get(
+        scene.key,
+        tuple(
+            (
+                note_start + index * note_duration,
+                note_start + (index + 1) * note_duration,
+            )
+            for index in range(len(notes))
         ),
-        "-map",
-        "[v]",
+    )
+    assert len(note_windows) == len(notes)
+    previous = "with_label"
+    for index, (_note, (start, end)) in enumerate(
+        zip(notes, note_windows, strict=True)
+    ):
+        input_index = index + 3
+        filters.append(
+            f"[{input_index}:v]format=rgba,"
+            f"fade=t=in:st={number(start)}:d=0.45:alpha=1,"
+            f"fade=t=out:st={number(end - 0.45)}:d=0.45:alpha=1[note{index}]"
+        )
+        output_label = f"with_note{index}"
+        filters.append(
+            f"[{previous}][note{index}]overlay=36:148"
+            f":enable='between(t,{number(start)},{number(end)})'[{output_label}]"
+        )
+        previous = output_label
+    for index, (start, end, _x, _y, _width, _height) in enumerate(
+        FOCUS_BOXES.get(scene.key, ())
+    ):
+        input_index = index + 3 + len(notes)
+        filters.append(
+            f"[{input_index}:v]format=rgba,"
+            f"fade=t=in:st={number(start)}:d=0.3:alpha=1,"
+            f"fade=t=out:st={number(end - 0.3)}:d=0.3:alpha=1[focus{index}]"
+        )
+        output_label = f"with_focus{index}"
+        filters.append(
+            f"[{previous}][focus{index}]overlay=0:0"
+            f":enable='between(t,{number(start)},{number(end)})'[{output_label}]"
+        )
+        previous = output_label
+    filters.append(f"[{previous}]fade=t=out:st={number(scene_duration - 0.8)}:d=0.8[v]")
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[v]",
+            "-t",
+            number(scene_duration),
+            *X264,
+            "-an",
+            str(output),
+        ]
+    )
+    ffmpeg(*command)
+    return output
+
+
+def render_intro_card(card_duration: float) -> Path:
+    card = svg_to_png(
+        GENERATED / "intro-card.svg",
+        """<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
+<defs><pattern id="g" width="32" height="32" patternUnits="userSpaceOnUse">
+<path d="M 32 0 L 0 0 0 32" fill="none" stroke="#20231f" stroke-width="1"/>
+</pattern></defs>
+<rect width="1920" height="1080" fill="#0b0d0b"/>
+<rect width="1920" height="1080" fill="url(#g)"/>
+<circle cx="787" cy="163" r="12" fill="none" stroke="#f4efe2" stroke-width="7"/>
+<circle cx="798" cy="151" r="7" fill="#e9ad28"/>
+<text x="830" y="178" fill="#f4efe2" font-family="Georgia, serif"
+ font-size="66">pisama</text>
+<text x="960" y="326" text-anchor="middle" fill="#e9ad28"
+ font-family="Arial, sans-serif" font-size="20" font-weight="700"
+ letter-spacing="5">CLOSED RELIABILITY LOOP</text>
+<text x="960" y="478" text-anchor="middle" fill="#f4efe2"
+ font-family="Georgia, serif" font-size="82">The alert is only</text>
+<text x="960" y="574" text-anchor="middle" fill="#f4efe2"
+ font-family="Georgia, serif" font-size="82">the beginning.</text>
+<line x1="820" y1="651" x2="1100" y2="651" stroke="#e9ad28" stroke-width="2"/>
+<text x="960" y="734" text-anchor="middle" fill="#aaa79e"
+ font-family="Arial, sans-serif" font-size="30">Follow one recorded n8n failure</text>
+<text x="960" y="778" text-anchor="middle" fill="#aaa79e"
+ font-family="Arial, sans-serif" font-size="30">from evidence to tested prevention.</text>
+<text x="960" y="949" text-anchor="middle" fill="#77766f"
+ font-family="Arial, sans-serif" font-size="18" letter-spacing="3">PISAMA.AI</text>
+</svg>\n""",
+    )
+    output = GENERATED / "intro-card.mp4"
+    ffmpeg(
+        "-framerate",
+        str(FPS),
+        "-loop",
+        "1",
+        "-i",
+        str(card),
+        "-vf",
+        (
+            "fade=t=in:st=0:d=0.8,"
+            f"fade=t=out:st={number(card_duration - 0.8)}:d=0.8,format=yuv420p,"
+            "setparams=range=tv:color_primaries=bt709:color_trc=bt709:"
+            "colorspace=bt709"
+        ),
         "-t",
-        number(scene_duration),
+        number(card_duration),
         *X264,
         "-an",
         str(output),
@@ -436,8 +740,9 @@ def decorate_product(scene: Scene, product: Path, scene_duration: float) -> Path
 
 
 def render_hook(scene_duration: float) -> Path:
-    first_duration = scene_duration / 2
-    second_duration = scene_duration - first_duration
+    intro_duration = 5.2
+    first_duration = 7.8
+    second_duration = scene_duration - intro_duration - first_duration
     evidence = render_capture_segment(
         "evidence", "hook-failure", 0, 7.4, first_duration
     )
@@ -453,7 +758,7 @@ def render_hook(scene_duration: float) -> Path:
         "Malformed rejected  ·  valid passed  ·  rollback retained",
     )
 
-    decorated = []
+    decorated = [render_intro_card(intro_duration)]
     for name, source, label, length in (
         ("hook-a", evidence, first_label, first_duration),
         ("hook-b", prevention, second_label, second_duration),
@@ -505,12 +810,11 @@ def render_close_cta() -> Path:
 
 def render_loop_scene(key: str, scene_duration: float, closing: bool) -> Path:
     output = GENERATED / f"visual-{key}.mp4"
-    zoom = "min(1.075,1.0+on*0.00012)" if closing else "max(1.0,1.08-on*0.00016)"
     filters = (
-        f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':"
-        f"y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps={FPS},"
-        "fade=t=in:st=0:d=0.35,"
-        f"fade=t=out:st={number(scene_duration - 0.45)}:d=0.45,format=yuv420p"
+        f"fps={FPS},setsar=1,fade=t=in:st=0:d=0.8,"
+        f"fade=t=out:st={number(scene_duration - 0.8)}:d=0.8,format=yuv420p,"
+        "setparams=range=tv:color_primaries=bt709:color_trc=bt709:"
+        "colorspace=bt709"
     )
     if closing:
         cta = render_close_cta()
@@ -560,7 +864,7 @@ def render_loop_scene(key: str, scene_duration: float, closing: bool) -> Path:
 
 def render_setup_execution(scene_duration: float, assets: dict[str, Path]) -> Path:
     product_time = scene_duration - 2 * BUMPER_DURATION
-    first_time = min(8.2, product_time * 0.43)
+    first_time = 9.0
     second_time = product_time - first_time
     parts = [
         render_bumper("setup", 0, assets),
@@ -600,7 +904,7 @@ def render_stage_scene(
 def mux_scene(scene: Scene, visual: Path, scene_duration: float) -> Path:
     output = GENERATED / f"scene-{scene.key}.mp4"
     voice = AUDIO / scene.audio.replace("-elevenlabs.mp3", ".wav")
-    delay = int(VOICE_DELAY * 1000)
+    delay = int(voice_delay(scene.key) * 1000)
     ffmpeg(
         "-i",
         str(visual),
@@ -673,7 +977,7 @@ def write_captions(
         chunks = [chunk for sentence in sentences for chunk in caption_chunks(sentence)]
         weights = [max(1, len(item.split())) for item in chunks]
         available = audio_durations[scene.key]
-        cursor = scene_starts[scene.key] + VOICE_DELAY
+        cursor = scene_starts[scene.key] + voice_delay(scene.key)
         for chunk, weight in zip(chunks, weights, strict=True):
             item_duration = available * weight / sum(weights)
             end = cursor + item_duration - 0.06
@@ -712,7 +1016,9 @@ def concat_scenes(scenes: list[Path]) -> Path:
     return output
 
 
-def mix_master(master: Path, total_duration: float) -> Path:
+def mix_master(
+    master: Path, total_duration: float, scene_starts: dict[str, float]
+) -> Path:
     bed = GENERATED / "ambient-bed.wav"
     click = GENERATED / "ui-click.wav"
     ffmpeg(
@@ -758,7 +1064,12 @@ def mix_master(master: Path, total_duration: float) -> Path:
         str(click),
     )
 
-    click_moments = [27.0, 35.5, 91.0, 116.0, 124.5]
+    click_moments = [
+        scene_starts["setup-execution"] + 5.0,
+        scene_starts["setup-execution"] + 15.0,
+        scene_starts["verify"] + 5.5,
+        scene_starts["prevent"] + 11.0,
+    ]
     split = "".join(f"[c{index}]" for index in range(len(click_moments)))
     filters = [
         "[0:a]pan=stereo|c0=c0|c1=c0[voice]",
@@ -826,6 +1137,21 @@ def main() -> int:
     scene_durations = {
         key: value + SCENE_TAIL for key, value in audio_durations.items()
     }
+    scene_durations["hook"] = max(
+        audio_durations["hook"] + HOOK_VOICE_DELAY + 0.8,
+        22.0,
+    )
+    scene_durations["loop"] = max(scene_durations["loop"], 12.0)
+    scene_durations["setup-execution"] = max(
+        scene_durations["setup-execution"],
+        duration(ASSETS / "n8n-capture.mp4") + 2 * BUMPER_DURATION,
+    )
+    for key in ("evidence", "diagnose", "verify", "prevent"):
+        scene_durations[key] = max(
+            scene_durations[key],
+            duration(ASSETS / f"{key}-capture.mp4") + BUMPER_DURATION,
+        )
+    scene_durations["close"] = max(scene_durations["close"], 22.0)
 
     visuals = {
         "hook": render_hook(scene_durations["hook"]),
@@ -859,7 +1185,7 @@ def main() -> int:
 
     write_captions(scene_starts, audio_durations)
     master = concat_scenes(muxed)
-    output = mix_master(master, current)
+    output = mix_master(master, current, scene_starts)
     print(
         json.dumps(
             {

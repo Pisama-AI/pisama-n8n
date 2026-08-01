@@ -1,1 +1,1 @@
-For the contract failure, Pisama proposes a deterministic input guard. Apply remains blocked until the operator selects a rejection path. Two real requests test it. Malformed input stops before the consumer. Valid input passes. Pisama retains both results and the rollback record.
+For the contract failure, Pisama proposes a deterministic input guard for operator review. Two real requests test the installed guard. Malformed input stops before the consumer. Valid input passes. Pisama retains both results and the rollback record.

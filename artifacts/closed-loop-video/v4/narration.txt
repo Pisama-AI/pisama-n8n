@@ -1,4 +1,4 @@
-An n8n workflow can pass a test, fail on real input, and fail again next week for the same reason. Seeing the red node is easy. Proving the cause and keeping it out is the reliability problem.
+When an n8n workflow fails, the red node is only the beginning. The real test is whether the cause becomes evidence, the fix is verified, and the same failure stays out. We will follow one recorded data-contract failure from its original run to a tested input guard. Malformed input will stop before the consumer. Valid input will still pass.
 
 Pisama closes the loop in six stages: design controls, run, retain evidence, diagnose, verify the next build, then prevent recurrence.
 
@@ -10,6 +10,6 @@ Pisama identifies a data-contract mismatch and the missing path. A second case s
 
 The next build runs against the reviewed corpus. Eighteen regression cases execute asynchronously; the holdout remains excluded. Every expected failure set matched, with the build revision and each case result stored. Label corrections append evidence. Earlier scores remain unchanged.
 
-For the contract failure, Pisama proposes a deterministic input guard. Apply remains blocked until the operator selects a rejection path. Two real requests test it. Malformed input stops before the consumer. Valid input passes. Pisama retains both results and the rollback record.
+For the contract failure, Pisama proposes a deterministic input guard for operator review. Two real requests test the installed guard. Malformed input stops before the consumer. Valid input passes. Pisama retains both results and the rollback record.
 
 The chain now connects failure evidence to a reviewed diagnosis, an auditable release, and a preventive control. For teams operating critical n8n workflows, incidents become reusable safeguards. See what failed. Prove the fix. Prevent recurrence. Pisama dot ai.

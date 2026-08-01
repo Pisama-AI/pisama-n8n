@@ -10,7 +10,19 @@ This is the evidence-led hero film for the PISAMA and n8n closed reliability loo
 - [Speaker notes](speaker-notes.md)
 - [Quality review](quality-review.md)
 
-Runtime: 2 minutes 31.9 seconds.
+Runtime: 3 minutes 16.5 seconds.
+
+## What changed in the calm cut
+
+- A branded introduction establishes the problem before the first dashboard appears.
+- The replacement opening narration follows one recorded failure through the promised outcome.
+- The reliability-loop image is completely static between fades, removing fractional-pixel shake.
+- Stage cards now remain for 2.5 seconds, including a 1.4-second full-opacity hold.
+- Dashboard captures play at their recorded speed instead of being accelerated.
+- Sequential side notes explain what to notice in the n8n, evidence, diagnosis, verification, and prevention scenes.
+- Cursor movement follows scene-specific curved, eased paths with deliberate pauses at the relevant controls.
+- Restrained gold focus boxes link the Verify and Prevent notes to the exact supporting fields.
+- Every complex scene receives a quiet reading hold before the next transition.
 
 ## What the film proves
 
@@ -18,7 +30,7 @@ Runtime: 2 minutes 31.9 seconds.
 2. PISAMA isolates a missing input contract and a measured timeout.
 3. An operator reviews evidence before changing a control.
 4. A new immutable evaluation run scores 18 regression cases while one holdout remains excluded.
-5. A deterministic input guard requires a rejection destination before apply.
+5. A deterministic input guard is proposed for operator review before workflow changes.
 6. A malformed request is rejected before the consumer, a valid request passes, and rollback remains in the audit record.
 
 The 19-case corpus is provenance-backed. The film does not use synthetic results to support release claims.
@@ -40,9 +52,9 @@ The committed capture assets make the build reproducible without a running n8n o
 - H.264 High profile, CRF 17
 - Rec.709 primaries, transfer, matrix, and limited range
 - AAC stereo at 48 kHz
-- Measured at minus 15.3 LUFS with a minus 1.22 dB true peak
+- Measured at minus 15.7 LUFS with a minus 1.21 dB true peak
 - Optional English `mov_text` captions
-- 20.45 MB final file
+- 18.89 MB final file
 
 ## Boundaries
 

@@ -1,2 +1,1 @@
-An n8n workflow can pass a test, fail on real input, and fail again next week for the same reason. Seeing the red node is easy. Proving the cause and keeping it out is the reliability problem.
-
+When an n8n workflow fails, the red node is only the beginning. The real test is whether the cause becomes evidence, the fix is verified, and the same failure stays out. We will follow one recorded data-contract failure from its original run to a tested input guard. Malformed input will stop before the consumer. Valid input will still pass.

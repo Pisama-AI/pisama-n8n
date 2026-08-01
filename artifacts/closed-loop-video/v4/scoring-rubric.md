@@ -7,7 +7,7 @@ The master is scored only after a complete decode and representative-frame revie
 - Failure, evidence, diagnosis, control, verification, and limitation are distinguishable.
 - Every numerical or causal claim is visible in the product or retained record.
 - Synthetic teaching data does not support release claims.
-- Human authorization and rollback boundaries are explicit.
+- Human review and rollback boundaries are explicit.
 - One prevention class is presented as one proven class, not universal prevention.
 
 ## Technical layman, target 88
@@ -38,4 +38,3 @@ The master is scored only after a complete decode and representative-frame revie
 ## Stop condition
 
 Continue revising while a specific, evidence-backed change can raise one audience score without lowering another. Stop when remaining gains require unavailable customer proof, a human presenter, or unsupported commercial claims.
-
