@@ -1,0 +1,1 @@
+If a label changes, Pisama appends a revision with new evidence. It never rewrites the label history or earlier score runs. That is what makes the loop auditable.

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PISAMA closed-loop promo</title>
+  <style>
+    :root {
+      --ink: #090a09;
+      --carbon: #151815;
+      --paper: #f4f5f0;
+      --muted: #a6aba3;
+      --gold: #e5b84b;
+      --teal: #75b9aa;
+      --coral: #dc786a;
+      --line: rgba(244, 245, 240, 0.14);
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--ink); color: var(--paper); }
+    body { font-family: Arial, Helvetica, sans-serif; }
+    .frame { position: relative; width: 100%; height: 100%; padding: 62px 72px; display: none; }
+    .frame.active { display: flex; }
+    .eyebrow { color: var(--gold); font-size: 16px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 22px 0 0; max-width: 1040px; font-family: Georgia, 'Times New Roman', serif; font-size: 72px; font-weight: 400; line-height: 1.02; letter-spacing: -.035em; }
+    h1 em { color: var(--gold); font-style: normal; }
+    .sub { margin-top: 26px; max-width: 760px; color: var(--muted); font-size: 22px; line-height: 1.5; }
+    .mark { position: absolute; right: 72px; bottom: 58px; display: flex; align-items: center; gap: 12px; color: var(--paper); font-family: Georgia, serif; font-size: 23px; }
+    .mark::before { content: ''; width: 13px; height: 13px; border: 2px solid var(--gold); border-radius: 50%; }
+    .hook { flex-direction: column; justify-content: center; }
+    .hook .execution { position: absolute; right: 72px; top: 128px; width: 350px; height: 510px; border: 1px solid var(--line); background: var(--carbon); }
+    .execution .rail { position: absolute; left: 38px; top: 44px; bottom: 44px; width: 2px; background: var(--line); }
+    .execution .event { position: relative; margin: 38px 26px 0 66px; padding: 15px 16px; border: 1px solid var(--line); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; opacity: 0; animation: event-in .45s forwards; }
+    .execution .event:nth-child(2) { animation-delay: .35s; }
+    .execution .event:nth-child(3) { animation-delay: 1.05s; }
+    .execution .event:nth-child(4) { animation-delay: 1.75s; border-color: rgba(220,120,106,.55); color: var(--paper); }
+    .execution .event::before { content: ''; position: absolute; left: -42px; top: 22px; width: 10px; height: 10px; border-radius: 50%; background: var(--teal); }
+    .execution .event:nth-child(4)::before { background: var(--coral); }
+    @keyframes event-in { from { opacity: 0; } to { opacity: 1; } }
+    .loop { flex-direction: column; justify-content: center; }
+    .stages { position: relative; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-top: 44px; }
+    .stages::before { content: ''; position: absolute; left: 8%; right: 8%; top: 49px; height: 1px; background: var(--line); }
+    .stage { position: relative; min-height: 180px; padding: 76px 18px 24px; border: 1px solid var(--line); background: var(--carbon); }
+    .stage .dot { position: absolute; top: 36px; left: 50%; width: 26px; height: 26px; margin-left: -13px; border: 2px solid var(--muted); border-radius: 50%; background: var(--ink); }
+    .stage strong { display: block; font-family: Georgia, serif; font-size: 25px; font-weight: 400; }
+    .stage span { display: block; margin-top: 10px; color: var(--muted); font-size: 15px; line-height: 1.4; }
+    .packet { position: absolute; z-index: 4; top: 31px; left: calc(10% - 16px); width: 36px; height: 36px; border: 4px solid var(--gold); border-radius: 5px; background: var(--ink); animation: packet-run 5.2s cubic-bezier(.45,.05,.25,1) infinite; }
+    @keyframes packet-run { 0%,8% { left: calc(10% - 16px); } 24% { left: calc(30% - 16px); } 42% { left: calc(50% - 16px); } 60% { left: calc(70% - 16px); } 78%,100% { left: calc(90% - 16px); border-color: var(--teal); } }
+    .boundary { flex-direction: column; justify-content: center; }
+    .boundary-grid { display: grid; grid-template-columns: 1fr 1px 1fr; gap: 54px; margin-top: 42px; }
+    .divider { background: var(--line); }
+    .dataset { padding: 34px 0; }
+    .dataset .count { font-family: Georgia, serif; font-size: 78px; line-height: 1; }
+    .dataset h2 { margin: 22px 0 12px; font-size: 26px; font-weight: 600; }
+    .dataset p { max-width: 520px; color: var(--muted); font-size: 19px; line-height: 1.55; }
+    .dataset.synthetic .count { color: var(--gold); }
+    .dataset.verified .count { color: var(--teal); }
+    .close { flex-direction: column; justify-content: center; }
+    .close h1 { max-width: 1160px; font-size: 76px; }
+    .proof { display: flex; gap: 18px; margin-top: 48px; }
+    .proof span { padding: 13px 17px; border: 1px solid var(--line); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
+  </style>
+</head>
+<body>
+  <section class="frame hook" data-scene="hook">
+    <div class="eyebrow">The problem hiding in execution history</div>
+    <h1>Your n8n workflow ran.<br><em>Did it work?</em></h1>
+    <p class="sub">Technical success can still hide timeouts, broken data contracts, and unhandled node failures.</p>
+    <div class="execution" aria-hidden="true">
+      <div class="rail"></div>
+      <div class="event">Webhook received</div>
+      <div class="event">Agent completed</div>
+      <div class="event">Response returned</div>
+      <div class="event">User outcome failed</div>
+    </div>
+    <div class="mark">pisama</div>
+  </section>
+
+  <section class="frame loop" data-scene="loop">
+    <div class="eyebrow">Closed-loop evaluation</div>
+    <h1>One evidence packet.<br>Five governed stages.</h1>
+    <div class="stages">
+      <div class="packet" aria-hidden="true"></div>
+      <div class="stage"><i class="dot"></i><strong>Capture</strong><span>Retain the execution record once.</span></div>
+      <div class="stage"><i class="dot"></i><strong>Detect</strong><span>Find failure modes with evidence.</span></div>
+      <div class="stage"><i class="dot"></i><strong>Review</strong><span>Add a human verdict and labels.</span></div>
+      <div class="stage"><i class="dot"></i><strong>Freeze</strong><span>Snapshot hashes and revisions.</span></div>
+      <div class="stage"><i class="dot"></i><strong>Score</strong><span>Store an immutable run record.</span></div>
+    </div>
+    <div class="mark">pisama</div>
+  </section>
+
+  <section class="frame boundary" data-scene="boundary">
+    <div class="eyebrow">Honest evaluation starts with a hard boundary</div>
+    <h1>Teaching data stays out<br>of the release claim.</h1>
+    <div class="boundary-grid">
+      <div class="dataset synthetic"><div class="count">5</div><h2>Synthetic teaching cases</h2><p>Two clean flows and three failures, created only to explain the loop.</p></div>
+      <div class="divider"></div>
+      <div class="dataset verified"><div class="count">19</div><h2>Verified release corpus</h2><p>Provenance-backed records with reviewed labels, hashes, and a protected holdout.</p></div>
+    </div>
+    <div class="mark">pisama</div>
+  </section>
+
+  <section class="frame close" data-scene="close">
+    <div class="eyebrow">PISAMA for n8n</div>
+    <h1>From one failed run<br>to a <em>release signal.</em></h1>
+    <p class="sub">Execution evidence, human review, immutable scores.</p>
+    <div class="proof"><span>captured</span><span>reviewed</span><span>frozen</span><span>scored</span></div>
+    <div class="mark">pisama</div>
+  </section>
+  <script>
+    const scene = new URLSearchParams(location.search).get('scene') || 'hook';
+    document.querySelector(`[data-scene="${scene}"]`)?.classList.add('active');
+  </script>
+</body>
+</html>

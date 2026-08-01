@@ -1,0 +1,1 @@
+The missing-field case tells a different story. Pisama identifies the data-contract break and the failing expression, so the reviewer sees cause and evidence instead of a generic red execution.

@@ -1,0 +1,1 @@
+An n8n workflow can finish successfully and still fail the user. A slow call, a missing field, or an unhandled node error can disappear into execution history.

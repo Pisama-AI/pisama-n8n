@@ -1,0 +1,25 @@
+An n8n workflow can finish successfully and still fail the user. A slow call, a missing field, or an unhandled node error can disappear into execution history.
+
+Pisama closes that gap. It captures the execution, detects failure evidence, asks for a human verdict, freezes the reviewed label, and scores the next build.
+
+For this demo, I am using five clearly marked synthetic teaching cases: two clean and three failed. They are never mixed into the release claim. I open the generator so we can see the case identities and their independently declared expected modes.
+
+Now I run the workflow in n-eight-n. The upper branch evaluates every trace. The lower branch retains a stable case identity for review.
+
+In the result panel, the clean cases have empty failure-mode sets. The timeout is labeled F thirteen. The missing-field case fires the contract and expression modes, and the node error is caught separately. Expected and actual sets match. On this repeat run, Pisama returns the same execution IDs and marks every record deduplicated.
+
+The workflow hands off to Pisama. The detections list separates node errors, missing alert workflows, timeouts, and data-shape problems. I open the inventory timeout.
+
+The finding keeps the measured sixty-four-second duration, both thresholds, the Slow Code node, and the execution trace that supports F thirteen. I can accept the finding, reject it, or mark it fixed. I mark it useful.
+
+The missing-field case tells a different story. Pisama identifies the data-contract break and the failing expression, so the reviewer sees cause and evidence instead of a generic red execution.
+
+These five synthetic cases teach the flow. They stay outside the verified corpus.
+
+Evaluation is the release gate. Nineteen provenance-backed cases are reviewed and frozen. A normal run scores eighteen regression cases. The protected holdout remains excluded.
+
+I start a new asynchronous run. The run succeeds at one hundred percent exact-set accuracy, with the build revision and per-case results stored as an immutable record.
+
+If a label changes, Pisama appends a revision with new evidence. It never rewrites the label history or earlier score runs. That is what makes the loop auditable.
+
+From one failed n-eight-n run to a reviewed, reproducible release signal. That is the Pisama closed loop.

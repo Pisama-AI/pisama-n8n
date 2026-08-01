@@ -1,0 +1,7 @@
+audio/*.aiff
+audio/*.wav
+frames/
+generated/
+contact-*.jpg
+loop-preview.jpg
+*-draft.mp4

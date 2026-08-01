@@ -1,0 +1,1 @@
+Now I run the workflow in n-eight-n. The upper branch evaluates every trace. The lower branch retains a stable case identity for review.

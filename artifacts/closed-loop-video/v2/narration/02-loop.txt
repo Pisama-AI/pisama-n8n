@@ -1,0 +1,1 @@
+Pisama closes that gap. It captures the execution, detects failure evidence, asks for a human verdict, freezes the reviewed label, and scores the next build.

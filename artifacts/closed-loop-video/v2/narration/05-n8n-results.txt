@@ -1,0 +1,1 @@
+In the result panel, the clean cases have empty failure-mode sets. The timeout is labeled F thirteen. The missing-field case fires the contract and expression modes, and the node error is caught separately. Expected and actual sets match. On this repeat run, Pisama returns the same execution IDs and marks every record deduplicated.

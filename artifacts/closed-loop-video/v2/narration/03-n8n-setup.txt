@@ -1,0 +1,1 @@
+For this demo, I am using five clearly marked synthetic teaching cases: two clean and three failed. They are never mixed into the release claim. I open the generator so we can see the case identities and their independently declared expected modes.

@@ -1,0 +1,1 @@
+Evaluation is the release gate. Nineteen provenance-backed cases are reviewed and frozen. A normal run scores eighteen regression cases. The protected holdout remains excluded. I start a new asynchronous run. The run succeeds at one hundred percent exact-set accuracy, with the build revision and per-case results stored as an immutable record.

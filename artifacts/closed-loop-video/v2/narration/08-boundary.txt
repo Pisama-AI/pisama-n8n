@@ -1,0 +1,1 @@
+These five synthetic cases teach the flow. They stay outside the verified corpus.

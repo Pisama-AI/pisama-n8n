@@ -1,0 +1,138 @@
+1
+00:00:00,000 --> 00:00:05,500
+An n8n workflow can finish successfully
+and still fail the user.
+
+2
+00:00:05,500 --> 00:00:11,703
+A slow call, a missing field, or an unhandled node error
+can disappear into execution history.
+
+3
+00:00:12,500 --> 00:00:17,000
+Pisama closes that gap.
+
+4
+00:00:17,000 --> 00:00:23,367
+It captures, detects, asks for a human verdict,
+freezes the label, and scores the next build.
+
+5
+00:00:24,500 --> 00:00:31,800
+This demo uses five synthetic teaching cases:
+two clean and three failed.
+
+6
+00:00:31,800 --> 00:00:35,700
+They are never mixed into the release claim.
+
+7
+00:00:35,700 --> 00:00:40,931
+The generator shows each case identity
+and its independently declared expected modes.
+
+8
+00:00:41,500 --> 00:00:45,300
+Now I run the workflow in n8n.
+
+9
+00:00:45,300 --> 00:00:51,244
+The upper branch evaluates every trace.
+The lower branch retains a stable case identity.
+
+10
+00:00:52,500 --> 00:00:58,000
+Clean cases have empty failure-mode sets.
+The timeout is labeled F13.
+
+11
+00:00:58,000 --> 00:01:04,700
+The missing-field case fires contract and expression modes.
+The node error is caught separately.
+
+12
+00:01:04,700 --> 00:01:09,300
+Expected and actual sets match.
+
+13
+00:01:09,300 --> 00:01:15,932
+On this repeat run, Pisama returns the same execution IDs
+and marks every record deduplicated.
+
+14
+00:01:17,500 --> 00:01:23,800
+The workflow hands off to Pisama.
+The detections list separates the failure classes.
+
+15
+00:01:23,800 --> 00:01:27,800
+I open the inventory timeout.
+
+16
+00:01:27,800 --> 00:01:35,700
+The finding keeps the measured 64-second duration,
+both thresholds, and the Slow Code node.
+
+17
+00:01:35,700 --> 00:01:40,300
+The execution trace supports F13.
+
+18
+00:01:40,300 --> 00:01:44,249
+I can accept it, reject it, or mark it fixed.
+I mark it useful.
+
+19
+00:01:45,500 --> 00:01:51,500
+The missing-field case tells a different story.
+
+20
+00:01:51,500 --> 00:01:58,587
+Pisama identifies the contract break and failing expression,
+so the reviewer sees cause and evidence.
+
+21
+00:02:03,500 --> 00:02:08,698
+These five synthetic cases teach the flow.
+They stay outside the verified corpus.
+
+22
+00:02:10,500 --> 00:02:15,500
+Evaluation is the release gate.
+
+23
+00:02:15,500 --> 00:02:22,800
+Nineteen provenance-backed cases are reviewed and frozen.
+A normal run scores eighteen regression cases.
+
+24
+00:02:22,800 --> 00:02:26,700
+The protected holdout remains excluded.
+
+25
+00:02:26,700 --> 00:02:30,000
+I start a new asynchronous run.
+
+26
+00:02:30,000 --> 00:02:34,324
+It succeeds at 100 percent exact-set accuracy,
+stored as an immutable record.
+
+27
+00:02:35,500 --> 00:02:40,500
+If a label changes, Pisama appends a revision
+with new evidence.
+
+28
+00:02:40,500 --> 00:02:46,367
+It never rewrites label history or earlier score runs.
+That is what makes the loop auditable.
+
+29
+00:02:47,500 --> 00:02:52,500
+From one failed n8n run to a reviewed,
+reproducible release signal.
+
+30
+00:02:52,500 --> 00:02:55,154
+That is the Pisama closed loop.
