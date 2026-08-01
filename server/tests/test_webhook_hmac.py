@@ -204,6 +204,18 @@ def test_replayed_request_401(client, body):
     assert fresh.status_code == 200, fresh.text
 
 
+def test_nonce_replay_is_shared_across_storage_instances(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'shared-nonces.db'}"
+    first = Storage(url=database_url)
+    second = Storage(url=database_url)
+    try:
+        assert first.consume_webhook_nonce("same-signed-request", 600) is True
+        assert second.consume_webhook_nonce("same-signed-request", 600) is False
+    finally:
+        first.close()
+        second.close()
+
+
 def test_unauthenticated_request_cannot_burn_a_nonce(client, body):
     """A wrong-secret request must NOT consume its nonce — otherwise anyone
     could pre-burn nonces and lock out the legitimate sender."""

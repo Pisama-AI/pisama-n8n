@@ -10,6 +10,9 @@ primary_region = "sjc"
   dockerfile = "Dockerfile.server"
 
 [env]
+  PISAMA_ENV = "production"
+  PISAMA_MAX_REQUEST_BYTES = "10485760"
+  PISAMA_RATE_LIMIT_PER_MINUTE = "600"
   # Keep the dedicated Cloud corpus current without polling another project.
   # PISAMA_N8N_PROJECT_ID is supplied as a Fly secret and constrains the poller.
   PISAMA_POLL_INTERVAL = "300"

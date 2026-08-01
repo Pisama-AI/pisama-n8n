@@ -33,7 +33,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from pisama_n8n_engine import FAILURE_MODES, TAXONOMY_VERSION, analyze_execution
 from pisama_n8n_server.events import broadcaster, fired_event
@@ -61,6 +62,96 @@ def _installed_version(distribution: str) -> str:
 
 _SERVER_VERSION = _installed_version("pisama-n8n-server")
 _ENGINE_VERSION = _installed_version("pisama-n8n-engine")
+_DEFAULT_MAX_REQUEST_BYTES = 10 * 1024 * 1024
+
+
+def production_mode() -> bool:
+    return os.environ.get("PISAMA_ENV", "development").strip().lower() == "production"
+
+
+def _max_request_bytes() -> int:
+    configured = os.environ.get(
+        "PISAMA_MAX_REQUEST_BYTES", str(_DEFAULT_MAX_REQUEST_BYTES)
+    )
+    try:
+        value = int(configured)
+    except ValueError as exc:
+        raise RuntimeError("PISAMA_MAX_REQUEST_BYTES must be an integer.") from exc
+    if value <= 0:
+        raise RuntimeError("PISAMA_MAX_REQUEST_BYTES must be greater than zero.")
+    return value
+
+
+def _rate_limit_per_minute() -> int:
+    configured = os.environ.get(
+        "PISAMA_RATE_LIMIT_PER_MINUTE", "600" if production_mode() else "0"
+    )
+    try:
+        value = int(configured)
+    except ValueError as exc:
+        raise RuntimeError("PISAMA_RATE_LIMIT_PER_MINUTE must be an integer.") from exc
+    if value < 0:
+        raise RuntimeError("PISAMA_RATE_LIMIT_PER_MINUTE cannot be negative.")
+    return value
+
+
+def _validate_runtime_config() -> None:
+    _max_request_bytes()
+    _rate_limit_per_minute()
+    if production_mode() and not os.environ.get("PISAMA_API_KEY"):
+        raise RuntimeError("PISAMA_API_KEY is required when PISAMA_ENV=production.")
+
+
+class RequestSizeLimitMiddleware:
+    """Reject oversized fixed-length and streamed request bodies before parsing."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = _max_request_bytes()
+        headers = dict(scope.get("headers") or [])
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > limit:
+                    await self._reject(scope, receive, send, limit)
+                    return
+            except ValueError:
+                await JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid Content-Length header."},
+                )(scope, receive, send)
+                return
+        received = 0
+
+        async def limited_receive() -> Any:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise _RequestBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestBodyTooLarge:
+            await self._reject(scope, receive, send, limit)
+
+    @staticmethod
+    async def _reject(scope: Any, receive: Any, send: Any, limit: int) -> None:
+        await JSONResponse(
+            status_code=413,
+            content={"detail": f"Request body exceeds the {limit}-byte limit."},
+        )(scope, receive, send)
+
+
+class _RequestBodyTooLarge(Exception):
+    pass
 
 
 def _verified_source_revision_url(revision: str) -> Optional[str]:
@@ -91,6 +182,7 @@ _poll_task: Optional[asyncio.Task] = None
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _poll_task, _storage
+    _validate_runtime_config()
     interval = float(os.environ.get("PISAMA_POLL_INTERVAL", "0") or "0")
     if interval > 0 and client_from_env() is not None:
         _poll_task = asyncio.create_task(_poll_loop(interval))
@@ -122,6 +214,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestSizeLimitMiddleware)
 
 
 # --- storage wiring -------------------------------------------------------
@@ -168,76 +261,106 @@ def public_read_enabled() -> bool:
 # the whole keyspace.
 _HMAC_FRESHNESS_SECONDS = 300  # reject signatures older/newer than 5 minutes
 
-# Nonces live in memory: single-tenant, single-process server. Kept for twice
-# the freshness window (a timestamp up to +300s in the future stays verifiable
-# until +600s), pruned inline so the dict stays bounded without a sweeper.
-_seen_nonces: Dict[str, float] = {}
-
-
-def _consume_nonce(nonce: str) -> bool:
-    """Mark a nonce used; False if it was already used inside its lifetime."""
-    now = time.time()
-    for stale in [n for n, expiry in _seen_nonces.items() if expiry <= now]:
-        del _seen_nonces[stale]
-    if nonce in _seen_nonces:
-        return False
-    _seen_nonces[nonce] = now + 2 * _HMAC_FRESHNESS_SECONDS
-    return True
-
-
-async def require_read_auth(request: Request) -> None:
+async def require_read_auth(
+    request: Request, storage: Storage = Depends(get_storage)
+) -> None:
     """Auth for read-only endpoints: open when PISAMA_PUBLIC_READ=1, else same as write."""
     if public_read_enabled():
+        principal = _public_principal(request)
+        request.state.auth_principal = principal
+        _enforce_rate_limit(storage, principal)
         return
-    await require_auth(request)
+    await require_auth(request, storage)
 
 
-async def require_auth(request: Request) -> None:
+async def require_auth(
+    request: Request, storage: Storage = Depends(get_storage)
+) -> None:
     """Bearer/X-Pisama-API-Key auth (PISAMA_API_KEY) OR the node's HMAC signature.
 
     If ``PISAMA_API_KEY`` is unset, dev mode: allow.
     """
     expected = os.environ.get("PISAMA_API_KEY")
     if not expected:
+        if production_mode():
+            raise HTTPException(
+                status_code=503,
+                detail="Server authentication is not configured.",
+            )
         logger.warning("PISAMA_API_KEY unset — running open (dev mode).")
-        request.state.auth_principal = "self-host:development"
+        _accept_principal(request, storage, "self-host:development")
         return
+    principal = _api_key_principal(request, expected)
+    if principal is None:
+        principal = await _signed_webhook_principal(request, storage, expected)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+    _accept_principal(request, storage, principal)
+
+
+def _api_key_principal(request: Request, expected: str) -> Optional[str]:
     authorization = request.headers.get("authorization")
     if authorization is not None and hmac.compare_digest(
         authorization.encode(), f"Bearer {expected}".encode()
     ):
-        request.state.auth_principal = _credential_principal("api-key", expected)
-        return
+        return _credential_principal("api-key", expected)
     api_key_header = request.headers.get("x-pisama-api-key")
     if api_key_header is not None and hmac.compare_digest(
         api_key_header.encode(), expected.encode()
     ):
-        request.state.auth_principal = _credential_principal("api-key", expected)
-        return
+        return _credential_principal("api-key", expected)
+    return None
+
+
+async def _signed_webhook_principal(
+    request: Request, storage: Storage, expected: str
+) -> Optional[str]:
     signature = request.headers.get("x-pisama-signature")
     timestamp = request.headers.get("x-pisama-timestamp")
-    if signature and timestamp:
-        nonce = request.headers.get("x-pisama-nonce")
-        if not nonce:
-            raise HTTPException(status_code=401, detail="Webhook nonce required.")
-        if not _valid_hmac_signature(await request.body(), signature, timestamp):
-            raise HTTPException(
-                status_code=401, detail="Invalid or stale webhook signature."
-            )
-        # Only a request that proved knowledge of the secret may consume a
-        # nonce — otherwise unauthenticated garbage could burn future nonces.
-        if not _consume_nonce(nonce):
-            raise HTTPException(status_code=401, detail="Replay attack detected.")
-        secret = os.environ.get("PISAMA_WEBHOOK_SECRET") or expected
-        request.state.auth_principal = _credential_principal("webhook", secret)
-        return
-    raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+    if not signature or not timestamp:
+        return None
+    nonce = request.headers.get("x-pisama-nonce")
+    if not nonce:
+        raise HTTPException(status_code=401, detail="Webhook nonce required.")
+    if not _valid_hmac_signature(await request.body(), signature, timestamp):
+        raise HTTPException(
+            status_code=401, detail="Invalid or stale webhook signature."
+        )
+    # Consume only after the signature proves knowledge of the secret. Otherwise
+    # unauthenticated requests could burn a legitimate sender's future nonce.
+    if not storage.consume_webhook_nonce(
+        nonce, lifetime_seconds=2 * _HMAC_FRESHNESS_SECONDS
+    ):
+        raise HTTPException(status_code=401, detail="Replay attack detected.")
+    secret = os.environ.get("PISAMA_WEBHOOK_SECRET") or expected
+    return _credential_principal("webhook", secret)
+
+
+def _accept_principal(request: Request, storage: Storage, principal: str) -> None:
+    request.state.auth_principal = principal
+    _enforce_rate_limit(storage, principal)
 
 
 def _credential_principal(kind: str, secret: str) -> str:
     """Return a stable audit identity without storing credential material."""
     fingerprint = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
     return f"self-host:{kind}:{fingerprint}"
+
+
+def _public_principal(request: Request) -> str:
+    address = request.client.host if request.client else "unknown"
+    fingerprint = hashlib.sha256(address.encode("utf-8")).hexdigest()[:12]
+    return f"self-host:public:{fingerprint}"
+
+
+def _enforce_rate_limit(storage: Storage, principal: str) -> None:
+    limit = _rate_limit_per_minute()
+    if not storage.consume_rate_limit(principal, limit):
+        raise HTTPException(
+            status_code=429,
+            detail="Request rate limit exceeded.",
+            headers={"Retry-After": "60"},
+        )
 
 
 def _valid_hmac_signature(body: bytes, signature: str, timestamp: str) -> bool:
@@ -301,7 +424,7 @@ async def n8n_webhook(
     DB dumps — normalization happens in process_execution."""
     payload = await request.json()
     try:
-        report = process_execution(payload, storage)
+        report = await run_in_threadpool(process_execution, payload, storage)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     storage.record_operational_event(
@@ -321,7 +444,7 @@ async def n8n_webhook(
 async def n8n_evaluate(payload: Any = Body(...)) -> Dict[str, Any]:
     """Analyze one real n8n execution without retaining or broadcasting it."""
     try:
-        analysis = analyze_execution(payload)
+        analysis = await run_in_threadpool(analyze_execution, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     provenance = _deployment_provenance()

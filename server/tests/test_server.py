@@ -182,6 +182,57 @@ def test_auth_required_when_key_set(client, monkeypatch):
     assert auth.status_code == 200, auth.text
 
 
+def test_production_startup_refuses_missing_api_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("PISAMA_ENV", "production")
+    monkeypatch.delenv("PISAMA_API_KEY", raising=False)
+    storage = Storage(url=f"sqlite:///{tmp_path / 'production.db'}")
+    app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        with pytest.raises(RuntimeError, match="PISAMA_API_KEY is required"):
+            with TestClient(app):
+                pass
+    finally:
+        app.dependency_overrides.clear()
+        storage.close()
+
+
+def test_request_body_limit_rejects_execution_before_detection(client, monkeypatch):
+    monkeypatch.setenv("PISAMA_MAX_REQUEST_BYTES", "128")
+    payload = _load("executions/healthy/HEALTHY-01.json")
+
+    response = client.post("/api/v1/n8n/evaluate", json=payload)
+
+    assert response.status_code == 413
+    assert "128-byte limit" in response.json()["detail"]
+    assert client.storage.operational_summary()["executions_analyzed"] == 0
+
+
+def test_database_rate_limit_returns_retry_after(client, monkeypatch):
+    monkeypatch.setenv("PISAMA_API_KEY", "rate-limited-key")
+    monkeypatch.setenv("PISAMA_RATE_LIMIT_PER_MINUTE", "2")
+    headers = {"Authorization": "Bearer rate-limited-key"}
+
+    assert client.get("/api/v1/detections", headers=headers).status_code == 200
+    assert client.get("/api/v1/detections", headers=headers).status_code == 200
+    limited = client.get("/api/v1/detections", headers=headers)
+
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "60"
+
+
+def test_rate_limit_is_shared_across_storage_instances(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'shared-rate-limit.db'}"
+    first = Storage(url=database_url)
+    second = Storage(url=database_url)
+    try:
+        assert first.consume_rate_limit("same-principal", 2) is True
+        assert second.consume_rate_limit("same-principal", 2) is True
+        assert first.consume_rate_limit("same-principal", 2) is False
+    finally:
+        first.close()
+        second.close()
+
+
 # 5. Health.
 
 

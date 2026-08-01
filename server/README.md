@@ -44,6 +44,11 @@ is available for evaluation without running the stack.
 - **Storage**: real SQLite by default (`pisama_n8n.db`); set `DATABASE_URL` for Postgres.
 - **Auth**: `PISAMA_API_KEY` gates every write. Three accepted forms (unset = dev mode,
   open with a logged warning); see the auth section below.
+- **Production mode**: `PISAMA_ENV=production` refuses to start without
+  `PISAMA_API_KEY`.
+- **Request controls**: `PISAMA_MAX_REQUEST_BYTES` defaults to 10 MiB.
+  `PISAMA_RATE_LIMIT_PER_MINUTE` defaults to 600 in production and is disabled in
+  development unless configured.
 - **CORS**: `PISAMA_CORS_ORIGINS` (comma-separated, default `*`) so the separate-origin
   dashboard can read the API.
 - Both detection lanes run per execution: structural (from the workflow JSON) + runtime
@@ -78,6 +83,10 @@ This matches the published `n8n-nodes-pisama` v0.3.0 wire contract exactly, and 
 the hosted backend's `verify_webhook_if_configured` semantics (same signature base, same
 freshness window, nonce replay protection). The hosted backend keys webhook secrets per
 registered workflow; this server is single-tenant, so one secret covers it.
+
+Replay nonces and rate-limit buckets are stored in the configured database. Replicas
+that share PostgreSQL therefore enforce the same single-use and request limits. SQLite
+remains appropriate for a single server process.
 
 ### Pointing the published community node at this server
 

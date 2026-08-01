@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from sqlalchemy import (
+    delete,
     desc,
     Float,
     ForeignKey,
@@ -35,6 +36,8 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -124,6 +127,14 @@ def execution_payload_sha256(raw: str) -> str:
     except (TypeError, ValueError):
         canonical = raw
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _decode_modes(value: str) -> List[str]:
+    try:
+        modes = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return modes if isinstance(modes, list) else []
 
 
 class Base(DeclarativeBase):
@@ -312,15 +323,11 @@ class EvaluationCase(Base):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
     def to_dict(self) -> Dict[str, Any]:
-        try:
-            modes = json.loads(self.expected_modes)
-        except (TypeError, ValueError):
-            modes = []
         return {
             "id": self.id,
             "detection_id": self.detection_id,
             "execution_id": self.execution_id,
-            "expected_modes": modes if isinstance(modes, list) else [],
+            "expected_modes": _decode_modes(self.expected_modes),
             "split": self.split,
             "label_evidence": self.label_evidence,
             "taxonomy_version": self.taxonomy_version,
@@ -358,16 +365,12 @@ class EvaluationCaseRevision(Base):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
     def to_dict(self) -> Dict[str, Any]:
-        try:
-            modes = json.loads(self.expected_modes)
-        except (TypeError, ValueError):
-            modes = []
         return {
             "id": self.id,
             "evaluation_case_id": self.evaluation_case_id,
             "revision": self.revision_number,
             "feedback_id": self.feedback_id,
-            "expected_modes": modes if isinstance(modes, list) else [],
+            "expected_modes": _decode_modes(self.expected_modes),
             "split": self.split,
             "label_evidence": self.label_evidence,
             "taxonomy_version": self.taxonomy_version,
@@ -375,6 +378,25 @@ class EvaluationCaseRevision(Base):
             "payload_sha256": self.payload_sha256,
             "created_at": self.created_at,
         }
+
+
+class WebhookNonce(Base):
+    """Shared replay-defense record; only a digest of the sender nonce is retained."""
+
+    __tablename__ = "webhook_nonces"
+
+    nonce_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+
+
+class RateLimitBucket(Base):
+    """Database-backed fixed-window request counter shared by all server replicas."""
+
+    __tablename__ = "rate_limit_buckets"
+
+    bucket_key: Mapped[str] = mapped_column(String, primary_key=True)
+    count: Mapped[int] = mapped_column(nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
 
 
 class ReliabilityCase(Base):
@@ -1148,6 +1170,74 @@ class Storage:
                 )
             )
             session.commit()
+
+    def consume_webhook_nonce(self, nonce: str, lifetime_seconds: int) -> bool:
+        """Atomically consume a signed-request nonce across all database clients."""
+        now = datetime.now(timezone.utc).timestamp()
+        digest = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+        with self._Session() as session:
+            session.execute(delete(WebhookNonce).where(WebhookNonce.expires_at <= now))
+            session.add(
+                WebhookNonce(
+                    nonce_hash=digest,
+                    expires_at=now + lifetime_seconds,
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                return False
+            return True
+
+    def consume_rate_limit(
+        self,
+        principal: str,
+        limit: int,
+        window_seconds: int = 60,
+    ) -> bool:
+        """Increment a shared fixed-window bucket and report whether it is allowed."""
+        if limit <= 0:
+            return True
+        now = datetime.now(timezone.utc).timestamp()
+        window = int(now // window_seconds)
+        bucket_key = hashlib.sha256(
+            f"{principal}:{window}".encode("utf-8")
+        ).hexdigest()
+        expires_at = (window + 1) * window_seconds
+        with self._Session() as session:
+            session.execute(
+                delete(RateLimitBucket).where(RateLimitBucket.expires_at <= now)
+            )
+            dialect = session.bind.dialect.name
+            if dialect == "sqlite":
+                statement = sqlite_insert(RateLimitBucket)
+            elif dialect == "postgresql":
+                statement = postgresql_insert(RateLimitBucket)
+            else:
+                row = session.get(RateLimitBucket, bucket_key)
+                if row is None:
+                    row = RateLimitBucket(
+                        bucket_key=bucket_key,
+                        count=1,
+                        expires_at=expires_at,
+                    )
+                    session.add(row)
+                else:
+                    row.count += 1
+                session.commit()
+                return row.count <= limit
+            statement = statement.values(
+                bucket_key=bucket_key,
+                count=1,
+                expires_at=expires_at,
+            ).on_conflict_do_update(
+                index_elements=[RateLimitBucket.bucket_key],
+                set_={"count": RateLimitBucket.count + 1},
+            ).returning(RateLimitBucket.count)
+            count = session.execute(statement).scalar_one()
+            session.commit()
+            return count <= limit
 
     def mark_detection_seen(self, detection_id: int) -> Optional[Dict[str, Any]]:
         """Record that an operator opened this detection's detail view. First
