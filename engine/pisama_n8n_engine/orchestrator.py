@@ -30,6 +30,33 @@ from pisama_n8n_engine.trace.execution import execution_to_turns_and_metadata
 from pisama_n8n_engine.trace.flatted import normalize_execution
 
 TAXONOMY_VERSION = "1"
+FAILURE_MODES = frozenset(
+    {
+        "F3",
+        "F6",
+        "F11",
+        "F12",
+        "F13",
+        "F14",
+        "F15",
+        "n8n_agent_output_validation",
+        "n8n_agent_tool_recovery",
+        "n8n_credential",
+        "n8n_data_contract",
+        "n8n_error_workflow_missing_trigger",
+        "n8n_error_workflow_target_missing",
+        "n8n_expression",
+        "n8n_missing_error_workflow",
+        "n8n_native_agent_tool_recovery",
+        "n8n_native_structured_parser_rejection",
+        "n8n_node_error",
+        "n8n_provider",
+        "n8n_rate_limit",
+        "n8n_retry_not_observed",
+        "n8n_timeout",
+        "n8n_truncation",
+    }
+)
 
 # Detectors whose production semantic is static workflow-structure analysis.
 _STRUCTURAL = {

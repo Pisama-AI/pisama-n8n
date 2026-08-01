@@ -1,5 +1,23 @@
 # Runtime-lane detector eval
 
+## Closed-loop multi-label gate
+
+`closed_loop_cases.json` is the canonical reviewed manifest for the product evaluation
+path. It references committed real n8n execution captures, records their provenance and
+independent label evidence, and expects the complete set of failure modes for each case.
+It does not use Pisama output as its label source.
+
+```bash
+python eval/closed_loop_eval.py --require-exact
+python eval/closed_loop_eval.py --split legacy_holdout --json /tmp/holdout.json
+```
+
+The report includes exact-set accuracy, per-mode and micro/macro precision, recall and
+F1, plus every missing or unexpected mode. Undefined metrics remain `null`. The
+`legacy_holdout` case preserves the repository's historical out-of-sample split; it is
+not claimed as a new future-blind holdout. Newly reviewed production incidents should
+be added to a fresh `holdout` split before detector changes are made.
+
 Measures per-detector **precision / recall / F1** for the execution-lane detectors —
 `timeout`, `error`, `resource` — the ones that read real n8n execution `runData`. (The
 structural detectors `cycle` / `complexity` / `schema` are evaluated separately against

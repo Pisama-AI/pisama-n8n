@@ -35,12 +35,16 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from pisama_n8n_engine import analyze_execution
+from pisama_n8n_engine import FAILURE_MODES, TAXONOMY_VERSION, analyze_execution
 from pisama_n8n_server.events import broadcaster, fired_event
 from pisama_n8n_server.n8n_client import client_from_env
 from pisama_n8n_server.poller import poll_once
 from pisama_n8n_server.processing import evaluation_response, process_execution
-from pisama_n8n_server.storage import Storage, build_revision
+from pisama_n8n_server.storage import (
+    DuplicateEvaluationCase,
+    Storage,
+    build_revision,
+)
 
 logger = logging.getLogger("pisama_n8n_server")
 
@@ -421,6 +425,86 @@ async def submit_detection_feedback(
         raise HTTPException(status_code=404, detail="Unknown detection id.")
     storage.record_operational_event("feedback_recorded", {"verdict": verdict})
     return feedback
+
+
+_EVALUATION_SPLITS = {"regression", "holdout"}
+
+
+@app.post(
+    "/api/v1/detections/{detection_id}/evaluation-case",
+    dependencies=[Depends(require_auth)],
+    status_code=201,
+)
+async def create_evaluation_case(
+    detection_id: int,
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Freeze a feedback-reviewed real execution as an immutable labeled case."""
+    modes = body.get("expected_modes")
+    split = body.get("split")
+    evidence = body.get("label_evidence")
+    if not isinstance(modes, list) or any(
+        not isinstance(mode, str) or not mode for mode in modes
+    ):
+        raise HTTPException(status_code=422, detail="expected_modes must be a list of strings.")
+    if len(modes) != len(set(modes)):
+        raise HTTPException(status_code=422, detail="expected_modes must not contain duplicates.")
+    unknown = sorted(set(modes) - FAILURE_MODES)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown taxonomy v{TAXONOMY_VERSION} failure modes: {unknown}",
+        )
+    if split not in _EVALUATION_SPLITS:
+        raise HTTPException(
+            status_code=422, detail="split must be regression or holdout."
+        )
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise HTTPException(
+            status_code=422, detail="label_evidence must be a non-empty string."
+        )
+    try:
+        result = storage.create_evaluation_case(
+            detection_id,
+            modes,
+            split,
+            evidence,
+            TAXONOMY_VERSION,
+        )
+    except DuplicateEvaluationCase as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Detection already has evaluation case {exc.existing_id}.",
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if result is None:
+        raise HTTPException(status_code=404, detail="Unknown detection id.")
+    storage.record_operational_event(
+        "evaluation_case_created",
+        {"case_id": result["id"], "split": split, "mode_count": len(modes)},
+    )
+    return result
+
+
+@app.get("/api/v1/evaluation-cases", dependencies=[Depends(require_read_auth)])
+async def list_evaluation_cases(
+    storage: Storage = Depends(get_storage),
+) -> List[Dict[str, Any]]:
+    """List reviewed case metadata. Retained execution payloads are excluded."""
+    return storage.list_evaluation_cases()
+
+
+@app.get("/api/v1/evaluation-cases/export", dependencies=[Depends(require_auth)])
+async def export_evaluation_cases(
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Export credential-redacted inline cases for the canonical offline scorer."""
+    try:
+        return storage.export_evaluation_cases(TAXONOMY_VERSION)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @app.get("/api/v1/operations/summary", dependencies=[Depends(require_read_auth)])

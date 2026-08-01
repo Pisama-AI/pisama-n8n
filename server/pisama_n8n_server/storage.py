@@ -59,6 +59,17 @@ class DuplicateSourceExecution(Exception):
             f" (id={existing_id})"
         )
 
+
+class DuplicateEvaluationCase(Exception):
+    """A reviewed detection has already been frozen as an evaluation case."""
+
+    def __init__(self, detection_id: int, existing_id: Optional[int]):
+        self.detection_id = detection_id
+        self.existing_id = existing_id
+        super().__init__(
+            f"detection {detection_id} already has evaluation case {existing_id}"
+        )
+
 _SECRET_KEYS = {
     "apikey",
     "authorization",
@@ -253,6 +264,41 @@ class DetectionFeedback(Base):
             "detection_id": self.detection_id,
             "verdict": self.verdict,
             "note": self.note,
+            "created_at": self.created_at,
+        }
+
+
+class EvaluationCase(Base):
+    """An immutable reviewed label over one retained real n8n execution."""
+
+    __tablename__ = "evaluation_cases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    detection_id: Mapped[int] = mapped_column(
+        ForeignKey("detections.id"), nullable=False, unique=True, index=True
+    )
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("executions.id"), nullable=False, unique=True, index=True
+    )
+    expected_modes: Mapped[str] = mapped_column(Text, nullable=False)
+    split: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    label_evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    taxonomy_version: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        try:
+            modes = json.loads(self.expected_modes)
+        except (TypeError, ValueError):
+            modes = []
+        return {
+            "id": self.id,
+            "detection_id": self.detection_id,
+            "execution_id": self.execution_id,
+            "expected_modes": modes if isinstance(modes, list) else [],
+            "split": self.split,
+            "label_evidence": self.label_evidence,
+            "taxonomy_version": self.taxonomy_version,
             "created_at": self.created_at,
         }
 
@@ -645,7 +691,9 @@ def _repair_kind(guard_config: Any) -> str:
     return kind if kind in ("input_schema", "error_route") else "input_schema"
 
 
-def _classify_durable_controls(rows: List[Any]) -> Dict[str, Any]:
+def _classify_durable_controls(
+    rows: List[Any], evaluation_cases_by_split: Optional[Dict[str, int]] = None
+) -> Dict[str, Any]:
     """The strict durable-control rollup over (guard_config, applied_at,
     rolled_back_at, case_status) tuples — classification in Python so the logic is
     byte-identical across the SQLite and Postgres servers and immune to the SQL NULL
@@ -653,8 +701,8 @@ def _classify_durable_controls(rows: List[Any]) -> Dict[str, Any]:
 
     durable = applied AND not rolled back AND not drifted. The share is durable over
     ALL proposed fixes (adoption x durability); the payload also carries `applied`
-    so durability-of-applied is computable without a redeploy. "harness" is reported
-    as not implemented rather than faked."""
+    so durability-of-applied is computable without a redeploy. The harness is only
+    implemented once at least one reviewed evaluation case exists."""
     by_kind: Dict[str, Dict[str, Any]] = {
         kind: {"proposed": 0, "applied": 0, "durable": 0, "share": None}
         for kind in _DURABLE_KINDS
@@ -694,8 +742,15 @@ def _classify_durable_controls(rows: List[Any]) -> Dict[str, Any]:
         ),
         "by_kind": by_kind,
         "harness": {
-            "implemented": False,
-            "note": "No harness/eval artifact is emitted by the n8n product today.",
+            "implemented": bool(evaluation_cases_by_split),
+            "reviewed_cases": sum((evaluation_cases_by_split or {}).values()),
+            "by_split": evaluation_cases_by_split or {},
+            "note": (
+                "Reviewed retained executions can be exported into the canonical "
+                "multi-label scorer."
+                if evaluation_cases_by_split
+                else "No reviewed evaluation case has been created yet."
+            ),
         },
     }
 
@@ -1052,6 +1107,119 @@ class Storage:
             ).scalar_one_or_none()
             return row.to_dict() if row else None
 
+    def create_evaluation_case(
+        self,
+        detection_id: int,
+        expected_modes: Sequence[str],
+        split: str,
+        label_evidence: str,
+        taxonomy_version: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Freeze one feedback-reviewed execution and its independently entered label."""
+        with self._Session() as session:
+            detection = session.get(DetectionRow, detection_id)
+            if detection is None:
+                return None
+            if not detection.detected:
+                raise ValueError("Only a fired detection can seed an evaluation case.")
+            feedback = session.execute(
+                select(DetectionFeedback.id)
+                .where(DetectionFeedback.detection_id == detection_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            if feedback is None:
+                raise ValueError(
+                    "Record operator feedback before promoting this detection."
+                )
+            row = EvaluationCase(
+                detection_id=detection_id,
+                execution_id=detection.execution_id,
+                expected_modes=self._encode(sorted(set(expected_modes))),
+                split=split,
+                label_evidence=label_evidence.strip()[:2000],
+                taxonomy_version=taxonomy_version,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(row)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                existing_id = session.execute(
+                    select(EvaluationCase.id).where(
+                        EvaluationCase.execution_id == detection.execution_id
+                    )
+                ).scalar_one_or_none()
+                raise DuplicateEvaluationCase(detection_id, existing_id) from None
+            return self._evaluation_case_dict(session, row)
+
+    def list_evaluation_cases(self) -> List[Dict[str, Any]]:
+        """List immutable case metadata without exposing retained execution payloads."""
+        with self._Session() as session:
+            rows = session.execute(
+                select(EvaluationCase).order_by(desc(EvaluationCase.id))
+            ).scalars()
+            return [self._evaluation_case_dict(session, row) for row in rows]
+
+    def export_evaluation_cases(self, taxonomy_version: str) -> Dict[str, Any]:
+        """Return a scorer-ready manifest with redacted retained payloads inline."""
+        with self._Session() as session:
+            rows = session.execute(
+                select(EvaluationCase).order_by(EvaluationCase.id)
+            ).scalars().all()
+            mismatched = [
+                row.id for row in rows if row.taxonomy_version != taxonomy_version
+            ]
+            if mismatched:
+                raise ValueError(
+                    "Evaluation cases use an older taxonomy and cannot be mixed into "
+                    f"a v{taxonomy_version} manifest: {mismatched}"
+                )
+            cases = []
+            for row in rows:
+                execution = session.get(Execution, row.execution_id)
+                if execution is None:
+                    continue
+                try:
+                    payload = json.loads(execution.raw)
+                except (TypeError, ValueError):
+                    continue
+                metadata = self._evaluation_case_dict(session, row)
+                cases.append(
+                    {
+                        "id": f"tenant-evaluation-{row.id}",
+                        "payload": payload,
+                        "split": row.split,
+                        "expected_modes": metadata["expected_modes"],
+                        "source": metadata["source"],
+                        "label_evidence": [row.label_evidence],
+                    }
+                )
+            return {
+                "schema_version": "1",
+                "taxonomy_version": taxonomy_version,
+                "description": (
+                    "Operator-reviewed real n8n executions exported from Pisama. "
+                    "Retained payloads are credential-redacted."
+                ),
+                "cases": cases,
+            }
+
+    @staticmethod
+    def _evaluation_case_dict(
+        session: Any, row: EvaluationCase
+    ) -> Dict[str, Any]:
+        result = row.to_dict()
+        execution = session.get(Execution, row.execution_id)
+        result["source"] = {
+            "capture": "reviewed Pisama retained n8n execution",
+            "execution_id": execution.source_execution_id if execution else None,
+            "workflow_id": execution.workflow_id if execution else None,
+            "build_revision": execution.build_revision if execution else None,
+            "detection_id": row.detection_id,
+        }
+        return result
+
     def operational_summary(self) -> Dict[str, Any]:
         """Local operational signals for an operator, derived from real persisted state."""
         with self._Session() as session:
@@ -1081,6 +1249,11 @@ class Storage:
                     DetectionFeedback.verdict, func.count(DetectionFeedback.id)
                 ).group_by(DetectionFeedback.verdict)
             ).all()
+            evaluation_rows = session.execute(
+                select(EvaluationCase.split, func.count(EvaluationCase.id)).group_by(
+                    EvaluationCase.split
+                )
+            ).all()
             case_rows = session.execute(
                 select(ReliabilityCase.status, func.count(ReliabilityCase.id)).group_by(
                     ReliabilityCase.status
@@ -1099,6 +1272,7 @@ class Storage:
                 "fired_by_detector": dict(detector_rows),
                 "repairs_by_status": dict(repair_rows),
                 "feedback_by_verdict": dict(feedback_rows),
+                "evaluation_cases_by_split": dict(evaluation_rows),
                 "reliability_cases_by_status": dict(case_rows),
                 "reliability_metrics": self._reliability_metrics(session),
                 "latest_events": latest_events,
@@ -1369,7 +1543,14 @@ class Storage:
                 ReliabilityCase, ReliabilityCase.repair_id == RepairAttempt.id
             )
         ).all()
-        return _classify_durable_controls(rows)
+        evaluation_cases_by_split = dict(
+            session.execute(
+                select(EvaluationCase.split, func.count(EvaluationCase.id)).group_by(
+                    EvaluationCase.split
+                )
+            ).all()
+        )
+        return _classify_durable_controls(rows, evaluation_cases_by_split)
 
     def _claim_repair(
         self,
@@ -2164,6 +2345,16 @@ class Storage:
                 .limit(1)
             ).scalar_one_or_none()
             result["feedback"] = feedback.to_dict() if feedback else None
+            evaluation_case = session.execute(
+                select(EvaluationCase).where(
+                    EvaluationCase.detection_id == detection_id
+                )
+            ).scalar_one_or_none()
+            result["evaluation_case"] = (
+                self._evaluation_case_dict(session, evaluation_case)
+                if evaluation_case
+                else None
+            )
             case = session.execute(
                 select(ReliabilityCase)
                 .where(ReliabilityCase.detection_id == detection_id)

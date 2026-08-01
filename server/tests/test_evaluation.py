@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from pisama_n8n_engine import score_labeled_executions
 from pisama_n8n_server.app import app, get_storage
 from pisama_n8n_server.events import broadcaster
 from pisama_n8n_server.storage import Storage
@@ -76,3 +77,89 @@ def test_evaluate_rejects_an_unknown_payload_without_persistence(client):
 
     assert response.status_code == 422
     assert client.storage.operational_summary()["executions_analyzed"] == 0
+
+
+def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client):
+    payload = _load("executions/data_contract/CLOUD-112117-missing-required-value.json")
+    webhook = client.post("/api/v1/n8n/webhook", json=payload)
+    assert webhook.status_code == 200, webhook.text
+    detection = next(
+        row
+        for row in client.get("/api/v1/detections").json()
+        if row["detected"] and row["failure_mode"] == "n8n_data_contract"
+    )
+    endpoint = f"/api/v1/detections/{detection['id']}/evaluation-case"
+    expected = [
+        "n8n_data_contract",
+        "n8n_expression",
+        "n8n_missing_error_workflow",
+    ]
+    review = {
+        "expected_modes": expected,
+        "split": "holdout",
+        "label_evidence": (
+            "n8n recorded the missing required value and the workflow snapshot has "
+            "no error workflow."
+        ),
+    }
+
+    assert client.post(endpoint, json=review).status_code == 409
+    feedback = client.post(
+        f"/api/v1/detections/{detection['id']}/feedback",
+        json={"verdict": "useful", "note": "Reviewed against the n8n error record."},
+    )
+    assert feedback.status_code == 200, feedback.text
+
+    created = client.post(endpoint, json=review)
+    assert created.status_code == 201, created.text
+    case = created.json()
+    assert case["expected_modes"] == sorted(expected)
+    assert case["taxonomy_version"] == "1"
+    assert case["source"]["workflow_id"] == "0H6n1fY53bCT6rhX"
+
+    listed = client.get("/api/v1/evaluation-cases").json()
+    assert listed == [case]
+    assert "payload" not in listed[0]
+    exported = client.get("/api/v1/evaluation-cases/export").json()
+    assert exported["schema_version"] == "1"
+    assert exported["taxonomy_version"] == "1"
+    assert exported["cases"][0]["payload"]["id"] == "112117"
+    scorer_input = exported["cases"][0]
+    score = score_labeled_executions(
+        [
+            (
+                scorer_input["id"],
+                scorer_input["payload"],
+                set(scorer_input["expected_modes"]),
+            )
+        ]
+    )
+    assert score["exact_set_accuracy"] == 1.0
+    summary = client.storage.operational_summary()
+    assert summary["evaluation_cases_by_split"] == {"holdout": 1}
+    assert summary["reliability_metrics"]["durable_controls"]["harness"] == {
+        "implemented": True,
+        "reviewed_cases": 1,
+        "by_split": {"holdout": 1},
+        "note": (
+            "Reviewed retained executions can be exported into the canonical "
+            "multi-label scorer."
+        ),
+    }
+    detail = client.get(f"/api/v1/detections/{detection['id']}").json()
+    assert detail["evaluation_case"]["id"] == case["id"]
+    assert client.post(endpoint, json=review).status_code == 409
+
+
+def test_evaluation_case_rejects_unknown_taxonomy_mode(client):
+    response = client.post(
+        "/api/v1/detections/999/evaluation-case",
+        json={
+            "expected_modes": ["made_up_mode"],
+            "split": "regression",
+            "label_evidence": "reviewed",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Unknown taxonomy" in response.json()["detail"]

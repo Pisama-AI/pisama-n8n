@@ -94,6 +94,8 @@ jobs:
         run: python -m pytest -q --cov=pisama_n8n_engine --cov-report=term --cov-fail-under=60
       - name: Parity / regression gate (engine vs golden corpus)
         run: python benchmarks/parity_check.py
+      - name: Closed-loop multi-label evaluation gate
+        run: python eval/closed_loop_eval.py --require-exact
       - name: Server tests
         working-directory: server
         run: python -m pytest -q --cov=pisama_n8n_server --cov-report=term --cov-fail-under=80
