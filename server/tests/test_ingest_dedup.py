@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, inspect, text
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -52,6 +52,91 @@ def test_second_insert_with_same_source_id_is_refused(tmp_path, monkeypatch):
     # Webhook pushes carry no upstream id and stay unconstrained.
     assert s.save_report({"workflowId": "wf"}, _Report()) != first
     s.save_report({"workflowId": "wf"}, _Report())
+
+
+def test_schema_migrations_are_versioned_and_idempotent(tmp_path, monkeypatch):
+    storage = _storage(tmp_path, monkeypatch, "migrations.db")
+    with storage.engine.begin() as connection:
+        first = connection.execute(
+            text("SELECT version FROM schema_migrations ORDER BY version")
+        ).scalars().all()
+    storage.close()
+
+    reopened = _storage(tmp_path, monkeypatch, "migrations.db")
+    with reopened.engine.begin() as connection:
+        second = connection.execute(
+            text("SELECT version FROM schema_migrations ORDER BY version")
+        ).scalars().all()
+    reopened.close()
+
+    assert first == [
+        "001_legacy_columns",
+        "002_source_execution_dedup",
+        "003_closed_loop_audit",
+    ]
+    assert second == first
+
+
+def test_versioned_migrations_upgrade_a_pre_migration_database(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'pre-migration.db'}"
+    legacy = create_engine(database_url, future=True)
+    with legacy.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE executions (id INTEGER PRIMARY KEY, workflow_id VARCHAR, "
+                "received_at VARCHAR NOT NULL, raw TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE detections (id INTEGER PRIMARY KEY, execution_id INTEGER "
+                "NOT NULL, detector VARCHAR NOT NULL, detected BOOLEAN NOT NULL, "
+                "confidence FLOAT NOT NULL, failure_mode VARCHAR, explanation TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE detection_feedback (id INTEGER PRIMARY KEY, detection_id "
+                "INTEGER NOT NULL, verdict VARCHAR NOT NULL, note TEXT, "
+                "created_at VARCHAR NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE evaluation_cases (id INTEGER PRIMARY KEY, detection_id "
+                "INTEGER NOT NULL UNIQUE, execution_id INTEGER NOT NULL UNIQUE, "
+                "expected_modes TEXT NOT NULL, split VARCHAR NOT NULL, "
+                "label_evidence TEXT NOT NULL, taxonomy_version VARCHAR NOT NULL, "
+                "created_at VARCHAR NOT NULL)"
+            )
+        )
+    legacy.dispose()
+
+    from pisama_n8n_server.storage import Storage
+
+    upgraded = Storage(url=database_url)
+    try:
+        schema = inspect(upgraded.engine)
+        execution_columns = {
+            column["name"] for column in schema.get_columns("executions")
+        }
+        feedback_columns = {
+            column["name"] for column in schema.get_columns("detection_feedback")
+        }
+        evaluation_columns = {
+            column["name"] for column in schema.get_columns("evaluation_cases")
+        }
+        indexes = {index["name"] for index in schema.get_indexes("evaluation_cases")}
+        assert {"source_execution_id", "workflow_name", "build_revision"} <= (
+            execution_columns
+        )
+        assert "actor_principal" in feedback_columns
+        assert {"feedback_id", "created_by_principal", "payload_sha256"} <= (
+            evaluation_columns
+        )
+        assert "ix_evaluation_cases_feedback_id" in indexes
+    finally:
+        upgraded.close()
 
 
 def test_startup_collapses_historical_duplicates(tmp_path, monkeypatch):

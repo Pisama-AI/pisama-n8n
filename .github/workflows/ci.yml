@@ -13,6 +13,22 @@ jobs:
   engine-server:
     name: engine parity + server tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: pisama_test
+          POSTGRES_USER: pisama
+          POSTGRES_PASSWORD: pisama-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pisama -d pisama_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://pisama:pisama-test-password@127.0.0.1:5432/pisama_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

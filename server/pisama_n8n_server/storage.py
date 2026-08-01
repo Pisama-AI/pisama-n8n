@@ -18,7 +18,7 @@ import json
 import os
 from math import ceil
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from sqlalchemy import (
     delete,
@@ -139,6 +139,15 @@ def _decode_modes(value: str) -> List[str]:
 
 class Base(DeclarativeBase):
     pass
+
+
+class SchemaMigration(Base):
+    """Applied in-repo schema migration, recorded once per database."""
+
+    __tablename__ = "schema_migrations"
+
+    version: Mapped[str] = mapped_column(String, primary_key=True)
+    applied_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class Execution(Base):
@@ -851,7 +860,7 @@ def _classify_durable_controls(
     }
 
 
-_ADDED_COLUMNS = {
+_LEGACY_ADDED_COLUMNS = {
     "executions": {
         "source_execution_id": "VARCHAR",
         "workflow_name": "VARCHAR",
@@ -861,14 +870,6 @@ _ADDED_COLUMNS = {
         "detector_version": "VARCHAR",
         "evidence": "TEXT NOT NULL DEFAULT '{}'",
         "seen_at": "VARCHAR",
-    },
-    "detection_feedback": {
-        "actor_principal": "VARCHAR",
-    },
-    "evaluation_cases": {
-        "feedback_id": "INTEGER",
-        "created_by_principal": "VARCHAR",
-        "payload_sha256": "VARCHAR",
     },
     "reliability_cases": {
         "outcome": "VARCHAR",
@@ -892,23 +893,36 @@ _ADDED_COLUMNS = {
 }
 
 
-def _ensure_columns(engine) -> None:
-    """Additive, idempotent schema catch-up for a no-migration-framework server."""
-    inspector = inspect(engine)
+_CLOSED_LOOP_ADDED_COLUMNS = {
+    "detection_feedback": {
+        "actor_principal": "VARCHAR",
+    },
+    "evaluation_cases": {
+        "feedback_id": "INTEGER",
+        "created_by_principal": "VARCHAR",
+        "payload_sha256": "VARCHAR",
+    },
+}
+
+
+def _add_missing_columns(
+    connection: Any, columns_by_table: Dict[str, Dict[str, str]]
+) -> None:
+    """Apply one frozen additive column migration on SQLite or PostgreSQL."""
+    inspector = inspect(connection)
     existing_tables = set(inspector.get_table_names())
-    with engine.begin() as conn:
-        for table, columns in _ADDED_COLUMNS.items():
-            if table not in existing_tables:
-                continue  # create_all already made it with every column
-            present = {c["name"] for c in inspector.get_columns(table)}
-            for name, ddl_type in columns.items():
-                if name not in present:
-                    conn.execute(
-                        text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}")
-                    )
+    for table, columns in columns_by_table.items():
+        if table not in existing_tables:
+            continue
+        present = {column["name"] for column in inspector.get_columns(table)}
+        for name, ddl_type in columns.items():
+            if name not in present:
+                connection.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}")
+                )
 
 
-def _ensure_source_dedup(engine) -> None:
+def _ensure_source_dedup(connection: Any) -> None:
     """Collapse historical duplicate poll-ingests, then enforce uniqueness in the DB.
 
     The poller's seen-set check is read-then-insert and therefore racy when a
@@ -917,32 +931,81 @@ def _ensure_source_dedup(engine) -> None:
     Existing duplicates must go first or the index cannot be created — keep the
     earliest row (the one reliability observation already counted) and drop the rest
     with their detections."""
-    with engine.begin() as conn:
-        dup_ids = [
-            row[0]
-            for row in conn.execute(
-                text(
-                    "SELECT id FROM executions WHERE source_execution_id IS NOT NULL "
-                    "AND id NOT IN (SELECT MIN(id) FROM executions "
-                    "WHERE source_execution_id IS NOT NULL "
-                    "GROUP BY source_execution_id)"
-                )
-            )
-        ]
-        if dup_ids:
-            ids_csv = ",".join(str(int(i)) for i in dup_ids)
-            conn.execute(
-                text(f"DELETE FROM detections WHERE execution_id IN ({ids_csv})")
-            )
-            conn.execute(text(f"DELETE FROM executions WHERE id IN ({ids_csv})"))
-        # Identical syntax on SQLite and Postgres.
-        conn.execute(
+    dup_ids = [
+        row[0]
+        for row in connection.execute(
             text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_executions_source "
-                "ON executions(source_execution_id) "
-                "WHERE source_execution_id IS NOT NULL"
+                "SELECT id FROM executions WHERE source_execution_id IS NOT NULL "
+                "AND id NOT IN (SELECT MIN(id) FROM executions "
+                "WHERE source_execution_id IS NOT NULL "
+                "GROUP BY source_execution_id)"
             )
         )
+    ]
+    if dup_ids:
+        ids_csv = ",".join(str(int(i)) for i in dup_ids)
+        connection.execute(
+            text(f"DELETE FROM detections WHERE execution_id IN ({ids_csv})")
+        )
+        connection.execute(text(f"DELETE FROM executions WHERE id IN ({ids_csv})"))
+    connection.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_executions_source "
+            "ON executions(source_execution_id) "
+            "WHERE source_execution_id IS NOT NULL"
+        )
+    )
+
+
+def _migration_001_legacy_columns(connection: Any) -> None:
+    _add_missing_columns(connection, _LEGACY_ADDED_COLUMNS)
+
+
+def _migration_002_source_execution_dedup(connection: Any) -> None:
+    _ensure_source_dedup(connection)
+
+
+def _migration_003_closed_loop_audit(connection: Any) -> None:
+    _add_missing_columns(connection, _CLOSED_LOOP_ADDED_COLUMNS)
+    connection.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_evaluation_cases_feedback_id "
+            "ON evaluation_cases(feedback_id)"
+        )
+    )
+
+
+_MIGRATIONS: Tuple[Tuple[str, Callable[[Any], None]], ...] = (
+    ("001_legacy_columns", _migration_001_legacy_columns),
+    ("002_source_execution_dedup", _migration_002_source_execution_dedup),
+    ("003_closed_loop_audit", _migration_003_closed_loop_audit),
+)
+
+
+def _run_schema_migrations(engine: Any) -> None:
+    """Apply pending migrations transactionally, with a PostgreSQL startup lock."""
+    with engine.begin() as connection:
+        if connection.dialect.name == "postgresql":
+            connection.execute(text("SELECT pg_advisory_xact_lock(7249362601)"))
+        applied = set(
+            connection.execute(select(SchemaMigration.version)).scalars().all()
+        )
+        for version, migrate in _MIGRATIONS:
+            if version in applied:
+                continue
+            migrate(connection)
+            connection.execute(
+                SchemaMigration.__table__.insert().values(
+                    version=version,
+                    applied_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+
+
+def _reconcile_schema_invariants(engine: Any) -> None:
+    """Repair a dropped dedup index before accepting concurrent ingestion."""
+    with engine.begin() as connection:
+        _ensure_source_dedup(connection)
 
 
 def make_engine(url: Optional[str] = None):
@@ -952,8 +1015,8 @@ def make_engine(url: Optional[str] = None):
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args, future=True)
     Base.metadata.create_all(engine)
-    _ensure_columns(engine)
-    _ensure_source_dedup(engine)
+    _run_schema_migrations(engine)
+    _reconcile_schema_invariants(engine)
     return engine
 
 

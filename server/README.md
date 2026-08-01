@@ -42,6 +42,8 @@ is available for evaluation without running the stack.
 ## Design
 
 - **Storage**: real SQLite by default (`pisama_n8n.db`); set `DATABASE_URL` for Postgres.
+  Numbered migrations are applied transactionally and recorded in `schema_migrations`.
+  PostgreSQL migration startup is protected by an advisory transaction lock.
 - **Auth**: `PISAMA_API_KEY` gates every write. Three accepted forms (unset = dev mode,
   open with a logged warning); see the auth section below.
 - **Production mode**: `PISAMA_ENV=production` refuses to start without
