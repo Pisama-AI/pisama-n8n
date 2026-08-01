@@ -1,8 +1,9 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import { Check, Download, FlaskConical, ThumbsDown, ThumbsUp, Wrench } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
+import { Button, buttonVariants } from '@/components/ui/Button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import {
   createEvaluationCase,
@@ -14,7 +15,11 @@ import {
   type FeedbackVerdict,
 } from '@/lib/api/detections'
 
-const options: Array<{ verdict: FeedbackVerdict; label: string; icon: typeof ThumbsUp }> = [
+const options: Array<{
+  verdict: FeedbackVerdict
+  label: string
+  icon: typeof ThumbsUp
+}> = [
   { verdict: 'useful', label: 'Useful finding', icon: ThumbsUp },
   { verdict: 'not_useful', label: 'Not useful', icon: ThumbsDown },
   { verdict: 'fixed_manually', label: 'Fixed manually', icon: Wrench },
@@ -24,7 +29,14 @@ const fieldClass =
   'w-full rounded border border-rule bg-paper px-3 py-2 text-sm text-ink-2 placeholder:text-ink-4 focus:border-evidence'
 
 function parseModes(value: string): string[] {
-  return [...new Set(value.split(',').map((mode) => mode.trim()).filter(Boolean))]
+  return [
+    ...new Set(
+      value
+        .split(',')
+        .map((mode) => mode.trim())
+        .filter(Boolean)
+    ),
+  ]
 }
 
 export function FeedbackPanel({
@@ -75,7 +87,7 @@ export function FeedbackPanel({
         detectionId,
         parseModes(modeText),
         split,
-        evidence.trim(),
+        evidence.trim()
       )
       setEvaluationCase(created)
       onUpdated?.()
@@ -92,7 +104,9 @@ export function FeedbackPanel({
     try {
       const manifest = await exportEvaluationCases()
       const url = URL.createObjectURL(
-        new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }),
+        new Blob([JSON.stringify(manifest, null, 2)], {
+          type: 'application/json',
+        })
       )
       const link = document.createElement('a')
       link.href = url
@@ -112,8 +126,8 @@ export function FeedbackPanel({
         <CardTitle>Review and evaluation</CardTitle>
       </CardHeader>
       <p className="mb-4 text-sm text-ink-3">
-        Your verdict and labels stay in this server. Raw retained executions are
-        credential-redacted before export.
+        Your verdict and labels stay in this server. Raw retained executions are credential-redacted
+        before export.
       </p>
       {feedback ? (
         <div className="inline-flex items-center gap-2 text-sm text-ink-2">
@@ -145,8 +159,8 @@ export function FeedbackPanel({
             <div>
               <div>Evaluation case frozen in {evaluationCase.split}.</div>
               <div className="mt-1 font-mono text-xs text-ink-3">
-                {evaluationCase.expected_modes.join(', ') || 'No failure mode expected'} · taxonomy v
-                {evaluationCase.taxonomy_version}
+                {evaluationCase.expected_modes.join(', ') || 'No failure mode expected'} · taxonomy
+                v{evaluationCase.taxonomy_version}
               </div>
             </div>
           </div>
@@ -160,6 +174,12 @@ export function FeedbackPanel({
           >
             Export evaluation set
           </Button>
+          <Link
+            href="/evaluation"
+            className={`${buttonVariants({ variant: 'secondary', size: 'sm' })} mt-4 ml-2`}
+          >
+            Open evaluation scorecard
+          </Link>
         </div>
       )}
 
@@ -168,8 +188,8 @@ export function FeedbackPanel({
           <div>
             <div className="text-sm font-medium text-ink">Freeze as an evaluation case</div>
             <p className="mt-1 text-xs leading-relaxed text-ink-3">
-              Pisama suggested the modes fired on this execution. Verify them against n8n,
-              remove false positives, and add any missed taxonomy modes.
+              Pisama suggested the modes fired on this execution. Verify them against n8n, remove
+              false positives, and add any missed taxonomy modes.
             </p>
           </div>
           <label className="block text-xs text-ink-3" htmlFor={`evaluation-modes-${detectionId}`}>
@@ -194,7 +214,10 @@ export function FeedbackPanel({
               <option value="holdout">Holdout, label before detector changes</option>
             </select>
           </label>
-          <label className="block text-xs text-ink-3" htmlFor={`evaluation-evidence-${detectionId}`}>
+          <label
+            className="block text-xs text-ink-3"
+            htmlFor={`evaluation-evidence-${detectionId}`}
+          >
             Independent n8n label evidence
             <textarea
               id={`evaluation-evidence-${detectionId}`}
@@ -215,7 +238,11 @@ export function FeedbackPanel({
         </div>
       )}
 
-      {error && <p className="mt-3 text-sm" style={{ color: 'var(--fail)' }}>{error}</p>}
+      {error && (
+        <p className="mt-3 text-sm" style={{ color: 'var(--fail)' }}>
+          {error}
+        </p>
+      )}
     </Card>
   )
 }

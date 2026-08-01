@@ -4,8 +4,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Use real execution captures only\n\nCreate an n8n Data table with: `case_id`, `execution_payload`, `expected_modes`, and `label_evidence`. Store execution payloads and expected mode arrays as JSON values or JSON strings.\n\nSelect that table in both evaluation nodes. Configure the HTTP Request node with a Header Auth credential: header `Authorization`, value `Bearer <PISAMA_API_KEY>`. Change its URL for your Pisama server.\n\nDo not derive `expected_modes` from Pisama output. Review the n8n execution record and workflow configuration first.",
-        "height": 360,
+        "content": "## Use real execution captures only\n\nCreate an n8n Data table with: `case_id`, `execution_payload`, `expected_modes`, and `label_evidence`. Store execution payloads and expected mode arrays as JSON values or JSON strings.\n\nSelect that table in both evaluation nodes. Configure both HTTP Request nodes with a Header Auth credential: header `Authorization`, value `Bearer <PISAMA_API_KEY>`. Change their URLs for your Pisama server.\n\nDo not derive `expected_modes` from Pisama output. Review the n8n execution record and workflow configuration first.\n\nAfter the run, open Pisama Detections, review one retained finding, freeze its labels, then open Evaluation to rerun, inspect, and export the reviewed corpus.",
+        "height": 430,
         "width": 520
       },
       "id": "b28b3de1-1d82-47f8-a872-419408f14074",
@@ -42,6 +42,23 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8400/api/v1/n8n/webhook",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ typeof $json.execution_payload === 'string' ? JSON.parse($json.execution_payload) : $json.execution_payload }}",
+        "options": {}
+      },
+      "id": "d934ec89-20d2-4f9c-916d-99d657f36267",
+      "name": "Retain execution for review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 220]
     },
     {
       "parameters": {
@@ -100,7 +117,12 @@
     }
   ],
   "connections": {
-    "When fetching a dataset row": {"main": [[{"node": "Evaluate execution with Pisama", "type": "main", "index": 0}]]},
+    "When fetching a dataset row": {
+      "main": [[
+        {"node": "Evaluate execution with Pisama", "type": "main", "index": 0},
+        {"node": "Retain execution for review", "type": "main", "index": 0}
+      ]]
+    },
     "Evaluate execution with Pisama": {"main": [[{"node": "Compare exact mode sets", "type": "main", "index": 0}]]},
     "Compare exact mode sets": {"main": [[{"node": "Set evaluation outputs", "type": "main", "index": 0}]]},
     "Set evaluation outputs": {"main": [[{"node": "Set exact-set metric", "type": "main", "index": 0}]]}

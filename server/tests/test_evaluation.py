@@ -10,11 +10,12 @@ import sys
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
 from pisama_n8n_engine import score_labeled_executions
 from pisama_n8n_server.app import app, get_storage
 from pisama_n8n_server.events import broadcaster
-from pisama_n8n_server.storage import Storage
+from pisama_n8n_server.storage import Execution, Storage
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -214,6 +215,45 @@ def test_evaluation_score_requires_at_least_one_reviewed_case(client):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "At least one labeled execution is required."
+
+
+def test_score_export_and_revision_reject_retained_payload_tampering(client):
+    payload = _load("executions/error/ERROR-01-throw.json")
+    assert client.post("/api/v1/n8n/webhook", json=payload).status_code == 200
+    detection = next(
+        row
+        for row in client.get("/api/v1/detections").json()
+        if row["detected"] and row["failure_mode"] == "n8n_node_error"
+    )
+    feedback_url = f"/api/v1/detections/{detection['id']}/feedback"
+    assert client.post(feedback_url, json={"verdict": "useful"}).status_code == 200
+    label = {
+        "expected_modes": ["n8n_node_error", "n8n_missing_error_workflow"],
+        "split": "regression",
+        "label_evidence": "n8n recorded an explicit node error and no error workflow.",
+    }
+    case = client.post(
+        f"/api/v1/detections/{detection['id']}/evaluation-case", json=label
+    ).json()
+
+    with client.storage._Session() as session:
+        session.execute(
+            update(Execution)
+            .where(Execution.id == case["execution_id"])
+            .values(raw=json.dumps({"tampered": True}))
+        )
+        session.commit()
+
+    assert client.get("/api/v1/evaluation-cases/export").status_code == 409
+    score = client.get("/api/v1/evaluation-cases/score")
+    assert score.status_code == 409
+    assert "integrity check" in score.json()["detail"]
+    assert client.post(feedback_url, json={"verdict": "not_useful"}).status_code == 200
+    revision = client.post(
+        f"/api/v1/evaluation-cases/{case['id']}/revisions", json=label
+    )
+    assert revision.status_code == 409
+    assert "integrity check" in revision.json()["detail"]
 
 
 def test_evaluation_case_rejects_unknown_taxonomy_mode(client):

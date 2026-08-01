@@ -6,7 +6,7 @@ import { SELF_HOST_API_BASE, SELF_HOST_API_KEY } from '../playwright.self-host.c
 
 const CAPTURE = resolve(
   __dirname,
-  '../../server/tests/fixtures/executions/data_contract/CLOUD-112117-missing-required-value.json',
+  '../../server/tests/fixtures/executions/data_contract/CLOUD-112117-missing-required-value.json'
 )
 
 let schemaDetectionId: number
@@ -46,7 +46,9 @@ test('overview renders persisted findings and operational health from the real s
   await expect(page.getByText('A node errored out').first()).toBeVisible()
   await expect(page.getByText('No failure alert workflow').first()).toBeVisible()
   await expect(page.getByText('Operational health')).toBeVisible()
-  await expect(page.getByText('Pisama prevention experiment baseline', { exact: false })).toBeVisible()
+  await expect(
+    page.getByText('Pisama prevention experiment baseline', { exact: false })
+  ).toBeVisible()
 })
 
 test('detections list filters the persisted real execution by detector type', async ({ page }) => {
@@ -70,26 +72,45 @@ test('detection deep link renders evidence and the recorded node trace', async (
   await expect(page.getByText('Evidence used')).toBeVisible()
   await expect(page.getByText('Observed missing field', { exact: false }).first()).toBeVisible()
   await expect(page.getByText('Baseline webhook').first()).toBeVisible()
-  await expect(page.getByText('Cannot read properties of undefined', { exact: false }).first()).toBeVisible()
+  await expect(
+    page.getByText('Cannot read properties of undefined', { exact: false }).first()
+  ).toBeVisible()
 })
 
-test('reviewed detection becomes an immutable multi-label evaluation case', async ({ page }) => {
+test('reviewed detection closes the loop through freeze, score, and export', async ({ page }) => {
   await page.goto(`/detections/${schemaDetectionId}`)
 
   await page.getByRole('button', { name: 'Useful finding' }).click()
   await expect(page.getByText('Recorded: Useful finding')).toBeVisible()
 
   const modes = page.getByLabel('Confirmed failure modes, comma separated')
-  await expect(modes).toHaveValue(
-    'n8n_data_contract, n8n_expression, n8n_missing_error_workflow',
-  )
-  await page.getByLabel('Independent n8n label evidence').fill(
-    'n8n recorded the missing required value; the captured workflow has no errorWorkflow.',
-  )
+  await expect(modes).toHaveValue('n8n_data_contract, n8n_expression, n8n_missing_error_workflow')
+  await page
+    .getByLabel('Independent n8n label evidence')
+    .fill('n8n recorded the missing required value; the captured workflow has no errorWorkflow.')
   await page.getByRole('button', { name: 'Freeze evaluation case' }).click()
 
   await expect(page.getByText('Evaluation case frozen in regression.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Export evaluation set' })).toBeVisible()
+
+  await page.getByRole('link', { name: 'Open evaluation scorecard' }).click()
+  await expect(page).toHaveURL('/evaluation')
+  await expect(page.getByRole('heading', { name: 'Closed-loop evaluation' })).toBeVisible()
+  await expect(page.getByText('Exact set accuracy')).toBeVisible()
+  await expect(page.getByText('100%')).toBeVisible()
+  await expect(page.getByText('Exact match', { exact: true })).toBeVisible()
+  await expect(page.getByText('build dashboard-e2e')).toBeVisible()
+
+  const scoreResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/api/v1/evaluation-cases/score')
+  )
+  await page.getByRole('button', { name: 'Run evaluation suite' }).click()
+  expect((await scoreResponse).ok()).toBeTruthy()
+
+  const downloadStarted = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download corpus' }).click()
+  const download = await downloadStarted
+  expect(download.suggestedFilename()).toBe('pisama-evaluation-taxonomy-v1.json')
 })
 
 test('unauthorized API reads are rejected while the configured dashboard remains usable', async ({
@@ -100,7 +121,7 @@ test('unauthorized API reads are rejected while the configured dashboard remains
   expect(unauthorized.status()).toBe(401)
 
   await page.goto('/detections')
-  await expect(page.getByRole('link', { name: /Data shape mismatch/ })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Data shape mismatch/ }).first()).toBeVisible()
 })
 
 test('settings shows the real self-host connection and paid-feature state', async ({ page }) => {

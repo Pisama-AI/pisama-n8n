@@ -1432,6 +1432,16 @@ class Storage:
             execution = session.get(Execution, case.execution_id)
             if execution is None:
                 raise ValueError("The retained execution is no longer available.")
+            recorded_hash = (
+                latest_revision.payload_sha256
+                if latest_revision
+                else case.payload_sha256
+            )
+            if execution_payload_sha256(execution.raw) != recorded_hash:
+                raise ValueError(
+                    "The retained evaluation payload failed its integrity check "
+                    "and cannot be relabeled."
+                )
             revision_number = (
                 latest_revision.revision_number + 1 if latest_revision else 1
             )
@@ -1505,11 +1515,20 @@ class Storage:
             for row, metadata in zip(rows, metadata_rows):
                 execution = session.get(Execution, row.execution_id)
                 if execution is None:
-                    continue
+                    raise ValueError(
+                        f"Evaluation case {row.id} has no retained execution."
+                    )
                 try:
                     payload = json.loads(execution.raw)
                 except (TypeError, ValueError):
-                    continue
+                    raise ValueError(
+                        f"Evaluation case {row.id} has an invalid retained payload."
+                    ) from None
+                if execution_payload_sha256(execution.raw) != metadata["payload_sha256"]:
+                    raise ValueError(
+                        f"Evaluation case {row.id} retained payload failed its "
+                        "integrity check."
+                    )
                 cases.append(
                     {
                         "id": f"tenant-evaluation-{row.id}",

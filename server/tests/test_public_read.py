@@ -37,6 +37,8 @@ def test_public_read_opens_gets_but_not_posts(tmp_path, monkeypatch):
     assert c.get("/api/v1/paid/status").status_code == 200
     # Reviewed labels and their evidence are never part of the public surface.
     assert c.get("/api/v1/evaluation-cases").status_code == 401
+    assert c.get("/api/v1/evaluation-cases/score").status_code == 401
+    assert c.get("/api/v1/evaluation-cases/export").status_code == 401
 
     # every POST still requires the key
     assert c.post("/api/v1/n8n/webhook", json={}).status_code == 401

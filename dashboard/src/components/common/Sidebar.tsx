@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, AlertTriangle, Settings } from 'lucide-react'
+import { LayoutDashboard, AlertTriangle, FlaskConical, Settings } from 'lucide-react'
 import { PisamaMark } from '@/components/common/PisamaMark'
 
 interface NavItem {
@@ -15,13 +15,13 @@ interface NavItem {
 const navItems: NavItem[] = [
   { label: 'Overview', href: '/overview', icon: LayoutDashboard },
   { label: 'Detections', href: '/detections', icon: AlertTriangle },
+  { label: 'Evaluation', href: '/evaluation', icon: FlaskConical },
   { label: 'Settings', href: '/settings', icon: Settings },
 ]
 
 function NavLink({ item, pathname }: { item: NavItem; pathname: string | null }) {
   const isActive =
-    pathname === item.href ||
-    (item.href !== '/' && pathname?.startsWith(item.href + '/'))
+    pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href + '/'))
   const Icon = item.icon
 
   return (
@@ -44,10 +44,7 @@ export function Sidebar() {
   const pathname = usePathname()
 
   return (
-    <aside
-      aria-label="Sidebar"
-      className="flex flex-col bg-paper-2 border-r border-rule w-60"
-    >
+    <aside aria-label="Sidebar" className="flex flex-col bg-paper-2 border-r border-rule w-60">
       {/* Logo */}
       <div className="flex items-center h-14 px-4 border-b border-rule">
         <Link

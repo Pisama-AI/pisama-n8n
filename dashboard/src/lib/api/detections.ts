@@ -107,6 +107,35 @@ export interface EvaluationCaseExport {
   cases: Array<Record<string, unknown>>
 }
 
+export interface EvaluationScoreCase {
+  id: string
+  expected_modes: string[]
+  actual_modes: string[]
+  missing_modes: string[]
+  unexpected_modes: string[]
+  exact_match: boolean
+}
+
+export interface EvaluationSplitScore {
+  n: number
+  exact_set_matches: number
+  exact_set_accuracy: number | null
+}
+
+export interface EvaluationScore {
+  evaluation_schema_version: string
+  taxonomy_version: string
+  build_revision: string
+  n: number
+  exact_set_matches: number
+  exact_set_accuracy: number
+  micro: { precision: number | null; recall: number | null; f1: number | null }
+  macro: { precision: number | null; recall: number | null; f1: number | null }
+  per_mode: Record<string, Record<string, number | null>>
+  by_split: Record<EvaluationSplit, EvaluationSplitScore>
+  cases: EvaluationScoreCase[]
+}
+
 export interface ReliabilityCase {
   id: number
   repair_id: number
@@ -199,7 +228,7 @@ export async function getDetection(id: string): Promise<Detection> {
 
 export function submitDetectionFeedback(
   detectionId: string,
-  verdict: FeedbackVerdict,
+  verdict: FeedbackVerdict
 ): Promise<DetectionFeedback> {
   return postApi(`/api/v1/detections/${detectionId}/feedback`, { verdict })
 }
@@ -208,7 +237,7 @@ export function createEvaluationCase(
   detectionId: string,
   expectedModes: string[],
   split: EvaluationSplit,
-  labelEvidence: string,
+  labelEvidence: string
 ): Promise<EvaluationCase> {
   return postApi(`/api/v1/detections/${detectionId}/evaluation-case`, {
     expected_modes: expectedModes,
@@ -221,12 +250,23 @@ export function exportEvaluationCases(): Promise<EvaluationCaseExport> {
   return fetchApi('/api/v1/evaluation-cases/export')
 }
 
+export function getEvaluationCases(): Promise<EvaluationCase[]> {
+  return fetchApi('/api/v1/evaluation-cases')
+}
+
+export function scoreEvaluationCases(): Promise<EvaluationScore> {
+  return fetchApi('/api/v1/evaluation-cases/score')
+}
+
 export function concludeReliabilityCase(
   caseId: number,
   outcome: ReliabilityOutcome,
-  note?: string,
+  note?: string
 ): Promise<ReliabilityCase> {
-  return postApi(`/api/v1/reliability-cases/${caseId}/outcome`, { outcome, note })
+  return postApi(`/api/v1/reliability-cases/${caseId}/outcome`, {
+    outcome,
+    note,
+  })
 }
 
 // A recent execution of the guarded workflow, annotated with how it routed through
@@ -253,7 +293,7 @@ export function getCandidateExecutions(caseId: number): Promise<CandidateExecuti
 export function recordGuardVerification(
   caseId: number,
   kind: GuardVerificationKind,
-  ref: { executionId?: number; sourceExecutionId?: string },
+  ref: { executionId?: number; sourceExecutionId?: string }
 ): Promise<ReliabilityCase> {
   return postApi(`/api/v1/reliability-cases/${caseId}/guard-verification`, {
     kind,

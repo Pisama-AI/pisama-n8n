@@ -575,6 +575,27 @@ async def submit_detection_feedback(
 _EVALUATION_SPLITS = {"regression", "holdout"}
 
 
+def _evaluation_split_scores(
+    cases: List[Dict[str, Any]], case_results: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    split_by_id = {item["id"]: item["split"] for item in cases}
+    scores = {
+        split: {"n": 0, "exact_set_matches": 0, "exact_set_accuracy": None}
+        for split in sorted(_EVALUATION_SPLITS)
+    }
+    for result in case_results:
+        split_score = scores[split_by_id[result["id"]]]
+        split_score["n"] += 1
+        if result["exact_match"]:
+            split_score["exact_set_matches"] += 1
+    for split_score in scores.values():
+        if split_score["n"]:
+            split_score["exact_set_accuracy"] = (
+                split_score["exact_set_matches"] / split_score["n"]
+            )
+    return scores
+
+
 def _validated_evaluation_label(
     body: Dict[str, Any],
 ) -> tuple[List[str], str, str]:
@@ -728,26 +749,11 @@ async def score_evaluation_cases(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
-    split_by_id = {item["id"]: item["split"] for item in cases}
-    split_counts = {
-        split: {
-            "n": sum(split_by_id[result["id"]] == split for result in score["cases"]),
-            "exact_set_matches": sum(
-                split_by_id[result["id"]] == split and result["exact_match"]
-                for result in score["cases"]
-            ),
-        }
-        for split in sorted(_EVALUATION_SPLITS)
-    }
-    for counts in split_counts.values():
-        counts["exact_set_accuracy"] = (
-            counts["exact_set_matches"] / counts["n"] if counts["n"] else None
-        )
     return {
         "evaluation_schema_version": "1",
         "taxonomy_version": TAXONOMY_VERSION,
         "build_revision": build_revision(),
-        "by_split": split_counts,
+        "by_split": _evaluation_split_scores(cases, score["cases"]),
         **score,
     }
 
