@@ -21,6 +21,8 @@ export interface ServerDetection {
   n8n_execution_id?: string | null
   build_revision?: string | null
   feedback?: DetectionFeedback | null
+  evaluation_case?: EvaluationCase | null
+  execution_fired_modes?: string[]
   reliability_case?: ReliabilityCase | null
   // When an operator first opened the detail view (servers >= 2026-07-20).
   seen_at?: string | null
@@ -52,6 +54,8 @@ export interface Detection {
     affected_agents?: number
   }
   feedback?: DetectionFeedback | null
+  evaluation_case?: EvaluationCase | null
+  execution_fired_modes: string[]
   reliability_case?: ReliabilityCase | null
 }
 
@@ -63,6 +67,33 @@ export interface DetectionFeedback {
   verdict: FeedbackVerdict
   note: string | null
   created_at: string
+}
+
+export type EvaluationSplit = 'regression' | 'holdout'
+
+export interface EvaluationCase {
+  id: number
+  detection_id: number
+  execution_id: number
+  expected_modes: string[]
+  split: EvaluationSplit
+  label_evidence: string
+  taxonomy_version: string
+  created_at: string
+  source: {
+    capture: string
+    execution_id: string | null
+    workflow_id: string | null
+    build_revision: string | null
+    detection_id: number
+  }
+}
+
+export interface EvaluationCaseExport {
+  schema_version: string
+  taxonomy_version: string
+  description: string
+  cases: Array<Record<string, unknown>>
 }
 
 export interface ReliabilityCase {
@@ -134,6 +165,8 @@ export function adaptDetection(row: ServerDetection): Detection {
     n8n_execution_id: row.n8n_execution_id ?? null,
     build_revision: row.build_revision ?? null,
     feedback: row.feedback ?? null,
+    evaluation_case: row.evaluation_case ?? null,
+    execution_fired_modes: row.execution_fired_modes ?? [],
     reliability_case: row.reliability_case ?? null,
     details: {
       severity: severityFromConfidence(row.confidence),
@@ -158,6 +191,23 @@ export function submitDetectionFeedback(
   verdict: FeedbackVerdict,
 ): Promise<DetectionFeedback> {
   return postApi(`/api/v1/detections/${detectionId}/feedback`, { verdict })
+}
+
+export function createEvaluationCase(
+  detectionId: string,
+  expectedModes: string[],
+  split: EvaluationSplit,
+  labelEvidence: string,
+): Promise<EvaluationCase> {
+  return postApi(`/api/v1/detections/${detectionId}/evaluation-case`, {
+    expected_modes: expectedModes,
+    split,
+    label_evidence: labelEvidence,
+  })
+}
+
+export function exportEvaluationCases(): Promise<EvaluationCaseExport> {
+  return fetchApi('/api/v1/evaluation-cases/export')
 }
 
 export function concludeReliabilityCase(

@@ -2338,6 +2338,19 @@ class Storage:
             if row is None:
                 return None
             result = self._enrich(*row)
+            result["execution_fired_modes"] = sorted(
+                {
+                    mode
+                    for mode in session.execute(
+                        select(DetectionRow.failure_mode).where(
+                            DetectionRow.execution_id == row[0].execution_id,
+                            DetectionRow.detected.is_(True),
+                            DetectionRow.failure_mode.is_not(None),
+                        )
+                    ).scalars()
+                    if mode
+                }
+            )
             feedback = session.execute(
                 select(DetectionFeedback)
                 .where(DetectionFeedback.detection_id == detection_id)

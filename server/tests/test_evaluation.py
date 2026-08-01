@@ -148,6 +148,7 @@ def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client):
     }
     detail = client.get(f"/api/v1/detections/{detection['id']}").json()
     assert detail["evaluation_case"]["id"] == case["id"]
+    assert detail["execution_fired_modes"] == sorted(expected)
     assert client.post(endpoint, json=review).status_code == 409
 
 

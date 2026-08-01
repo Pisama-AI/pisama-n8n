@@ -1,0 +1,113 @@
+{
+  "name": "Pisama closed-loop evaluation",
+  "versionId": "a303480a-8bbb-49d4-9679-3f2ac7786216",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Use real execution captures only\n\nCreate an n8n Data table with: `case_id`, `execution_payload`, `expected_modes`, and `label_evidence`. Store execution payloads and expected mode arrays as JSON values or JSON strings.\n\nSelect that table in both evaluation nodes. Configure the HTTP Request node with a Header Auth credential: header `Authorization`, value `Bearer <PISAMA_API_KEY>`. Change its URL for your Pisama server.\n\nDo not derive `expected_modes` from Pisama output. Review the n8n execution record and workflow configuration first.",
+        "height": 360,
+        "width": 520
+      },
+      "id": "b28b3de1-1d82-47f8-a872-419408f14074",
+      "name": "Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-520, -320]
+    },
+    {
+      "parameters": {
+        "source": "dataTable",
+        "dataTableId": {"mode": "list", "value": ""},
+        "limitRows": false
+      },
+      "id": "5f841e53-d50d-42e1-9532-6ef357e8e3a5",
+      "name": "When fetching a dataset row",
+      "type": "n8n-nodes-base.evaluationTrigger",
+      "typeVersion": 4.7,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8400/api/v1/n8n/evaluate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ typeof $json.execution_payload === 'string' ? JSON.parse($json.execution_payload) : $json.execution_payload }}",
+        "options": {}
+      },
+      "id": "fef1e5b1-7d57-4729-8181-65aca494a909",
+      "name": "Evaluate execution with Pisama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const source = $('When fetching a dataset row').item.json;\nconst rawExpected = source.expected_modes ?? [];\nconst expected = [...new Set(Array.isArray(rawExpected) ? rawExpected : JSON.parse(rawExpected))].sort();\nconst actual = [...new Set($json.fired_modes ?? [])].sort();\nconst missing = expected.filter((mode) => !actual.includes(mode));\nconst unexpected = actual.filter((mode) => !expected.includes(mode));\n\nreturn {\n  json: {\n    ...$json,\n    case_id: source.case_id,\n    label_evidence: source.label_evidence,\n    expected_modes: expected,\n    actual_modes: actual,\n    exact_set_match: Number(missing.length === 0 && unexpected.length === 0),\n    missing_modes: missing,\n    unexpected_modes: unexpected,\n  },\n};"
+      },
+      "id": "267065c1-f99d-42a9-9906-e3a59a30a56d",
+      "name": "Compare exact mode sets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "operation": "setOutputs",
+        "source": "dataTable",
+        "dataTableId": {"mode": "list", "value": ""},
+        "outputs": {
+          "values": [
+            {"outputName": "case_id", "outputValue": "={{ $json.case_id }}"},
+            {"outputName": "expected_modes", "outputValue": "={{ JSON.stringify($json.expected_modes) }}"},
+            {"outputName": "actual_modes", "outputValue": "={{ JSON.stringify($json.actual_modes) }}"},
+            {"outputName": "missing_modes", "outputValue": "={{ JSON.stringify($json.missing_modes) }}"},
+            {"outputName": "unexpected_modes", "outputValue": "={{ JSON.stringify($json.unexpected_modes) }}"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "ab03070a-8ad5-4625-8850-40d9653c19dc",
+      "name": "Set evaluation outputs",
+      "type": "n8n-nodes-base.evaluation",
+      "typeVersion": 4.8,
+      "position": [780, 0]
+    },
+    {
+      "parameters": {
+        "operation": "setMetrics",
+        "metric": "customMetrics",
+        "metrics": {
+          "assignments": [
+            {
+              "id": "ee1ee1ab-31e2-4f2e-ab19-c35e97ea1b0c",
+              "name": "exact_set_match",
+              "value": "={{ $json.exact_set_match }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "39e9af46-4767-4298-9810-c6377ed27cbf",
+      "name": "Set exact-set metric",
+      "type": "n8n-nodes-base.evaluation",
+      "typeVersion": 4.8,
+      "position": [1040, 0]
+    }
+  ],
+  "connections": {
+    "When fetching a dataset row": {"main": [[{"node": "Evaluate execution with Pisama", "type": "main", "index": 0}]]},
+    "Evaluate execution with Pisama": {"main": [[{"node": "Compare exact mode sets", "type": "main", "index": 0}]]},
+    "Compare exact mode sets": {"main": [[{"node": "Set evaluation outputs", "type": "main", "index": 0}]]},
+    "Set evaluation outputs": {"main": [[{"node": "Set exact-set metric", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"},
+  "pinData": {},
+  "meta": {"templateCredsSetupCompleted": false},
+  "active": false,
+  "tags": []
+}

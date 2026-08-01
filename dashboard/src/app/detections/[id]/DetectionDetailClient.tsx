@@ -214,7 +214,14 @@ export function DetectionDetailClient({ id }: { id: string }) {
                 <TraceView detectionId={id} />
 
                 {detection.detected && (
-                  <FeedbackPanel detectionId={id} initialFeedback={detection.feedback} />
+                  <FeedbackPanel
+                    key={id}
+                    detectionId={id}
+                    initialFeedback={detection.feedback}
+                    initialEvaluationCase={detection.evaluation_case}
+                    suggestedModes={detection.execution_fired_modes}
+                    onUpdated={() => void refetch()}
+                  />
                 )}
 
                 {detection.detected && detection.failure_mode === 'n8n_data_contract' ? (

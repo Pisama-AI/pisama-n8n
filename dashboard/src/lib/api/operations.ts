@@ -71,7 +71,12 @@ export interface ReliabilityMetrics {
     share: number | null
     share_note: string
     by_kind?: Record<'input_schema' | 'error_route' | 'workflow_patch', DurableControlKind>
-    harness?: { implemented: boolean; note: string }
+    harness?: {
+      implemented: boolean
+      reviewed_cases: number
+      by_split: Record<string, number>
+      note: string
+    }
   }
 }
 
@@ -82,6 +87,7 @@ export interface OperationsSummary {
   fired_by_detector: Record<string, number>
   repairs_by_status: Record<string, number>
   feedback_by_verdict: Record<string, number>
+  evaluation_cases_by_split: Record<string, number>
   reliability_cases_by_status: Record<string, number>
   reliability_metrics: ReliabilityMetrics
   latest_events: Record<string, OperationalEvent>

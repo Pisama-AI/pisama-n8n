@@ -73,6 +73,25 @@ test('detection deep link renders evidence and the recorded node trace', async (
   await expect(page.getByText('Cannot read properties of undefined', { exact: false }).first()).toBeVisible()
 })
 
+test('reviewed detection becomes an immutable multi-label evaluation case', async ({ page }) => {
+  await page.goto(`/detections/${schemaDetectionId}`)
+
+  await page.getByRole('button', { name: 'Useful finding' }).click()
+  await expect(page.getByText('Recorded: Useful finding')).toBeVisible()
+
+  const modes = page.getByLabel('Confirmed failure modes, comma separated')
+  await expect(modes).toHaveValue(
+    'n8n_data_contract, n8n_expression, n8n_missing_error_workflow',
+  )
+  await page.getByLabel('Independent n8n label evidence').fill(
+    'n8n recorded the missing required value; the captured workflow has no errorWorkflow.',
+  )
+  await page.getByRole('button', { name: 'Freeze evaluation case' }).click()
+
+  await expect(page.getByText('Evaluation case frozen in regression.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Export evaluation set' })).toBeVisible()
+})
+
 test('unauthorized API reads are rejected while the configured dashboard remains usable', async ({
   request,
   page,
