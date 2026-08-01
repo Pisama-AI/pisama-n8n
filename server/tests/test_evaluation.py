@@ -131,6 +131,17 @@ def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tm
     listed = client.get("/api/v1/evaluation-cases").json()
     assert listed == [case]
     assert "payload" not in listed[0]
+    api_score = client.get("/api/v1/evaluation-cases/score")
+    assert api_score.status_code == 200, api_score.text
+    assert api_score.json()["evaluation_schema_version"] == "1"
+    assert api_score.json()["taxonomy_version"] == "1"
+    assert api_score.json()["build_revision"] == "closed-loop-test"
+    assert api_score.json()["exact_set_accuracy"] == 1.0
+    assert api_score.json()["by_split"] == {
+        "holdout": {"n": 1, "exact_set_matches": 1, "exact_set_accuracy": 1.0},
+        "regression": {"n": 0, "exact_set_matches": 0, "exact_set_accuracy": None},
+    }
+    assert "payload" not in api_score.json()["cases"][0]
     exported = client.get("/api/v1/evaluation-cases/export").json()
     assert exported["schema_version"] == "1"
     assert exported["taxonomy_version"] == "1"
@@ -196,6 +207,13 @@ def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tm
     assert detail["evaluation_case"]["id"] == case["id"]
     assert detail["execution_fired_modes"] == sorted(expected)
     assert client.post(endpoint, json=review).status_code == 409
+
+
+def test_evaluation_score_requires_at_least_one_reviewed_case(client):
+    response = client.get("/api/v1/evaluation-cases/score")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "At least one labeled execution is required."
 
 
 def test_evaluation_case_rejects_unknown_taxonomy_mode(client):

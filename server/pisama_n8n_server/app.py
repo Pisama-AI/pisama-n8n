@@ -36,7 +36,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from pisama_n8n_engine import FAILURE_MODES, TAXONOMY_VERSION, analyze_execution
+from pisama_n8n_engine import (
+    FAILURE_MODES,
+    TAXONOMY_VERSION,
+    analyze_execution,
+    score_labeled_executions,
+)
 from pisama_n8n_server.events import broadcaster, fired_event
 from pisama_n8n_server.n8n_client import client_from_env
 from pisama_n8n_server.poller import poll_once
@@ -702,6 +707,49 @@ async def export_evaluation_cases(
         return storage.export_evaluation_cases(TAXONOMY_VERSION)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@app.get("/api/v1/evaluation-cases/score", dependencies=[Depends(require_auth)])
+async def score_evaluation_cases(
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Score the current reviewed corpus without returning retained payloads."""
+    try:
+        manifest = storage.export_evaluation_cases(TAXONOMY_VERSION)
+        cases = manifest["cases"]
+        score = score_labeled_executions(
+            (
+                item["id"],
+                item["payload"],
+                set(item["expected_modes"]),
+            )
+            for item in cases
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    split_by_id = {item["id"]: item["split"] for item in cases}
+    split_counts = {
+        split: {
+            "n": sum(split_by_id[result["id"]] == split for result in score["cases"]),
+            "exact_set_matches": sum(
+                split_by_id[result["id"]] == split and result["exact_match"]
+                for result in score["cases"]
+            ),
+        }
+        for split in sorted(_EVALUATION_SPLITS)
+    }
+    for counts in split_counts.values():
+        counts["exact_set_accuracy"] = (
+            counts["exact_set_matches"] / counts["n"] if counts["n"] else None
+        )
+    return {
+        "evaluation_schema_version": "1",
+        "taxonomy_version": TAXONOMY_VERSION,
+        "build_revision": build_revision(),
+        "by_split": split_counts,
+        **score,
+    }
 
 
 @app.get("/api/v1/operations/summary", dependencies=[Depends(require_read_auth)])
