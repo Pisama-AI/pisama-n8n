@@ -187,6 +187,7 @@ def _deployment_provenance() -> Dict[str, Any]:
 # The self-driving poll task (armed at startup when PISAMA_POLL_INTERVAL > 0 and n8n is
 # configured). Off by default — /api/v1/n8n/sync stays available for external cron.
 _poll_task: Optional[asyncio.Task] = None
+_evaluation_tasks: set[asyncio.Task] = set()
 
 
 @asynccontextmanager
@@ -197,11 +198,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if interval > 0 and client_from_env() is not None:
         _poll_task = asyncio.create_task(_poll_loop(interval))
         logger.info("background n8n poll loop started (every %ss)", interval)
+    storage_provider = _app.dependency_overrides.get(get_storage, get_storage)
+    storage = storage_provider()
+    for run_id in await run_in_threadpool(storage.recover_evaluation_runs):
+        _schedule_evaluation_run(run_id, storage)
     try:
         yield
     finally:
         if _poll_task is not None:
             _poll_task.cancel()
+        for task in tuple(_evaluation_tasks):
+            task.cancel()
         if _storage is not None:
             _storage.close()
             _storage = None
@@ -651,6 +658,46 @@ def _evaluation_split_scores(
     return scores
 
 
+async def _execute_evaluation_run(run_id: int, storage: Storage) -> None:
+    try:
+        claimed = await run_in_threadpool(storage.claim_evaluation_run, run_id)
+        if claimed is None:
+            return
+        cases = claimed["cases"]
+        score = await run_in_threadpool(
+            score_labeled_executions,
+            (
+                (item["id"], item["payload"], set(item["expected_modes"]))
+                for item in cases
+            ),
+        )
+        run = await run_in_threadpool(storage.get_evaluation_run, run_id)
+        result = {
+            "evaluation_schema_version": "2",
+            "taxonomy_version": run["taxonomy_version"],
+            "build_revision": run["build_revision"],
+            "engine_version": run["engine_version"],
+            "by_split": _evaluation_split_scores(cases, score["cases"]),
+            **score,
+        }
+        await run_in_threadpool(storage.complete_evaluation_run, run_id, result)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - failed runs are durable audit records
+        logger.exception("evaluation run %s failed", run_id)
+        await run_in_threadpool(
+            storage.fail_evaluation_run,
+            run_id,
+            f"{type(exc).__name__}: {exc}",
+        )
+
+
+def _schedule_evaluation_run(run_id: int, storage: Storage) -> None:
+    task = asyncio.create_task(_execute_evaluation_run(run_id, storage))
+    _evaluation_tasks.add(task)
+    task.add_done_callback(_evaluation_tasks.discard)
+
+
 def _validated_evaluation_label(
     body: Dict[str, Any],
 ) -> tuple[List[str], str, str]:
@@ -789,32 +836,61 @@ async def export_evaluation_cases(
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
-@app.get("/api/v1/evaluation-cases/score", dependencies=[Depends(require_auth)])
-async def score_evaluation_cases(
+@app.post(
+    "/api/v1/evaluation-runs",
+    dependencies=[Depends(require_auth)],
+    status_code=202,
+)
+async def create_evaluation_run(
+    request: Request,
     storage: Storage = Depends(get_storage),
 ) -> Dict[str, Any]:
-    """Score the current reviewed corpus without returning retained payloads."""
+    """Snapshot reviewed labels, persist a pending run, then score asynchronously."""
     try:
-        manifest = storage.export_evaluation_cases(TAXONOMY_VERSION)
-        cases = manifest["cases"]
-        score = score_labeled_executions(
-            (
-                item["id"],
-                item["payload"],
-                set(item["expected_modes"]),
-            )
-            for item in cases
+        run = await run_in_threadpool(
+            storage.create_evaluation_run,
+            TAXONOMY_VERSION,
+            _ENGINE_VERSION,
+            build_revision(),
+            request.state.auth_principal,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    _schedule_evaluation_run(run["id"], storage)
+    return run
 
-    return {
-        "evaluation_schema_version": "1",
-        "taxonomy_version": TAXONOMY_VERSION,
-        "build_revision": build_revision(),
-        "by_split": _evaluation_split_scores(cases, score["cases"]),
-        **score,
-    }
+
+@app.get("/api/v1/evaluation-runs", dependencies=[Depends(require_auth)])
+async def list_evaluation_runs(
+    storage: Storage = Depends(get_storage),
+) -> List[Dict[str, Any]]:
+    return await run_in_threadpool(storage.list_evaluation_runs)
+
+
+@app.get("/api/v1/evaluation-runs/{run_id}", dependencies=[Depends(require_auth)])
+async def get_evaluation_run(
+    run_id: int,
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    run = await run_in_threadpool(storage.get_evaluation_run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Unknown evaluation run id.")
+    return run
+
+
+@app.get("/api/v1/evaluation-cases/score", dependencies=[Depends(require_auth)])
+async def latest_evaluation_score(
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Compatibility read for the latest immutable score. It never starts work."""
+    runs = await run_in_threadpool(storage.list_evaluation_runs)
+    latest = next((run for run in runs if run["status"] == "succeeded"), None)
+    if latest is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No completed evaluation run. POST /api/v1/evaluation-runs first.",
+        )
+    return latest["result"]
 
 
 @app.get("/api/v1/operations/summary", dependencies=[Depends(require_read_auth)])

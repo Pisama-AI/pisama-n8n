@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,6 +23,15 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def _load(rel: str):
     return json.loads((FIXTURES / rel).read_text())
+
+
+def _wait_for_run(client, run_id: int) -> dict:
+    for _ in range(100):
+        run = client.get(f"/api/v1/evaluation-runs/{run_id}").json()
+        if run["status"] in {"succeeded", "failed"}:
+            return run
+        time.sleep(0.01)
+    raise AssertionError(f"evaluation run {run_id} did not finish")
 
 
 @pytest.fixture()
@@ -169,9 +179,16 @@ def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tm
     listed = client.get("/api/v1/evaluation-cases").json()
     assert listed == [case]
     assert "payload" not in listed[0]
+    requested_run = client.post("/api/v1/evaluation-runs")
+    assert requested_run.status_code == 202, requested_run.text
+    run = _wait_for_run(client, requested_run.json()["id"])
+    assert run["status"] == "succeeded", run
+    assert run["case_count"] == 1
+    assert run["cases"][0]["case_revision"] == 0
+    assert "payload" not in run["cases"][0]
     api_score = client.get("/api/v1/evaluation-cases/score")
     assert api_score.status_code == 200, api_score.text
-    assert api_score.json()["evaluation_schema_version"] == "1"
+    assert api_score.json()["evaluation_schema_version"] == "2"
     assert api_score.json()["taxonomy_version"] == "1"
     assert api_score.json()["build_revision"] == "closed-loop-test"
     assert api_score.json()["exact_set_accuracy"] == 1.0
@@ -248,10 +265,13 @@ def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tm
 
 
 def test_evaluation_score_requires_at_least_one_reviewed_case(client):
-    response = client.get("/api/v1/evaluation-cases/score")
+    response = client.post("/api/v1/evaluation-runs")
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "At least one labeled execution is required."
+    assert response.json()["detail"] == (
+        "At least one reviewed evaluation case is required."
+    )
+    assert client.get("/api/v1/evaluation-cases/score").status_code == 409
 
 
 def test_score_export_and_revision_reject_retained_payload_tampering(client):
@@ -282,7 +302,7 @@ def test_score_export_and_revision_reject_retained_payload_tampering(client):
         session.commit()
 
     assert client.get("/api/v1/evaluation-cases/export").status_code == 409
-    score = client.get("/api/v1/evaluation-cases/score")
+    score = client.post("/api/v1/evaluation-runs")
     assert score.status_code == 409
     assert "integrity check" in score.json()["detail"]
     assert client.post(feedback_url, json={"verdict": "not_useful"}).status_code == 200
@@ -330,6 +350,9 @@ def test_evaluation_case_correction_requires_new_review_and_keeps_history(client
         json=initial_label,
     ).json()
     revisions_url = f"/api/v1/evaluation-cases/{created['id']}/revisions"
+    requested = client.post("/api/v1/evaluation-runs").json()
+    frozen_run = _wait_for_run(client, requested["id"])
+    assert frozen_run["status"] == "succeeded"
 
     refused = client.post(revisions_url, json=initial_label)
     assert refused.status_code == 409
@@ -360,8 +383,22 @@ def test_evaluation_case_correction_requires_new_review_and_keeps_history(client
     assert history[1]["feedback_id"] == second_feedback["id"]
     assert history[1]["expected_modes"] == sorted(corrected_label["expected_modes"])
 
+    unchanged_run = client.get(f"/api/v1/evaluation-runs/{requested['id']}").json()
+    assert unchanged_run == frozen_run
+    assert unchanged_run["cases"][0]["case_revision"] == 0
+    assert (
+        unchanged_run["cases"][0]["expected_modes"] == initial_label["expected_modes"]
+    )
+
     exported = client.get("/api/v1/evaluation-cases/export").json()["cases"][0]
     assert exported["split"] == "holdout"
     assert exported["expected_modes"] == sorted(corrected_label["expected_modes"])
     assert exported["source"]["revision"] == 1
     assert exported["source"]["feedback_id"] == second_feedback["id"]
+
+    interrupted = client.storage.create_evaluation_run(
+        "1", "test-engine", "test-build", "self-host:test"
+    )
+    assert client.storage.claim_evaluation_run(interrupted["id"]) is not None
+    assert interrupted["id"] in client.storage.recover_evaluation_runs()
+    assert client.storage.get_evaluation_run(interrupted["id"])["status"] == "pending"

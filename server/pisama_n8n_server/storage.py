@@ -413,6 +413,58 @@ class EvaluationCaseRevision(Base):
         }
 
 
+class EvaluationRun(Base):
+    """Persisted lifecycle and aggregate result for one corpus score request."""
+
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    taxonomy_version: Mapped[str] = mapped_column(String, nullable=False)
+    engine_version: Mapped[str] = mapped_column(String, nullable=False)
+    build_revision: Mapped[str] = mapped_column(String, nullable=False)
+    requested_by_principal: Mapped[str] = mapped_column(String, nullable=False)
+    requested_at: Mapped[str] = mapped_column(String, nullable=False)
+    started_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    completed_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    case_count: Mapped[int] = mapped_column(nullable=False)
+    result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class EvaluationRunCase(Base):
+    """Immutable label and payload-hash snapshot plus one run's verdict."""
+
+    __tablename__ = "evaluation_run_cases"
+    __table_args__ = (
+        UniqueConstraint(
+            "evaluation_run_id",
+            "evaluation_case_id",
+            name="uq_evaluation_run_case",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    evaluation_run_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_runs.id"), nullable=False, index=True
+    )
+    evaluation_case_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_cases.id"), nullable=False, index=True
+    )
+    case_revision: Mapped[int] = mapped_column(nullable=False)
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("executions.id"), nullable=False
+    )
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    split: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    expected_modes: Mapped[str] = mapped_column(Text, nullable=False)
+    label_evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    actual_modes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    missing_modes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    unexpected_modes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    exact_match: Mapped[Optional[bool]] = mapped_column(nullable=True)
+
+
 class WebhookNonce(Base):
     """Shared replay-defense record; only a digest of the sender nonce is retained."""
 
@@ -1034,11 +1086,17 @@ def _migration_004_idempotent_evaluation_ingest(connection: Any) -> None:
     _ensure_evaluation_ingest_dedup(connection)
 
 
+def _migration_005_durable_evaluation_runs(connection: Any) -> None:
+    EvaluationRun.__table__.create(connection, checkfirst=True)
+    EvaluationRunCase.__table__.create(connection, checkfirst=True)
+
+
 _MIGRATIONS: Tuple[Tuple[str, Callable[[Any], None]], ...] = (
     ("001_legacy_columns", _migration_001_legacy_columns),
     ("002_source_execution_dedup", _migration_002_source_execution_dedup),
     ("003_closed_loop_audit", _migration_003_closed_loop_audit),
     ("004_idempotent_evaluation_ingest", _migration_004_idempotent_evaluation_ingest),
+    ("005_durable_evaluation_runs", _migration_005_durable_evaluation_runs),
 )
 
 
@@ -1659,6 +1717,245 @@ class Storage:
                 ),
                 "cases": cases,
             }
+
+    def create_evaluation_run(
+        self,
+        taxonomy_version: str,
+        engine_version: str,
+        detector_build_revision: str,
+        requested_by_principal: str,
+    ) -> Dict[str, Any]:
+        """Persist a run and frozen case-label snapshots before work is queued."""
+        with self._Session() as session:
+            cases = (
+                session.execute(select(EvaluationCase).order_by(EvaluationCase.id))
+                .scalars()
+                .all()
+            )
+            if not cases:
+                raise ValueError("At least one reviewed evaluation case is required.")
+            snapshots = []
+            for case in cases:
+                metadata = self._evaluation_case_dict(session, case)
+                if metadata["taxonomy_version"] != taxonomy_version:
+                    raise ValueError(
+                        f"Evaluation case {case.id} uses taxonomy "
+                        f"v{metadata['taxonomy_version']}, not v{taxonomy_version}."
+                    )
+                execution = session.get(Execution, case.execution_id)
+                if execution is None:
+                    raise ValueError(
+                        f"Evaluation case {case.id} has no retained execution."
+                    )
+                if (
+                    execution_payload_sha256(execution.raw)
+                    != metadata["payload_sha256"]
+                ):
+                    raise ValueError(
+                        f"Evaluation case {case.id} retained payload failed its "
+                        "integrity check."
+                    )
+                snapshots.append((case, metadata))
+            now = datetime.now(timezone.utc).isoformat()
+            run = EvaluationRun(
+                status="pending",
+                taxonomy_version=taxonomy_version,
+                engine_version=engine_version,
+                build_revision=detector_build_revision,
+                requested_by_principal=requested_by_principal,
+                requested_at=now,
+                case_count=len(snapshots),
+            )
+            session.add(run)
+            session.flush()
+            for case, metadata in snapshots:
+                session.add(
+                    EvaluationRunCase(
+                        evaluation_run_id=run.id,
+                        evaluation_case_id=case.id,
+                        case_revision=metadata["revision"],
+                        execution_id=case.execution_id,
+                        payload_sha256=metadata["payload_sha256"],
+                        split=metadata["split"],
+                        expected_modes=self._encode(metadata["expected_modes"]),
+                        label_evidence=metadata["label_evidence"],
+                    )
+                )
+            session.commit()
+            return self.get_evaluation_run(run.id) or {}
+
+    def claim_evaluation_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        """Atomically claim a pending run and load verified scorer inputs."""
+        with self._Session() as session:
+            claimed = session.execute(
+                update(EvaluationRun)
+                .where(EvaluationRun.id == run_id, EvaluationRun.status == "pending")
+                .values(
+                    status="running",
+                    started_at=datetime.now(timezone.utc).isoformat(),
+                    error=None,
+                )
+            )
+            session.commit()
+            if claimed.rowcount != 1:
+                return None
+            rows = (
+                session.execute(
+                    select(EvaluationRunCase)
+                    .where(EvaluationRunCase.evaluation_run_id == run_id)
+                    .order_by(EvaluationRunCase.id)
+                )
+                .scalars()
+                .all()
+            )
+            inputs = []
+            for row in rows:
+                execution = session.get(Execution, row.execution_id)
+                if execution is None:
+                    raise ValueError(
+                        f"Evaluation case {row.evaluation_case_id} has no retained execution."
+                    )
+                if execution_payload_sha256(execution.raw) != row.payload_sha256:
+                    raise ValueError(
+                        f"Evaluation case {row.evaluation_case_id} retained payload "
+                        "failed its integrity check."
+                    )
+                try:
+                    payload = json.loads(execution.raw)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"Evaluation case {row.evaluation_case_id} has an invalid "
+                        "retained payload."
+                    ) from None
+                inputs.append(
+                    {
+                        "id": f"evaluation-case-{row.evaluation_case_id}",
+                        "evaluation_case_id": row.evaluation_case_id,
+                        "payload": payload,
+                        "expected_modes": _decode_modes(row.expected_modes),
+                        "split": row.split,
+                    }
+                )
+            return {"run_id": run_id, "cases": inputs}
+
+    def complete_evaluation_run(
+        self, run_id: int, result: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Write results once. A completed run has no mutation path."""
+        by_id = {item["id"]: item for item in result["cases"]}
+        with self._Session() as session:
+            run = session.get(EvaluationRun, run_id)
+            if run is None:
+                return None
+            if run.status != "running" or run.result_json is not None:
+                raise ValueError("Evaluation run is not writable.")
+            rows = session.execute(
+                select(EvaluationRunCase).where(
+                    EvaluationRunCase.evaluation_run_id == run_id
+                )
+            ).scalars()
+            for row in rows:
+                case_result = by_id[f"evaluation-case-{row.evaluation_case_id}"]
+                row.actual_modes = self._encode(case_result["actual_modes"])
+                row.missing_modes = self._encode(case_result["missing_modes"])
+                row.unexpected_modes = self._encode(case_result["unexpected_modes"])
+                row.exact_match = bool(case_result["exact_match"])
+            run.status = "succeeded"
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            run.result_json = self._encode(result)
+            session.commit()
+            return self.get_evaluation_run(run_id)
+
+    def fail_evaluation_run(self, run_id: int, error: str) -> None:
+        with self._Session() as session:
+            session.execute(
+                update(EvaluationRun)
+                .where(
+                    EvaluationRun.id == run_id,
+                    EvaluationRun.status.in_(("pending", "running")),
+                )
+                .values(
+                    status="failed",
+                    error=error[:2000],
+                    completed_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+            session.commit()
+
+    def recover_evaluation_runs(self) -> List[int]:
+        """Requeue work interrupted before an immutable result was committed."""
+        with self._Session() as session:
+            session.execute(
+                update(EvaluationRun)
+                .where(
+                    EvaluationRun.status == "running",
+                    EvaluationRun.result_json.is_(None),
+                )
+                .values(status="pending", started_at=None)
+            )
+            session.commit()
+            return list(
+                session.execute(
+                    select(EvaluationRun.id)
+                    .where(EvaluationRun.status == "pending")
+                    .order_by(EvaluationRun.id)
+                ).scalars()
+            )
+
+    def list_evaluation_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._Session() as session:
+            rows = session.execute(
+                select(EvaluationRun).order_by(desc(EvaluationRun.id)).limit(limit)
+            ).scalars()
+            return [self._evaluation_run_dict(session, row) for row in rows]
+
+    def get_evaluation_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        with self._Session() as session:
+            row = session.get(EvaluationRun, run_id)
+            return self._evaluation_run_dict(session, row) if row else None
+
+    @staticmethod
+    def _evaluation_run_dict(session: Any, run: EvaluationRun) -> Dict[str, Any]:
+        try:
+            result = json.loads(run.result_json) if run.result_json else None
+        except (TypeError, ValueError):
+            result = None
+        case_rows = session.execute(
+            select(EvaluationRunCase)
+            .where(EvaluationRunCase.evaluation_run_id == run.id)
+            .order_by(EvaluationRunCase.id)
+        ).scalars()
+        cases = []
+        for row in case_rows:
+            cases.append(
+                {
+                    "evaluation_case_id": row.evaluation_case_id,
+                    "case_revision": row.case_revision,
+                    "payload_sha256": row.payload_sha256,
+                    "split": row.split,
+                    "expected_modes": _decode_modes(row.expected_modes),
+                    "label_evidence": row.label_evidence,
+                    "actual_modes": _decode_modes(row.actual_modes or "[]"),
+                    "missing_modes": _decode_modes(row.missing_modes or "[]"),
+                    "unexpected_modes": _decode_modes(row.unexpected_modes or "[]"),
+                    "exact_match": row.exact_match,
+                }
+            )
+        return {
+            "id": run.id,
+            "status": run.status,
+            "taxonomy_version": run.taxonomy_version,
+            "engine_version": run.engine_version,
+            "build_revision": run.build_revision,
+            "requested_by_principal": run.requested_by_principal,
+            "requested_at": run.requested_at,
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "case_count": run.case_count,
+            "result": result,
+            "error": run.error,
+            "cases": cases,
+        }
 
     @staticmethod
     def _evaluation_case_dict(session: Any, row: EvaluationCase) -> Dict[str, Any]:

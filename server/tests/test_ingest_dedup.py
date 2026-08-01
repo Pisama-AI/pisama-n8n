@@ -83,6 +83,7 @@ def test_schema_migrations_are_versioned_and_idempotent(tmp_path, monkeypatch):
         "002_source_execution_dedup",
         "003_closed_loop_audit",
         "004_idempotent_evaluation_ingest",
+        "005_durable_evaluation_runs",
     ]
     assert second == first
 
