@@ -26,6 +26,10 @@ from pisama_n8n_engine.detect.runtime import (
     N8NTruncationDetector,
     N8NAgentDiagnosticsDetector,
 )
+from pisama_n8n_engine.trace.execution import execution_to_turns_and_metadata
+from pisama_n8n_engine.trace.flatted import normalize_execution
+
+TAXONOMY_VERSION = "1"
 
 # Detectors whose production semantic is static workflow-structure analysis.
 _STRUCTURAL = {
@@ -75,6 +79,14 @@ class DetectionReport:
             "workflow_id": self.workflow_id,
             "detections": [d.__dict__ for d in self.detections],
         }
+
+
+@dataclass
+class ExecutionAnalysis:
+    """A normalized execution and the pure detector report produced from it."""
+
+    payload: Dict[str, Any]
+    report: DetectionReport
 
 
 def analyze(
@@ -128,6 +140,54 @@ def analyze(
                 )
 
     return report
+
+
+def analyze_execution(payload: Any) -> ExecutionAnalysis:
+    """Normalize one n8n execution and run every applicable detector lane.
+
+    This is the shared side-effect-free seam for production ingestion, evaluation,
+    and offline regression scoring. Persistence belongs to the caller.
+    """
+    normalized = normalize_execution(payload)
+    if normalized is None:
+        raise ValueError(
+            "Unrecognized execution payload: expected an n8n execution export, a "
+            "flatted execution-data array (DB dump), or a workflow JSON."
+        )
+
+    workflow_json = normalized.get("workflow") or normalized.get("workflowData")
+    if workflow_json is None and (
+        "nodes" in normalized or "connections" in normalized
+    ):
+        workflow_json = normalized
+
+    workflow_id = normalized.get("workflowId")
+    if isinstance(workflow_json, dict):
+        workflow_id = workflow_id or workflow_json.get("id")
+
+    data = normalized.get("data")
+    run_data = (
+        data.get("resultData", {}).get("runData") if isinstance(data, dict) else None
+    )
+    if workflow_json is None and not run_data:
+        raise ValueError(
+            "Unrecognized execution payload: no workflow definition or runtime "
+            "runData was present."
+        )
+
+    report = DetectionReport(workflow_id=workflow_id)
+    if workflow_json:
+        report.detections.extend(
+            analyze(workflow_json=workflow_json, workflow_id=workflow_id).detections
+        )
+
+    if run_data:
+        turns, metadata = execution_to_turns_and_metadata(normalized)
+        report.detections.extend(
+            analyze(turns=turns, metadata=metadata, workflow_id=workflow_id).detections
+        )
+
+    return ExecutionAnalysis(payload=normalized, report=report)
 
 
 def _to_detection(name: str, r: Any, detector_version: str) -> Detection:

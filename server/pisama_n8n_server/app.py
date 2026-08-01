@@ -31,14 +31,15 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from pisama_n8n_engine import analyze_execution
 from pisama_n8n_server.events import broadcaster, fired_event
 from pisama_n8n_server.n8n_client import client_from_env
 from pisama_n8n_server.poller import poll_once
-from pisama_n8n_server.processing import process_execution
+from pisama_n8n_server.processing import evaluation_response, process_execution
 from pisama_n8n_server.storage import Storage, build_revision
 
 logger = logging.getLogger("pisama_n8n_server")
@@ -299,6 +300,21 @@ async def n8n_webhook(
     if report.get("detections"):
         await broadcaster.publish(fired_event(report))
     return report
+
+
+@app.post("/api/v1/n8n/evaluate", dependencies=[Depends(require_auth)])
+async def n8n_evaluate(payload: Any = Body(...)) -> Dict[str, Any]:
+    """Analyze one real n8n execution without retaining or broadcasting it."""
+    try:
+        analysis = analyze_execution(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    provenance = _deployment_provenance()
+    return evaluation_response(
+        analysis,
+        build_revision=provenance["build_revision"],
+        engine_version=provenance["engine_version"],
+    )
 
 
 @app.post("/api/v1/n8n/sync", dependencies=[Depends(require_auth)])
