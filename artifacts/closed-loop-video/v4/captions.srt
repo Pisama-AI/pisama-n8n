@@ -1,0 +1,197 @@
+1
+00:00:00,250 --> 00:00:02,859
+An n8n workflow can pass a test,
+
+2
+00:00:02,919 --> 00:00:06,291
+fail on real input, and fail again next
+week
+
+3
+00:00:06,351 --> 00:00:07,817
+for the same reason.
+
+4
+00:00:07,877 --> 00:00:10,105
+Seeing the red node is easy.
+
+5
+00:00:10,165 --> 00:00:14,299
+Proving the cause and keeping it out is
+the reliability problem.
+
+6
+00:00:14,909 --> 00:00:19,875
+Pisama closes the loop in six stages:
+design controls, run,
+
+7
+00:00:19,935 --> 00:00:24,901
+retain evidence, diagnose, verify the next
+build, then prevent recurrence.
+
+8
+00:00:25,511 --> 00:00:29,979
+The release harness begins with nineteen
+source-backed n8n executions:
+
+9
+00:00:30,039 --> 00:00:34,508
+healthy runs and known failures labeled
+from their records.
+
+10
+00:00:34,568 --> 00:00:37,024
+Eighteen form the regression set;
+
+11
+00:00:37,084 --> 00:00:39,539
+one holdout is sealed separately.
+
+12
+00:00:39,599 --> 00:00:41,552
+I run the workflow.
+
+13
+00:00:41,612 --> 00:00:46,584
+Pisama evaluates each trace and retains a
+stable case identity.
+
+14
+00:00:47,194 --> 00:00:49,282
+Now we have evidence.
+
+15
+00:00:49,342 --> 00:00:55,189
+This execution reached the consumer
+without body dot required dot value,
+
+16
+00:00:55,249 --> 00:00:58,410
+and n8n recorded the failed expression.
+
+17
+00:00:58,470 --> 00:01:02,706
+Pisama retains the workflow, node, trace,
+expected label,
+
+18
+00:01:02,766 --> 00:01:06,465
+and detected result in one auditable
+record.
+
+19
+00:01:07,075 --> 00:01:11,477
+Pisama identifies a data-contract mismatch
+and the missing path.
+
+20
+00:01:11,537 --> 00:01:16,435
+A second case shows sixty-four seconds
+against a thirty-second limit.
+
+21
+00:01:16,495 --> 00:01:20,897
+The operator reviews the evidence before
+any control changes.
+
+22
+00:01:20,957 --> 00:01:22,880
+Diagnosis informs the decision.
+
+23
+00:01:22,940 --> 00:01:26,350
+It does not silently rewrite the workflow.
+
+24
+00:01:26,960 --> 00:01:31,385
+The next build runs against the reviewed
+corpus.
+
+25
+00:01:31,445 --> 00:01:34,188
+Eighteen regression cases execute
+asynchronously;
+
+26
+00:01:34,248 --> 00:01:36,431
+the holdout remains excluded.
+
+27
+00:01:36,491 --> 00:01:39,234
+Every expected failure set matched,
+
+28
+00:01:39,294 --> 00:01:44,280
+with the build revision and each case
+result stored.
+
+29
+00:01:44,340 --> 00:01:46,522
+Label corrections append evidence.
+
+30
+00:01:46,582 --> 00:01:48,765
+Earlier scores remain unchanged.
+
+31
+00:01:49,375 --> 00:01:54,370
+For the contract failure, Pisama proposes
+a deterministic input guard.
+
+32
+00:01:54,430 --> 00:01:59,426
+Apply remains blocked until the operator
+selects a rejection path.
+
+33
+00:01:59,486 --> 00:02:01,954
+Two real requests test it.
+
+34
+00:02:02,014 --> 00:02:04,987
+Malformed input stops before the consumer.
+
+35
+00:02:05,047 --> 00:02:06,504
+Valid input passes.
+
+36
+00:02:06,564 --> 00:02:10,548
+Pisama retains both results and the
+rollback record.
+
+37
+00:02:11,158 --> 00:02:16,444
+The chain now connects failure evidence to
+a reviewed diagnosis,
+
+38
+00:02:16,504 --> 00:02:20,186
+an auditable release, and a preventive
+control.
+
+39
+00:02:20,246 --> 00:02:23,394
+For teams operating critical n8n
+workflows,
+
+40
+00:02:23,454 --> 00:02:25,533
+incidents become reusable safeguards.
+
+41
+00:02:25,593 --> 00:02:27,137
+See what failed.
+
+42
+00:02:27,197 --> 00:02:28,740
+Prove the fix.
+
+43
+00:02:28,800 --> 00:02:29,810
+Prevent recurrence.
+
+44
+00:02:29,870 --> 00:02:31,414
+Pisama dot ai.

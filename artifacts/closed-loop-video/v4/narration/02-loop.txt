@@ -1,0 +1,1 @@
+Pisama closes the loop in six stages: design controls, run, retain evidence, diagnose, verify the next build, then prevent recurrence.

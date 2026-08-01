@@ -1,0 +1,1 @@
+The release harness begins with nineteen source-backed n8n executions: healthy runs and known failures labeled from their records. Eighteen form the regression set; one holdout is sealed separately. I run the workflow. Pisama evaluates each trace and retains a stable case identity.

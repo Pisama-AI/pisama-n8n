@@ -1,0 +1,6 @@
+audio/*.wav
+frames/
+generated/
+__pycache__/
+*-draft.mp4
+

@@ -1,0 +1,1 @@
+The next build runs against the reviewed corpus. Eighteen regression cases execute asynchronously; the holdout remains excluded. Every expected failure set matched, with the build revision and each case result stored. Label corrections append evidence. Earlier scores remain unchanged.

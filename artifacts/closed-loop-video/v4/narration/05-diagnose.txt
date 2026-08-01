@@ -1,0 +1,1 @@
+Pisama identifies a data-contract mismatch and the missing path. A second case shows sixty-four seconds against a thirty-second limit. The operator reviews the evidence before any control changes. Diagnosis informs the decision. It does not silently rewrite the workflow.

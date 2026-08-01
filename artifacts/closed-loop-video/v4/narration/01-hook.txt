@@ -1,0 +1,2 @@
+An n8n workflow can pass a test, fail on real input, and fail again next week for the same reason. Seeing the red node is easy. Proving the cause and keeping it out is the reliability problem.
+

@@ -1,0 +1,1 @@
+The chain now connects failure evidence to a reviewed diagnosis, an auditable release, and a preventive control. For teams operating critical n8n workflows, incidents become reusable safeguards. See what failed. Prove the fix. Prevent recurrence. Pisama dot ai.
