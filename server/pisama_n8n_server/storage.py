@@ -413,6 +413,26 @@ class EvaluationCaseRevision(Base):
         }
 
 
+class EvaluationProtocol(Base):
+    """Sealed pre-registration of holdout identities before candidate scoring."""
+
+    __tablename__ = "evaluation_protocols"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    baseline_build_revision: Mapped[str] = mapped_column(String, nullable=False)
+    candidate_build_revision: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )
+    evaluation_run_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    registered_cases: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_principal: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    sealed_at: Mapped[str] = mapped_column(String, nullable=False)
+    released_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+
 class EvaluationRun(Base):
     """Persisted lifecycle and aggregate result for one corpus score request."""
 
@@ -430,6 +450,9 @@ class EvaluationRun(Base):
     case_count: Mapped[int] = mapped_column(nullable=False)
     result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    protocol_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("evaluation_protocols.id"), nullable=True, index=True
+    )
 
 
 class EvaluationRunCase(Base):
@@ -1091,12 +1114,24 @@ def _migration_005_durable_evaluation_runs(connection: Any) -> None:
     EvaluationRunCase.__table__.create(connection, checkfirst=True)
 
 
+def _migration_006_sealed_holdout_protocols(connection: Any) -> None:
+    EvaluationProtocol.__table__.create(connection, checkfirst=True)
+    _add_missing_columns(connection, {"evaluation_runs": {"protocol_id": "INTEGER"}})
+    connection.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_evaluation_runs_protocol_id "
+            "ON evaluation_runs(protocol_id)"
+        )
+    )
+
+
 _MIGRATIONS: Tuple[Tuple[str, Callable[[Any], None]], ...] = (
     ("001_legacy_columns", _migration_001_legacy_columns),
     ("002_source_execution_dedup", _migration_002_source_execution_dedup),
     ("003_closed_loop_audit", _migration_003_closed_loop_audit),
     ("004_idempotent_evaluation_ingest", _migration_004_idempotent_evaluation_ingest),
     ("005_durable_evaluation_runs", _migration_005_durable_evaluation_runs),
+    ("006_sealed_holdout_protocols", _migration_006_sealed_holdout_protocols),
 )
 
 
@@ -1718,12 +1753,84 @@ class Storage:
                 "cases": cases,
             }
 
+    def create_evaluation_protocol(
+        self,
+        name: str,
+        baseline_build_revision: str,
+        created_by_principal: str,
+    ) -> Dict[str, Any]:
+        """Seal current holdout identities and labels in one append-only record."""
+        with self._Session() as session:
+            cases = (
+                session.execute(select(EvaluationCase).order_by(EvaluationCase.id))
+                .scalars()
+                .all()
+            )
+            registered = []
+            for case in cases:
+                metadata = self._evaluation_case_dict(session, case)
+                if metadata["split"] != "holdout":
+                    continue
+                registered.append(
+                    {
+                        "evaluation_case_id": case.id,
+                        "case_revision": metadata["revision"],
+                        "payload_sha256": metadata["payload_sha256"],
+                        "label_sha256": hashlib.sha256(
+                            self._encode(metadata["expected_modes"]).encode("utf-8")
+                        ).hexdigest(),
+                    }
+                )
+            if not registered:
+                raise ValueError("At least one reviewed holdout case is required.")
+            now = datetime.now(timezone.utc).isoformat()
+            protocol = EvaluationProtocol(
+                name=name.strip()[:200],
+                status="sealed",
+                baseline_build_revision=baseline_build_revision,
+                registered_cases=self._encode(registered),
+                created_by_principal=created_by_principal,
+                created_at=now,
+                sealed_at=now,
+            )
+            session.add(protocol)
+            session.commit()
+            return self._evaluation_protocol_dict(protocol)
+
+    def list_evaluation_protocols(self) -> List[Dict[str, Any]]:
+        with self._Session() as session:
+            rows = session.execute(
+                select(EvaluationProtocol).order_by(desc(EvaluationProtocol.id))
+            ).scalars()
+            return [self._evaluation_protocol_dict(row) for row in rows]
+
+    @staticmethod
+    def _evaluation_protocol_dict(protocol: EvaluationProtocol) -> Dict[str, Any]:
+        try:
+            registered = json.loads(protocol.registered_cases)
+        except (TypeError, ValueError):
+            registered = []
+        return {
+            "id": protocol.id,
+            "name": protocol.name,
+            "status": protocol.status,
+            "baseline_build_revision": protocol.baseline_build_revision,
+            "candidate_build_revision": protocol.candidate_build_revision,
+            "evaluation_run_id": protocol.evaluation_run_id,
+            "registered_cases": registered,
+            "created_by_principal": protocol.created_by_principal,
+            "created_at": protocol.created_at,
+            "sealed_at": protocol.sealed_at,
+            "released_at": protocol.released_at,
+        }
+
     def create_evaluation_run(
         self,
         taxonomy_version: str,
         engine_version: str,
         detector_build_revision: str,
         requested_by_principal: str,
+        protocol_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Persist a run and frozen case-label snapshots before work is queued."""
         with self._Session() as session:
@@ -1734,9 +1841,44 @@ class Storage:
             )
             if not cases:
                 raise ValueError("At least one reviewed evaluation case is required.")
+            protocol = (
+                session.get(EvaluationProtocol, protocol_id) if protocol_id else None
+            )
+            if protocol_id and protocol is None:
+                raise ValueError("Unknown evaluation protocol id.")
+            if protocol is not None:
+                if protocol.status != "sealed":
+                    raise ValueError("Evaluation protocol has already been released.")
+                if protocol.baseline_build_revision == detector_build_revision:
+                    raise ValueError(
+                        "Candidate build must differ from the pre-registered baseline."
+                    )
+                registered = {
+                    item["evaluation_case_id"]: item
+                    for item in json.loads(protocol.registered_cases)
+                }
+            else:
+                registered = {}
             snapshots = []
             for case in cases:
                 metadata = self._evaluation_case_dict(session, case)
+                if metadata["split"] == "holdout":
+                    registration = registered.get(case.id)
+                    if registration is None:
+                        continue
+                    label_sha256 = hashlib.sha256(
+                        self._encode(metadata["expected_modes"]).encode("utf-8")
+                    ).hexdigest()
+                    if (
+                        registration["case_revision"] != metadata["revision"]
+                        or registration["payload_sha256"] != metadata["payload_sha256"]
+                        or registration["label_sha256"] != label_sha256
+                    ):
+                        raise ValueError(
+                            f"Holdout case {case.id} changed after protocol sealing."
+                        )
+                elif metadata["split"] != "regression":
+                    continue
                 if metadata["taxonomy_version"] != taxonomy_version:
                     raise ValueError(
                         f"Evaluation case {case.id} uses taxonomy "
@@ -1765,7 +1907,12 @@ class Storage:
                 requested_by_principal=requested_by_principal,
                 requested_at=now,
                 case_count=len(snapshots),
+                protocol_id=protocol_id,
             )
+            if not snapshots:
+                raise ValueError(
+                    "No regression cases are available. Supply a sealed holdout protocol."
+                )
             session.add(run)
             session.flush()
             for case, metadata in snapshots:
@@ -1863,6 +2010,14 @@ class Storage:
             run.status = "succeeded"
             run.completed_at = datetime.now(timezone.utc).isoformat()
             run.result_json = self._encode(result)
+            if run.protocol_id is not None:
+                protocol = session.get(EvaluationProtocol, run.protocol_id)
+                if protocol is None or protocol.status != "sealed":
+                    raise ValueError("Evaluation protocol is not releasable.")
+                protocol.status = "released"
+                protocol.candidate_build_revision = run.build_revision
+                protocol.evaluation_run_id = run.id
+                protocol.released_at = run.completed_at
             session.commit()
             return self.get_evaluation_run(run_id)
 
@@ -1952,6 +2107,7 @@ class Storage:
             "started_at": run.started_at,
             "completed_at": run.completed_at,
             "case_count": run.case_count,
+            "protocol_id": run.protocol_id,
             "result": result,
             "error": run.error,
             "cases": cases,
@@ -2035,11 +2191,7 @@ class Storage:
                     DetectionFeedback.verdict, func.count(DetectionFeedback.id)
                 ).group_by(DetectionFeedback.verdict)
             ).all()
-            evaluation_rows = session.execute(
-                select(EvaluationCase.split, func.count(EvaluationCase.id)).group_by(
-                    EvaluationCase.split
-                )
-            ).all()
+            evaluation_splits = self._current_evaluation_split_counts(session)
             case_rows = session.execute(
                 select(ReliabilityCase.status, func.count(ReliabilityCase.id)).group_by(
                     ReliabilityCase.status
@@ -2058,7 +2210,7 @@ class Storage:
                 "fired_by_detector": dict(detector_rows),
                 "repairs_by_status": dict(repair_rows),
                 "feedback_by_verdict": dict(feedback_rows),
-                "evaluation_cases_by_split": dict(evaluation_rows),
+                "evaluation_cases_by_split": evaluation_splits,
                 "reliability_cases_by_status": dict(case_rows),
                 "reliability_metrics": self._reliability_metrics(session),
                 "latest_events": latest_events,
@@ -2327,14 +2479,17 @@ class Storage:
                 ReliabilityCase.status,
             ).outerjoin(ReliabilityCase, ReliabilityCase.repair_id == RepairAttempt.id)
         ).all()
-        evaluation_cases_by_split = dict(
-            session.execute(
-                select(EvaluationCase.split, func.count(EvaluationCase.id)).group_by(
-                    EvaluationCase.split
-                )
-            ).all()
-        )
+        evaluation_cases_by_split = Storage._current_evaluation_split_counts(session)
         return _classify_durable_controls(rows, evaluation_cases_by_split)
+
+    @staticmethod
+    def _current_evaluation_split_counts(session: Any) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        cases = session.execute(select(EvaluationCase)).scalars()
+        for case in cases:
+            split = Storage._evaluation_case_dict(session, case)["split"]
+            counts[split] = counts.get(split, 0) + 1
+        return counts
 
     def _claim_repair(
         self,

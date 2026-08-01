@@ -196,6 +196,25 @@ def test_production_startup_refuses_missing_api_key(tmp_path, monkeypatch):
         storage.close()
 
 
+def test_production_startup_requires_distinct_holdout_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("PISAMA_ENV", "production")
+    monkeypatch.setenv("PISAMA_API_KEY", "regular-key")
+    monkeypatch.delenv("PISAMA_HOLDOUT_ADMIN_KEY", raising=False)
+    storage = Storage(url=f"sqlite:///{tmp_path / 'holdout-production.db'}")
+    app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        with pytest.raises(RuntimeError, match="PISAMA_HOLDOUT_ADMIN_KEY is required"):
+            with TestClient(app):
+                pass
+        monkeypatch.setenv("PISAMA_HOLDOUT_ADMIN_KEY", "regular-key")
+        with pytest.raises(RuntimeError, match="must differ"):
+            with TestClient(app):
+                pass
+    finally:
+        app.dependency_overrides.clear()
+        storage.close()
+
+
 def test_request_body_limit_rejects_execution_before_detection(client, monkeypatch):
     monkeypatch.setenv("PISAMA_MAX_REQUEST_BYTES", "128")
     payload = _load("executions/healthy/HEALTHY-01.json")

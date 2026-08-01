@@ -110,6 +110,16 @@ def _validate_runtime_config() -> None:
     _rate_limit_per_minute()
     if production_mode() and not os.environ.get("PISAMA_API_KEY"):
         raise RuntimeError("PISAMA_API_KEY is required when PISAMA_ENV=production.")
+    if production_mode():
+        holdout_key = os.environ.get("PISAMA_HOLDOUT_ADMIN_KEY")
+        if not holdout_key:
+            raise RuntimeError(
+                "PISAMA_HOLDOUT_ADMIN_KEY is required when PISAMA_ENV=production."
+            )
+        if hmac.compare_digest(holdout_key, os.environ["PISAMA_API_KEY"]):
+            raise RuntimeError(
+                "PISAMA_HOLDOUT_ADMIN_KEY must differ from PISAMA_API_KEY."
+            )
 
 
 class RequestSizeLimitMiddleware:
@@ -314,6 +324,29 @@ async def require_auth(
     if principal is None:
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
     _accept_principal(request, storage, principal)
+
+
+async def require_holdout_admin(
+    request: Request, storage: Storage = Depends(get_storage)
+) -> None:
+    """Require normal auth plus a separate capability for holdout release."""
+    await require_auth(request, storage)
+    _check_holdout_admin_key(request)
+
+
+def _check_holdout_admin_key(request: Request) -> None:
+    expected = os.environ.get("PISAMA_HOLDOUT_ADMIN_KEY")
+    if not expected and not production_mode():
+        return
+    presented = request.headers.get("x-pisama-holdout-key")
+    if (
+        not expected
+        or presented is None
+        or not hmac.compare_digest(presented, expected)
+    ):
+        raise HTTPException(
+            status_code=403, detail="Holdout administrator key required."
+        )
 
 
 def _api_key_principal(request: Request, expected: str) -> Optional[str]:
@@ -837,15 +870,62 @@ async def export_evaluation_cases(
 
 
 @app.post(
+    "/api/v1/evaluation-protocols",
+    dependencies=[Depends(require_holdout_admin)],
+    status_code=201,
+)
+async def create_evaluation_protocol(
+    body: Dict[str, Any],
+    request: Request,
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    name = body.get("name")
+    baseline = body.get("baseline_build_revision")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=422, detail="name is required.")
+    if not isinstance(baseline, str) or not baseline.strip():
+        raise HTTPException(
+            status_code=422, detail="baseline_build_revision is required."
+        )
+    try:
+        return await run_in_threadpool(
+            storage.create_evaluation_protocol,
+            name,
+            baseline.strip(),
+            request.state.auth_principal,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@app.get(
+    "/api/v1/evaluation-protocols",
+    dependencies=[Depends(require_holdout_admin)],
+)
+async def list_evaluation_protocols(
+    storage: Storage = Depends(get_storage),
+) -> List[Dict[str, Any]]:
+    return await run_in_threadpool(storage.list_evaluation_protocols)
+
+
+@app.post(
     "/api/v1/evaluation-runs",
     dependencies=[Depends(require_auth)],
     status_code=202,
 )
 async def create_evaluation_run(
     request: Request,
+    body: Optional[Dict[str, Any]] = None,
     storage: Storage = Depends(get_storage),
 ) -> Dict[str, Any]:
     """Snapshot reviewed labels, persist a pending run, then score asynchronously."""
+    protocol_id = (body or {}).get("protocol_id")
+    if protocol_id is not None:
+        if not isinstance(protocol_id, int) or isinstance(protocol_id, bool):
+            raise HTTPException(
+                status_code=422, detail="protocol_id must be an integer."
+            )
+        _check_holdout_admin_key(request)
     try:
         run = await run_in_threadpool(
             storage.create_evaluation_run,
@@ -853,6 +933,7 @@ async def create_evaluation_run(
             _ENGINE_VERSION,
             build_revision(),
             request.state.auth_principal,
+            protocol_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None

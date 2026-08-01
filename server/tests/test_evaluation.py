@@ -130,7 +130,9 @@ def test_evaluation_ingest_requires_stable_dataset_and_case_ids(client):
     assert response.status_code == 422
 
 
-def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tmp_path):
+def test_feedback_review_promotes_real_execution_to_scorer_ready_case(
+    client, tmp_path, monkeypatch
+):
     payload = _load("executions/data_contract/CLOUD-112117-missing-required-value.json")
     webhook = client.post("/api/v1/n8n/webhook", json=payload)
     assert webhook.status_code == 200, webhook.text
@@ -179,13 +181,42 @@ def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tm
     listed = client.get("/api/v1/evaluation-cases").json()
     assert listed == [case]
     assert "payload" not in listed[0]
-    requested_run = client.post("/api/v1/evaluation-runs")
+    unregistered = client.post("/api/v1/evaluation-runs")
+    assert unregistered.status_code == 409
+    monkeypatch.setenv("PISAMA_HOLDOUT_ADMIN_KEY", "holdout-admin")
+    assert (
+        client.post(
+            "/api/v1/evaluation-protocols",
+            json={"name": "refused", "baseline_build_revision": "baseline-build"},
+        ).status_code
+        == 403
+    )
+    holdout_headers = {"X-Pisama-Holdout-Key": "holdout-admin"}
+    protocol = client.post(
+        "/api/v1/evaluation-protocols",
+        headers=holdout_headers,
+        json={"name": "v1 holdout", "baseline_build_revision": "baseline-build"},
+    )
+    assert protocol.status_code == 201, protocol.text
+    assert protocol.json()["status"] == "sealed"
+    assert protocol.json()["registered_cases"][0]["evaluation_case_id"] == case["id"]
+    requested_run = client.post(
+        "/api/v1/evaluation-runs",
+        headers=holdout_headers,
+        json={"protocol_id": protocol.json()["id"]},
+    )
     assert requested_run.status_code == 202, requested_run.text
     run = _wait_for_run(client, requested_run.json()["id"])
     assert run["status"] == "succeeded", run
+    assert run["protocol_id"] == protocol.json()["id"]
     assert run["case_count"] == 1
     assert run["cases"][0]["case_revision"] == 0
     assert "payload" not in run["cases"][0]
+    released = client.get(
+        "/api/v1/evaluation-protocols", headers=holdout_headers
+    ).json()[0]
+    assert released["status"] == "released"
+    assert released["evaluation_run_id"] == run["id"]
     api_score = client.get("/api/v1/evaluation-cases/score")
     assert api_score.status_code == 200, api_score.text
     assert api_score.json()["evaluation_schema_version"] == "2"
@@ -396,8 +427,15 @@ def test_evaluation_case_correction_requires_new_review_and_keeps_history(client
     assert exported["source"]["revision"] == 1
     assert exported["source"]["feedback_id"] == second_feedback["id"]
 
+    recovery_protocol = client.storage.create_evaluation_protocol(
+        "recovery", "baseline-build", "self-host:test"
+    )
     interrupted = client.storage.create_evaluation_run(
-        "1", "test-engine", "test-build", "self-host:test"
+        "1",
+        "test-engine",
+        "test-build",
+        "self-host:test",
+        recovery_protocol["id"],
     )
     assert client.storage.claim_evaluation_run(interrupted["id"]) is not None
     assert interrupted["id"] in client.storage.recover_evaluation_runs()
