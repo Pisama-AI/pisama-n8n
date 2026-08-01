@@ -13,6 +13,7 @@ tests pin the layer that makes the dedup guarantee real regardless of interleavi
 
 No mocks beyond the n8n client seam the polling tests already use.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,22 +58,31 @@ def test_second_insert_with_same_source_id_is_refused(tmp_path, monkeypatch):
 def test_schema_migrations_are_versioned_and_idempotent(tmp_path, monkeypatch):
     storage = _storage(tmp_path, monkeypatch, "migrations.db")
     with storage.engine.begin() as connection:
-        first = connection.execute(
-            text("SELECT version FROM schema_migrations ORDER BY version")
-        ).scalars().all()
+        first = (
+            connection.execute(
+                text("SELECT version FROM schema_migrations ORDER BY version")
+            )
+            .scalars()
+            .all()
+        )
     storage.close()
 
     reopened = _storage(tmp_path, monkeypatch, "migrations.db")
     with reopened.engine.begin() as connection:
-        second = connection.execute(
-            text("SELECT version FROM schema_migrations ORDER BY version")
-        ).scalars().all()
+        second = (
+            connection.execute(
+                text("SELECT version FROM schema_migrations ORDER BY version")
+            )
+            .scalars()
+            .all()
+        )
     reopened.close()
 
     assert first == [
         "001_legacy_columns",
         "002_source_execution_dedup",
         "003_closed_loop_audit",
+        "004_idempotent_evaluation_ingest",
     ]
     assert second == first
 
@@ -127,9 +137,13 @@ def test_versioned_migrations_upgrade_a_pre_migration_database(tmp_path):
             column["name"] for column in schema.get_columns("evaluation_cases")
         }
         indexes = {index["name"] for index in schema.get_indexes("evaluation_cases")}
-        assert {"source_execution_id", "workflow_name", "build_revision"} <= (
-            execution_columns
-        )
+        assert {
+            "source_execution_id",
+            "workflow_name",
+            "build_revision",
+            "evaluation_ingest_key",
+            "evaluation_payload_sha256",
+        } <= (execution_columns)
         assert "actor_principal" in feedback_columns
         assert {"feedback_id", "created_by_principal", "payload_sha256"} <= (
             evaluation_columns
@@ -181,8 +195,7 @@ def test_startup_collapses_historical_duplicates(tmp_path, monkeypatch):
         ]
         assert kept == [min(ids)]
         det_execs = {
-            row[0]
-            for row in conn.execute(text("SELECT execution_id FROM detections"))
+            row[0] for row in conn.execute(text("SELECT execution_id FROM detections"))
         }
         assert det_execs == {min(ids)}
         # And the index now enforces what the cleanup restored.

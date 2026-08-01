@@ -83,6 +83,43 @@ def test_evaluate_rejects_an_unknown_payload_without_persistence(client):
     assert client.storage.operational_summary()["executions_analyzed"] == 0
 
 
+def test_evaluation_ingest_is_idempotent_and_rejects_case_identity_drift(client):
+    payload = _load("executions/error/ERROR-01-throw.json")
+    request = {
+        "dataset_id": "closed-loop-v1",
+        "case_id": "error-01",
+        "execution_payload": payload,
+    }
+
+    first = client.post("/api/v1/n8n/evaluation-ingest", json=request)
+    second = client.post("/api/v1/n8n/evaluation-ingest", json=request)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["deduplicated"] is False
+    assert second.json()["deduplicated"] is True
+    assert second.json()["execution_id"] == first.json()["execution_id"]
+    assert second.json()["payload_sha256"] == first.json()["payload_sha256"]
+    assert client.storage.operational_summary()["executions_analyzed"] == 1
+
+    changed = {
+        **request,
+        "execution_payload": _load("executions/healthy/HEALTHY-01.json"),
+    }
+    conflict = client.post("/api/v1/n8n/evaluation-ingest", json=changed)
+    assert conflict.status_code == 409
+    assert client.storage.operational_summary()["executions_analyzed"] == 1
+
+
+def test_evaluation_ingest_requires_stable_dataset_and_case_ids(client):
+    payload = _load("executions/healthy/HEALTHY-01.json")
+    response = client.post(
+        "/api/v1/n8n/evaluation-ingest",
+        json={"dataset_id": "", "case_id": "healthy-01", "execution_payload": payload},
+    )
+    assert response.status_code == 422
+
+
 def test_feedback_review_promotes_real_execution_to_scorer_ready_case(client, tmp_path):
     payload = _load("executions/data_contract/CLOUD-112117-missing-required-value.json")
     webhook = client.post("/api/v1/n8n/webhook", json=payload)

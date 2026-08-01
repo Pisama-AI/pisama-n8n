@@ -1,9 +1,18 @@
 """Shared execution processing for persistent ingestion and pure evaluation."""
+
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Dict, Optional
 
 from pisama_n8n_engine import TAXONOMY_VERSION, ExecutionAnalysis, analyze_execution
+
+from pisama_n8n_server.storage import (
+    DuplicateEvaluationIngest,
+    execution_payload_sha256,
+    redact_execution_payload,
+)
 
 EVALUATION_SCHEMA_VERSION = "1"
 
@@ -65,3 +74,45 @@ def process_execution(
         source_execution_id=source_execution_id,
     )
     return analysis.report.to_dict()
+
+
+def evaluation_ingest_key(dataset_id: str, case_id: str) -> str:
+    """Return a non-reversible stable identity for one dataset case."""
+    canonical = json.dumps([dataset_id, case_id], separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def process_evaluation_ingest(
+    payload: Any,
+    storage: Any,
+    dataset_id: str,
+    case_id: str,
+) -> Dict[str, Any]:
+    """Retain one evaluation case exactly once and reject identity drift."""
+    analysis = analyze_execution(payload)
+    ingest_key = evaluation_ingest_key(dataset_id, case_id)
+    safe_payload = redact_execution_payload(analysis.payload)
+    raw = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"), default=str)
+    payload_sha256 = execution_payload_sha256(raw)
+    deduplicated = False
+    try:
+        storage.save_report(
+            analysis.payload,
+            analysis.report,
+            evaluation_ingest_key=ingest_key,
+            evaluation_payload_sha256=payload_sha256,
+        )
+    except DuplicateEvaluationIngest as exc:
+        if exc.existing_payload_sha256 != payload_sha256:
+            raise
+        deduplicated = True
+    result = storage.evaluation_ingest_result(ingest_key)
+    if result is None:
+        raise RuntimeError("evaluation ingest was not durably retained")
+    return {
+        "dataset_id": dataset_id,
+        "case_id": case_id,
+        "ingest_key": ingest_key,
+        "deduplicated": deduplicated,
+        **result,
+    }

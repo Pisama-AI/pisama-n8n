@@ -4,7 +4,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Use real execution captures only\n\nCreate an n8n Data table with: `case_id`, `execution_payload`, `expected_modes`, and `label_evidence`. Store execution payloads and expected mode arrays as JSON values or JSON strings.\n\nSelect that table in both evaluation nodes. Configure both HTTP Request nodes with a Header Auth credential: header `Authorization`, value `Bearer <PISAMA_API_KEY>`. Change their URLs for your Pisama server.\n\nDo not derive `expected_modes` from Pisama output. Review the n8n execution record and workflow configuration first.\n\nAfter the run, open Pisama Detections, review one retained finding, freeze its labels, then open Evaluation to rerun, inspect, and export the reviewed corpus.",
+        "content": "## Use real execution captures only\n\nCreate an n8n Data table with: `dataset_id`, `case_id`, `execution_payload`, `expected_modes`, and `label_evidence`. Store execution payloads and expected mode arrays as JSON values or JSON strings.\n\nSelect that table in both evaluation nodes. Configure both HTTP Request nodes with a Header Auth credential: header `Authorization`, value `Bearer <PISAMA_API_KEY>`. Change their URLs for your Pisama server.\n\nDo not derive `expected_modes` from Pisama output. Review the n8n execution record and workflow configuration first.\n\nThe retention branch is idempotent by dataset and case. Repeating a run does not create duplicate Pisama executions; changing a payload under the same identity is rejected.\n\nAfter the run, open Pisama Detections, review retained findings, freeze their labels, then open Evaluation to rerun, inspect, and export the reviewed corpus.",
         "height": 430,
         "width": 520
       },
@@ -46,12 +46,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8400/api/v1/n8n/webhook",
+        "url": "http://host.docker.internal:8400/api/v1/n8n/evaluation-ingest",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ typeof $json.execution_payload === 'string' ? JSON.parse($json.execution_payload) : $json.execution_payload }}",
+        "jsonBody": "={{ { dataset_id: $json.dataset_id, case_id: $json.case_id, execution_payload: typeof $json.execution_payload === 'string' ? JSON.parse($json.execution_payload) : $json.execution_payload } }}",
         "options": {}
       },
       "id": "d934ec89-20d2-4f9c-916d-99d657f36267",

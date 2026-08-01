@@ -45,8 +45,13 @@ from pisama_n8n_engine import (
 from pisama_n8n_server.events import broadcaster, fired_event
 from pisama_n8n_server.n8n_client import client_from_env
 from pisama_n8n_server.poller import poll_once
-from pisama_n8n_server.processing import evaluation_response, process_execution
+from pisama_n8n_server.processing import (
+    evaluation_response,
+    process_evaluation_ingest,
+    process_execution,
+)
 from pisama_n8n_server.storage import (
+    DuplicateEvaluationIngest,
     DuplicateEvaluationCase,
     Storage,
     build_revision,
@@ -266,6 +271,7 @@ def public_read_enabled() -> bool:
 # the whole keyspace.
 _HMAC_FRESHNESS_SECONDS = 300  # reject signatures older/newer than 5 minutes
 
+
 async def require_read_auth(
     request: Request, storage: Storage = Depends(get_storage)
 ) -> None:
@@ -460,6 +466,55 @@ async def n8n_evaluate(payload: Any = Body(...)) -> Dict[str, Any]:
     )
 
 
+@app.post("/api/v1/n8n/evaluation-ingest", dependencies=[Depends(require_auth)])
+async def n8n_evaluation_ingest(
+    body: Dict[str, Any],
+    storage: Storage = Depends(get_storage),
+) -> Dict[str, Any]:
+    """Retain a dataset case idempotently across repeated n8n evaluation runs."""
+    dataset_id = body.get("dataset_id")
+    case_id = body.get("case_id")
+    if (
+        not isinstance(dataset_id, str)
+        or not dataset_id.strip()
+        or len(dataset_id) > 200
+    ):
+        raise HTTPException(
+            status_code=422, detail="dataset_id must be 1-200 characters."
+        )
+    if not isinstance(case_id, str) or not case_id.strip() or len(case_id) > 200:
+        raise HTTPException(status_code=422, detail="case_id must be 1-200 characters.")
+    if "execution_payload" not in body:
+        raise HTTPException(status_code=422, detail="execution_payload is required.")
+    try:
+        result = await run_in_threadpool(
+            process_evaluation_ingest,
+            body["execution_payload"],
+            storage,
+            dataset_id.strip(),
+            case_id.strip(),
+        )
+    except DuplicateEvaluationIngest as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This dataset_id and case_id were already retained with a different "
+                "execution payload. Use a new case_id for a changed case."
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if not result["deduplicated"] and result["fired_modes"]:
+        await broadcaster.publish(
+            {
+                "type": "evaluation_ingest",
+                "execution_id": result["execution_id"],
+                "fired_modes": result["fired_modes"],
+            }
+        )
+    return result
+
+
 @app.post("/api/v1/n8n/sync", dependencies=[Depends(require_auth)])
 async def n8n_sync(
     storage: Storage = Depends(get_storage),
@@ -605,9 +660,13 @@ def _validated_evaluation_label(
     if not isinstance(modes, list) or any(
         not isinstance(mode, str) or not mode for mode in modes
     ):
-        raise HTTPException(status_code=422, detail="expected_modes must be a list of strings.")
+        raise HTTPException(
+            status_code=422, detail="expected_modes must be a list of strings."
+        )
     if len(modes) != len(set(modes)):
-        raise HTTPException(status_code=422, detail="expected_modes must not contain duplicates.")
+        raise HTTPException(
+            status_code=422, detail="expected_modes must not contain duplicates."
+        )
     unknown = sorted(set(modes) - FAILURE_MODES)
     if unknown:
         raise HTTPException(

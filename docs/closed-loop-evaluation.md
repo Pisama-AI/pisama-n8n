@@ -54,7 +54,8 @@ Create these Data table columns:
 
 | column | value |
 |---|---|
-| `case_id` | Stable reviewed case identifier |
+| `dataset_id` | Stable dataset release identifier used for idempotent retention |
+| `case_id` | Stable reviewed case identifier within that dataset |
 | `execution_payload` | Full n8n execution object, or its JSON string |
 | `expected_modes` | Reviewed array of expected taxonomy modes, or its JSON string |
 | `label_evidence` | The n8n record or workflow fact supporting the label |

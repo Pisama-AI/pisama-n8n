@@ -75,6 +75,24 @@ class DuplicateEvaluationCase(Exception):
             f"detection {detection_id} already has evaluation case {existing_id}"
         )
 
+
+class DuplicateEvaluationIngest(Exception):
+    """A dataset case was already retained through the evaluation channel."""
+
+    def __init__(
+        self,
+        ingest_key: str,
+        existing_id: Optional[int],
+        existing_payload_sha256: Optional[str],
+    ) -> None:
+        self.ingest_key = ingest_key
+        self.existing_id = existing_id
+        self.existing_payload_sha256 = existing_payload_sha256
+        super().__init__(
+            f"evaluation ingest {ingest_key!r} already exists (id={existing_id})"
+        )
+
+
 _SECRET_KEYS = {
     "apikey",
     "authorization",
@@ -168,6 +186,12 @@ class Execution(Base):
     # Build revision that analyzed this execution. It distinguishes current detector
     # evidence from rows retained from an earlier server image.
     build_revision: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Stable dataset+case identity for the n8n evaluation retention branch. The
+    # partial unique index permits ordinary webhook rows to remain unconstrained.
+    evaluation_ingest_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    evaluation_payload_sha256: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
 
     detections: Mapped[List["DetectionRow"]] = relationship(
         back_populates="execution", cascade="all, delete-orphan"
@@ -452,20 +476,32 @@ class ReliabilityCase(Base):
     # guard actually rejects malformed input and passes valid input. A guardrail case
     # cannot be concluded ``prevented`` until BOTH are recorded — that is what turns a
     # template into verified prevention evidence rather than a claim.
-    guard_malformed_rejected_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
-    guard_malformed_rejected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    guard_valid_passed_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    guard_malformed_rejected_execution_id: Mapped[Optional[int]] = mapped_column(
+        nullable=True
+    )
+    guard_malformed_rejected_at: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )
+    guard_valid_passed_execution_id: Mapped[Optional[int]] = mapped_column(
+        nullable=True
+    )
     guard_valid_passed_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Guard drift: the poll-time integrity sweep asserts every applied guard is still
     # present AND still wired. A guard removed or bypassed in the n8n editor is no
     # longer prevention evidence, so the case goes ``drifted`` and cannot be concluded.
     guard_drift_kind: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    guard_drift_detected_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_drift_detected_at: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )
     guard_drift_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Error-route repairs are verified by ONE routed-incident probe instead of the
     # guardrail's two: an error route has no valid-path regression to disprove.
-    guard_route_delivered_execution_id: Mapped[Optional[int]] = mapped_column(nullable=True)
-    guard_route_delivered_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    guard_route_delivered_execution_id: Mapped[Optional[int]] = mapped_column(
+        nullable=True
+    )
+    guard_route_delivered_at: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )
     outcome_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -905,6 +941,14 @@ _CLOSED_LOOP_ADDED_COLUMNS = {
 }
 
 
+_IDEMPOTENT_EVALUATION_COLUMNS = {
+    "executions": {
+        "evaluation_ingest_key": "VARCHAR",
+        "evaluation_payload_sha256": "VARCHAR(64)",
+    },
+}
+
+
 def _add_missing_columns(
     connection: Any, columns_by_table: Dict[str, Dict[str, str]]
 ) -> None:
@@ -975,10 +1019,26 @@ def _migration_003_closed_loop_audit(connection: Any) -> None:
     )
 
 
+def _ensure_evaluation_ingest_dedup(connection: Any) -> None:
+    connection.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_executions_evaluation_ingest "
+            "ON executions(evaluation_ingest_key) "
+            "WHERE evaluation_ingest_key IS NOT NULL"
+        )
+    )
+
+
+def _migration_004_idempotent_evaluation_ingest(connection: Any) -> None:
+    _add_missing_columns(connection, _IDEMPOTENT_EVALUATION_COLUMNS)
+    _ensure_evaluation_ingest_dedup(connection)
+
+
 _MIGRATIONS: Tuple[Tuple[str, Callable[[Any], None]], ...] = (
     ("001_legacy_columns", _migration_001_legacy_columns),
     ("002_source_execution_dedup", _migration_002_source_execution_dedup),
     ("003_closed_loop_audit", _migration_003_closed_loop_audit),
+    ("004_idempotent_evaluation_ingest", _migration_004_idempotent_evaluation_ingest),
 )
 
 
@@ -1006,6 +1066,7 @@ def _reconcile_schema_invariants(engine: Any) -> None:
     """Repair a dropped dedup index before accepting concurrent ingestion."""
     with engine.begin() as connection:
         _ensure_source_dedup(connection)
+        _ensure_evaluation_ingest_dedup(connection)
 
 
 def make_engine(url: Optional[str] = None):
@@ -1038,6 +1099,8 @@ class Storage:
         execution_data: Dict[str, Any],
         report: Any,
         source_execution_id: Optional[str] = None,
+        evaluation_ingest_key: Optional[str] = None,
+        evaluation_payload_sha256: Optional[str] = None,
     ) -> int:
         """Persist the raw payload + every detection in the report. Returns exec id."""
         try:
@@ -1057,6 +1120,8 @@ class Storage:
                 raw=raw,
                 source_execution_id=source_execution_id,
                 build_revision=build_revision(),
+                evaluation_ingest_key=evaluation_ingest_key,
+                evaluation_payload_sha256=evaluation_payload_sha256,
             )
             for d in report.detections:
                 execution.detections.append(
@@ -1077,6 +1142,22 @@ class Storage:
                 # The losing side of a poll/sync race on the same upstream
                 # execution: the winner's row is already stored and observed.
                 session.rollback()
+                if evaluation_ingest_key is not None:
+                    existing = session.execute(
+                        select(
+                            Execution.id,
+                            Execution.evaluation_payload_sha256,
+                        ).where(
+                            Execution.evaluation_ingest_key == evaluation_ingest_key
+                        )
+                    ).one_or_none()
+                    raise DuplicateEvaluationIngest(
+                        evaluation_ingest_key,
+                        existing[0] if existing else None,
+                        existing[1] if existing else None,
+                    )
+                if source_execution_id is None:
+                    raise
                 existing = session.execute(
                     select(Execution.id).where(
                         Execution.source_execution_id == source_execution_id
@@ -1086,6 +1167,29 @@ class Storage:
             execution_id = execution.id
         self.observe_reliability_cases(execution_id)
         return execution_id
+
+    def evaluation_ingest_result(self, ingest_key: str) -> Optional[Dict[str, Any]]:
+        """Return the immutable retained outcome for one dataset case."""
+        with self._Session() as session:
+            execution = session.execute(
+                select(Execution).where(Execution.evaluation_ingest_key == ingest_key)
+            ).scalar_one_or_none()
+            if execution is None:
+                return None
+            fired_modes = sorted(
+                {
+                    row.failure_mode
+                    for row in execution.detections
+                    if row.detected and row.failure_mode
+                }
+            )
+            return {
+                "execution_id": execution.id,
+                "payload_sha256": execution.evaluation_payload_sha256,
+                "workflow_id": execution.workflow_id,
+                "build_revision": execution.build_revision,
+                "fired_modes": fired_modes,
+            }
 
     def seen_source_ids(self) -> set:
         """The set of upstream n8n execution ids already ingested (for poll dedup)."""
@@ -1264,9 +1368,7 @@ class Storage:
             return True
         now = datetime.now(timezone.utc).timestamp()
         window = int(now // window_seconds)
-        bucket_key = hashlib.sha256(
-            f"{principal}:{window}".encode("utf-8")
-        ).hexdigest()
+        bucket_key = hashlib.sha256(f"{principal}:{window}".encode("utf-8")).hexdigest()
         expires_at = (window + 1) * window_seconds
         with self._Session() as session:
             session.execute(
@@ -1290,14 +1392,18 @@ class Storage:
                     row.count += 1
                 session.commit()
                 return row.count <= limit
-            statement = statement.values(
-                bucket_key=bucket_key,
-                count=1,
-                expires_at=expires_at,
-            ).on_conflict_do_update(
-                index_elements=[RateLimitBucket.bucket_key],
-                set_={"count": RateLimitBucket.count + 1},
-            ).returning(RateLimitBucket.count)
+            statement = (
+                statement.values(
+                    bucket_key=bucket_key,
+                    count=1,
+                    expires_at=expires_at,
+                )
+                .on_conflict_do_update(
+                    index_elements=[RateLimitBucket.bucket_key],
+                    set_={"count": RateLimitBucket.count + 1},
+                )
+                .returning(RateLimitBucket.count)
+            )
             count = session.execute(statement).scalar_one()
             session.commit()
             return count <= limit
@@ -1497,9 +1603,11 @@ class Storage:
     def export_evaluation_cases(self, taxonomy_version: str) -> Dict[str, Any]:
         """Return a scorer-ready manifest with redacted retained payloads inline."""
         with self._Session() as session:
-            rows = session.execute(
-                select(EvaluationCase).order_by(EvaluationCase.id)
-            ).scalars().all()
+            rows = (
+                session.execute(select(EvaluationCase).order_by(EvaluationCase.id))
+                .scalars()
+                .all()
+            )
             metadata_rows = [self._evaluation_case_dict(session, row) for row in rows]
             mismatched = [
                 metadata["id"]
@@ -1524,7 +1632,10 @@ class Storage:
                     raise ValueError(
                         f"Evaluation case {row.id} has an invalid retained payload."
                     ) from None
-                if execution_payload_sha256(execution.raw) != metadata["payload_sha256"]:
+                if (
+                    execution_payload_sha256(execution.raw)
+                    != metadata["payload_sha256"]
+                ):
                     raise ValueError(
                         f"Evaluation case {row.id} retained payload failed its "
                         "integrity check."
@@ -1550,9 +1661,7 @@ class Storage:
             }
 
     @staticmethod
-    def _evaluation_case_dict(
-        session: Any, row: EvaluationCase
-    ) -> Dict[str, Any]:
+    def _evaluation_case_dict(session: Any, row: EvaluationCase) -> Dict[str, Any]:
         result = row.to_dict()
         revision = Storage._latest_evaluation_revision(session, row.id)
         if revision is not None:
@@ -1919,9 +2028,7 @@ class Storage:
                 RepairAttempt.applied_at,
                 RepairAttempt.rolled_back_at,
                 ReliabilityCase.status,
-            ).outerjoin(
-                ReliabilityCase, ReliabilityCase.repair_id == RepairAttempt.id
-            )
+            ).outerjoin(ReliabilityCase, ReliabilityCase.repair_id == RepairAttempt.id)
         ).all()
         evaluation_cases_by_split = dict(
             session.execute(
@@ -1939,7 +2046,9 @@ class Storage:
         to_status: str,
     ) -> Optional[Dict[str, Any]]:
         """Atomically own a repair transition, preventing double-click races."""
-        statuses = (from_status,) if isinstance(from_status, str) else tuple(from_status)
+        statuses = (
+            (from_status,) if isinstance(from_status, str) else tuple(from_status)
+        )
         with self._Session() as session:
             claimed = session.execute(
                 update(RepairAttempt)
@@ -1992,7 +2101,9 @@ class Storage:
                 raise ValueError("Repair state changed concurrently.")
             session.commit()
 
-    def mark_repair_apply_unverified(self, repair_id: int, reason: str) -> Dict[str, Any]:
+    def mark_repair_apply_unverified(
+        self, repair_id: int, reason: str
+    ) -> Dict[str, Any]:
         """The live PUT was attempted but its outcome is unconfirmed — leave the repair
         rollback-eligible rather than stranding it as 'failed'."""
         return self._finish_repair(
@@ -2396,9 +2507,9 @@ class Storage:
                 parsed = json.loads(raw)
             except (TypeError, ValueError):
                 parsed = {}
-            run_data = (
-                ((parsed.get("data") or {}).get("resultData") or {}).get("runData") or {}
-            )
+            run_data = ((parsed.get("data") or {}).get("resultData") or {}).get(
+                "runData"
+            ) or {}
             ran = {name for name, runs in run_data.items() if runs}
             destination_ran = bool(destination) and destination in ran
             consumer_ran = bool(consumer) and consumer in ran
@@ -2446,9 +2557,9 @@ class Storage:
                 raw = json.loads(execution.raw)
             except (TypeError, ValueError):
                 return set()
-        run_data = (
-            ((raw.get("data") or {}).get("resultData") or {}).get("runData") or {}
-        )
+        run_data = ((raw.get("data") or {}).get("resultData") or {}).get(
+            "runData"
+        ) or {}
         return {name for name, runs in run_data.items() if runs}
 
     def _execution_routing(self, execution_id: int):
@@ -2465,9 +2576,9 @@ class Storage:
                 raw = json.loads(execution.raw)
             except (TypeError, ValueError):
                 return workflow_id, set(), None
-        run_data = (
-            ((raw.get("data") or {}).get("resultData") or {}).get("runData") or {}
-        )
+        run_data = ((raw.get("data") or {}).get("resultData") or {}).get(
+            "runData"
+        ) or {}
         started_at = raw.get("startedAt") if isinstance(raw, dict) else None
         return (
             workflow_id,
@@ -2475,7 +2586,9 @@ class Storage:
             started_at,
         )
 
-    def record_route_verification(self, case_id: int, execution_id: int) -> Dict[str, Any]:
+    def record_route_verification(
+        self, case_id: int, execution_id: int
+    ) -> Dict[str, Any]:
         """Record the ONE routed-incident probe an error-route repair needs: an execution
         of the TARGET error workflow, produced after the repair was applied.
 
@@ -2647,7 +2760,10 @@ class Storage:
                         "verification probes are recorded: a malformed input rejected "
                         "and a valid input passed through the installed guard."
                     )
-                if kind == "error_route" and not case.guard_route_delivered_execution_id:
+                if (
+                    kind == "error_route"
+                    and not case.guard_route_delivered_execution_id
+                ):
                     raise ValueError(
                         "An error-route repair can only be recorded as prevented once the "
                         "route has actually delivered: record an execution of the target "

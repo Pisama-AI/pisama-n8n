@@ -66,12 +66,13 @@ clear_errors = [case for case in manifest["cases"] if case["expected_modes"]][:4
 with output_path.open("w", newline="") as output:
     writer = csv.DictWriter(
         output,
-        fieldnames=["case_id", "execution_payload", "expected_modes", "label_evidence"],
+        fieldnames=["dataset_id", "case_id", "execution_payload", "expected_modes", "label_evidence"],
     )
     writer.writeheader()
     for case in clear_errors:
         writer.writerow(
             {
+                "dataset_id": "pisama-closed-loop-v1",
                 "case_id": case["id"],
                 "execution_payload": json.dumps(json.loads((root / case["payload_path"]).read_text())),
                 "expected_modes": json.dumps(case["expected_modes"]),
