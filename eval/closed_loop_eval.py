@@ -16,14 +16,20 @@ MANIFEST_SCHEMA_VERSION = "1"
 DEFAULT_MANIFEST = Path(__file__).with_name("closed_loop_cases.json")
 
 
-def load_manifest(path: Path, split: Optional[str] = None) -> Dict[str, Any]:
+def load_manifest(
+    path: Path,
+    split: Optional[str] = None,
+    require_payload_hash: bool = False,
+) -> Dict[str, Any]:
     manifest = json.loads(path.read_text())
     _validate_manifest_versions(manifest)
     repo_root = path.resolve().parent.parent
     selected = _select_cases(manifest.get("cases") or [], split)
     if not selected:
         raise ValueError(f"No cases selected from {path}.")
-    prepared = [_prepare_case(case, repo_root) for case in selected]
+    prepared = [
+        _prepare_case(case, repo_root, require_payload_hash) for case in selected
+    ]
     labeled = [item[0] for item in prepared]
     result = score_labeled_executions(labeled)
     result.update(
@@ -56,9 +62,11 @@ def _select_cases(cases: list[Any], split: Optional[str]) -> list[Dict[str, Any]
     return selected
 
 
-def _prepare_case(case: Dict[str, Any], repo_root: Path):
+def _prepare_case(
+    case: Dict[str, Any], repo_root: Path, require_payload_hash: bool
+):
     payload, reference = _load_payload(case, repo_root)
-    _verify_payload_hash(case, payload)
+    _verify_payload_hash(case, payload, require_payload_hash)
     labeled = (case["id"], payload, set(case["expected_modes"]))
     provenance = {
         "payload": reference,
@@ -69,9 +77,13 @@ def _prepare_case(case: Dict[str, Any], repo_root: Path):
     return labeled, (case["id"], provenance)
 
 
-def _verify_payload_hash(case: Dict[str, Any], payload: Any) -> None:
+def _verify_payload_hash(
+    case: Dict[str, Any], payload: Any, required: bool = False
+) -> None:
     expected = case["source"].get("payload_sha256")
     if expected is None:
+        if required:
+            raise ValueError(f"Case {case['id']} has no payload_sha256.")
         return
     if not isinstance(expected, str) or len(expected) != 64:
         raise ValueError(f"Case {case['id']} has an invalid payload_sha256.")
@@ -177,9 +189,27 @@ def main() -> int:
         action="store_true",
         help="return non-zero when any case has a missing or unexpected mode",
     )
+    parser.add_argument(
+        "--require-payload-hashes",
+        action="store_true",
+        help="refuse any selected case without a valid matching payload SHA-256",
+    )
+    parser.add_argument(
+        "--require-min-cases",
+        type=int,
+        default=1,
+        metavar="N",
+        help="return non-zero when the selected split contains fewer than N cases",
+    )
     args = parser.parse_args()
+    if args.require_min_cases < 1:
+        parser.error("--require-min-cases must be at least 1")
     try:
-        result = load_manifest(args.manifest, split=args.split)
+        result = load_manifest(
+            args.manifest,
+            split=args.split,
+            require_payload_hash=args.require_payload_hashes,
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"closed-loop eval refused to score: {exc}")
         return 2
@@ -187,7 +217,14 @@ def main() -> int:
     if args.json:
         args.json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         print(f"wrote {args.json}")
-    return 1 if args.require_exact and result["exact_set_accuracy"] != 1.0 else 0
+    failed_exact = args.require_exact and result["exact_set_accuracy"] != 1.0
+    failed_size = result["n"] < args.require_min_cases
+    if failed_size:
+        print(
+            f"closed-loop eval gate failed: selected {result['n']} cases, "
+            f"requires at least {args.require_min_cases}"
+        )
+    return 1 if failed_exact or failed_size else 0
 
 
 if __name__ == "__main__":

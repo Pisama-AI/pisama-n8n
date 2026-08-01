@@ -9,7 +9,12 @@ It does not use Pisama output as its label source.
 
 ```bash
 python eval/closed_loop_eval.py --require-exact
-python eval/closed_loop_eval.py --split legacy_holdout --json /tmp/holdout.json
+python eval/closed_loop_eval.py \
+  --split legacy_holdout \
+  --require-exact \
+  --require-payload-hashes \
+  --require-min-cases 1 \
+  --json /tmp/holdout.json
 ```
 
 The report includes exact-set accuracy, per-mode and micro/macro precision, recall and

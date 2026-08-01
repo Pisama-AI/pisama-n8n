@@ -8,7 +8,7 @@
       "payload_path": "server/tests/fixtures/executions/data_contract/CLOUD-112117-missing-required-value.json",
       "split": "regression",
       "expected_modes": ["n8n_data_contract", "n8n_expression", "n8n_missing_error_workflow"],
-      "source": {"capture": "n8n Cloud API execution export", "execution_id": "112117", "workflow_id": "0H6n1fY53bCT6rhX"},
+      "source": {"capture": "n8n Cloud API execution export", "execution_id": "112117", "workflow_id": "0H6n1fY53bCT6rhX", "payload_sha256": "fd86018e8a196cf0a5c04ff7ecdbf21c12e900aa8815066cbc7bd7475caf3cf2"},
       "label_evidence": ["n8n recorded an error on the Observed missing field node after required_value was absent.", "The captured workflow has no settings.errorWorkflow target."]
     },
     {
@@ -16,7 +16,7 @@
       "payload_path": "server/tests/fixtures/executions/error/ERROR-01-throw.json",
       "split": "regression",
       "expected_modes": ["n8n_node_error", "n8n_missing_error_workflow"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "10", "workflow_id": "go0usyYHRYoqrhCR"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "10", "workflow_id": "go0usyYHRYoqrhCR", "payload_sha256": "7885571072abf2c6d01b01db408cc99ddd266ebfece17367c8a303663e4423b3"},
       "label_evidence": ["n8n recorded an explicit Error Code node error.", "The captured workflow has no settings.errorWorkflow target."]
     },
     {
@@ -24,7 +24,7 @@
       "payload_path": "server/tests/fixtures/executions/error/ERROR-02-reference.json",
       "split": "regression",
       "expected_modes": ["n8n_data_contract", "n8n_expression", "n8n_missing_error_workflow"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "12", "workflow_id": "naGTT0PeO36bGJYn"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "12", "workflow_id": "naGTT0PeO36bGJYn", "payload_sha256": "7bb3c3c46082492c03a213d7093e947cf7e41b8ba99c6ed3b7be118fdba40a19"},
       "label_evidence": ["n8n recorded a ReferenceError caused by a missing input value on Error Code.", "The captured workflow has no settings.errorWorkflow target."]
     },
     {
@@ -32,7 +32,7 @@
       "payload_path": "server/tests/fixtures/executions/error/ERROR-03-type.json",
       "split": "regression",
       "expected_modes": ["n8n_data_contract", "n8n_expression", "n8n_missing_error_workflow"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "13", "workflow_id": "9GGYN8iWyNFoaRry"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "13", "workflow_id": "9GGYN8iWyNFoaRry", "payload_sha256": "bc204b59b3a13213db35c1c76ed35e04a060bf933fb0f7c5756b75d1ade8fb40"},
       "label_evidence": ["n8n recorded a TypeError caused by an invalid input value on Error Code.", "The captured workflow has no settings.errorWorkflow target."]
     },
     {
@@ -40,7 +40,7 @@
       "payload_path": "server/tests/fixtures/executions/error/ERROR-04-throw.json",
       "split": "regression",
       "expected_modes": ["n8n_node_error", "n8n_missing_error_workflow"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "14", "workflow_id": "WAyWs6DdlayhxugV"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "14", "workflow_id": "WAyWs6DdlayhxugV", "payload_sha256": "b06801f5c33baba67cbf36032652447e21f371e2520e186cbff67b597b252d1c"},
       "label_evidence": ["n8n recorded an explicit Error Code node error.", "The captured workflow has no settings.errorWorkflow target."]
     },
     {
@@ -48,7 +48,7 @@
       "payload_path": "server/tests/fixtures/executions/flatted/FLATTED-01-error.json",
       "split": "regression",
       "expected_modes": ["n8n_node_error"],
-      "source": {"capture": "n8n SQLite flatted executionData export", "execution_id": null, "workflow_id": null},
+      "source": {"capture": "n8n SQLite flatted executionData export", "execution_id": null, "workflow_id": null, "payload_sha256": "e486865b9484fa36457e421c29b991b733951e410193f70d9ac2a5ac1432b910"},
       "label_evidence": ["The dereferenced runData contains an Error Code node error object."]
     },
     {
@@ -56,7 +56,7 @@
       "payload_path": "server/tests/fixtures/executions/healthy/HEALTHY-01.json",
       "split": "regression",
       "expected_modes": [],
-      "source": {"capture": "local n8n API execution export", "execution_id": "19", "workflow_id": "5g4raufumiFbMGva"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "19", "workflow_id": "5g4raufumiFbMGva", "payload_sha256": "f55adcb61be36cd3174116fc1b68540b33f04d8a3b16d7bdf0381e46e433fed6"},
       "label_evidence": ["The n8n record has no node error, timeout-threshold breach, or resource-threshold breach."]
     },
     {
@@ -64,7 +64,7 @@
       "payload_path": "server/tests/fixtures/executions/healthy/HEALTHY-02.json",
       "split": "regression",
       "expected_modes": [],
-      "source": {"capture": "local n8n API execution export", "execution_id": "20", "workflow_id": "eD0VYdkw8O0HoHgI"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "20", "workflow_id": "eD0VYdkw8O0HoHgI", "payload_sha256": "fe3d2da07e6d2237f772778050400a6cafd1e9447fc14f6a31779cdfa58c9247"},
       "label_evidence": ["The n8n record has no node error, timeout-threshold breach, or resource-threshold breach."]
     },
     {
@@ -72,7 +72,7 @@
       "payload_path": "server/tests/fixtures/executions/healthy/HEALTHY-03.json",
       "split": "regression",
       "expected_modes": [],
-      "source": {"capture": "local n8n API execution export", "execution_id": "21", "workflow_id": "HmcgRlZgPJRrbWla"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "21", "workflow_id": "HmcgRlZgPJRrbWla", "payload_sha256": "ab3469d0116e24b96815cf9fe3c4687223cf147bd1489698db5d7a1dbde09249"},
       "label_evidence": ["The n8n record has no node error, timeout-threshold breach, or resource-threshold breach."]
     },
     {
@@ -80,7 +80,7 @@
       "payload_path": "server/tests/fixtures/executions/healthy/HEALTHY-04.json",
       "split": "regression",
       "expected_modes": [],
-      "source": {"capture": "local n8n API execution export", "execution_id": "22", "workflow_id": "bgcuDl29427VwtOo"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "22", "workflow_id": "bgcuDl29427VwtOo", "payload_sha256": "2ea644587fdf33bcd55d3e312ffca48cea4ddbbc4aa4c1be4bbe99e1c5dfbc66"},
       "label_evidence": ["The n8n record has no node error, timeout-threshold breach, or resource-threshold breach."]
     },
     {
@@ -88,7 +88,7 @@
       "payload_path": "server/tests/fixtures/executions/resource/RESOURCE-01-100x500.json",
       "split": "regression",
       "expected_modes": ["F6"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "15", "workflow_id": "olWaLUsTsqxRB0h4"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "15", "workflow_id": "olWaLUsTsqxRB0h4", "payload_sha256": "69caeca706df390a2667e0fe757f349d736a11c032f2c5840f35dd4ff4b58680"},
       "label_evidence": ["The n8n output record contains an independently visible payload-size explosion above the documented F6 threshold."]
     },
     {
@@ -96,7 +96,7 @@
       "payload_path": "server/tests/fixtures/executions/resource/RESOURCE-02-50x1000.json",
       "split": "regression",
       "expected_modes": ["F6"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "16", "workflow_id": "9k9rl2rfNXELI5fH"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "16", "workflow_id": "9k9rl2rfNXELI5fH", "payload_sha256": "a658088b03e02b82113568ba82c95dde507baa096c7e90864f148bb15bb2374d"},
       "label_evidence": ["The n8n output record contains an independently visible payload-size explosion above the documented F6 threshold."]
     },
     {
@@ -104,7 +104,7 @@
       "payload_path": "server/tests/fixtures/executions/resource/RESOURCE-03-200x200.json",
       "split": "regression",
       "expected_modes": ["F6"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "17", "workflow_id": "tC3l3yVTxmvJn5xx"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "17", "workflow_id": "tC3l3yVTxmvJn5xx", "payload_sha256": "e21855b10a9ed00b4236b4a8c12f60b5001197eac1be5d691d22fb209f1e5bb9"},
       "label_evidence": ["The n8n output record contains an independently visible payload-size explosion above the documented F6 threshold."]
     },
     {
@@ -112,7 +112,7 @@
       "payload_path": "server/tests/fixtures/executions/resource/RESOURCE-04-20x5000.json",
       "split": "regression",
       "expected_modes": ["F6"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "18", "workflow_id": "Gu09Uf2pKk53ogcv"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "18", "workflow_id": "Gu09Uf2pKk53ogcv", "payload_sha256": "a193a1eee61bbf911be8624286f3adc71aaa26026cd014a7d4484ce5048e5ad4"},
       "label_evidence": ["The n8n output record contains an independently visible payload-size explosion above the documented F6 threshold."]
     },
     {
@@ -120,7 +120,7 @@
       "payload_path": "server/tests/fixtures/executions/timeout/TIMEOUT-01.json",
       "split": "regression",
       "expected_modes": ["F13"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "7", "workflow_id": "66C4S8I05eHPyJhR"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "7", "workflow_id": "66C4S8I05eHPyJhR", "payload_sha256": "6de12eb6c4a9584189f590520284c84aea970580802ad11298312a1ee661327f"},
       "label_evidence": ["n8n recorded Slow Code executionTime=64026ms, above the documented 60000ms F13 threshold."]
     },
     {
@@ -128,7 +128,7 @@
       "payload_path": "server/tests/fixtures/executions/timeout/TIMEOUT-02.json",
       "split": "regression",
       "expected_modes": ["F13"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "9", "workflow_id": "YwgCX3bgaxbopx2L"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "9", "workflow_id": "YwgCX3bgaxbopx2L", "payload_sha256": "2e8a48ca4f351bf1132cb20cd3cba9df76fde9520a56b82bcaa46b2caab66625"},
       "label_evidence": ["n8n recorded Slow Code executionTime=64014ms, above the documented 60000ms F13 threshold."]
     },
     {
@@ -136,7 +136,7 @@
       "payload_path": "server/tests/fixtures/executions/timeout/TIMEOUT-03.json",
       "split": "regression",
       "expected_modes": ["F13"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "11", "workflow_id": "lVWxoD8bb2C0opz5"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "11", "workflow_id": "lVWxoD8bb2C0opz5", "payload_sha256": "bacacb778cd25e28d1a1d41bbee004b2aea1b5adca2310dd827331d5ec302344"},
       "label_evidence": ["n8n recorded Slow Code executionTime=64035ms, above the documented 60000ms F13 threshold."]
     },
     {
@@ -144,7 +144,7 @@
       "payload_path": "server/tests/fixtures/executions/timeout/TIMEOUT-04.json",
       "split": "regression",
       "expected_modes": ["F13"],
-      "source": {"capture": "local n8n API execution export", "execution_id": "8", "workflow_id": "86s3cwkuAX2nLKjA"},
+      "source": {"capture": "local n8n API execution export", "execution_id": "8", "workflow_id": "86s3cwkuAX2nLKjA", "payload_sha256": "51bd03c64614584fdc0a30442fa4e00c7a495216b018ffa6b721a780f7c827de"},
       "label_evidence": ["n8n recorded Slow Code executionTime=64028ms, above the documented 60000ms F13 threshold."]
     },
     {
@@ -152,7 +152,7 @@
       "payload_path": "eval/data/realworld/rw_1390c729cd.json",
       "split": "legacy_holdout",
       "expected_modes": ["n8n_node_error", "n8n_missing_error_workflow"],
-      "source": {"capture": "community workflow executed on local n8n", "execution_id": "84", "workflow_id": "L3rUgAW3DLCeoco9", "upstream_workflow": "09154-Test-Your-JSON-Skills-with-Interactive-Challenges-and-Instant-Feedback.json"},
+      "source": {"capture": "community workflow executed on local n8n", "execution_id": "84", "workflow_id": "L3rUgAW3DLCeoco9", "upstream_workflow": "09154-Test-Your-JSON-Skills-with-Interactive-Challenges-and-Instant-Feedback.json", "payload_sha256": "5b5b96f2ebfa01a238838d0c6c34265b1d58a5fe61923a5b1c9ed6e568f90534"},
       "label_evidence": ["n8n marked the independently sourced 61-node community workflow execution as failed and recorded a node error.", "The execution snapshot has no configured settings.errorWorkflow target."]
     }
   ]

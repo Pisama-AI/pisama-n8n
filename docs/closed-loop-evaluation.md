@@ -64,6 +64,9 @@ latest revision while the earlier labels remain available for audit.
 
 ## CI gate
 
-The repository CI runs `python eval/closed_loop_eval.py --require-exact`. Any missing or
-unexpected mode fails the job. Undefined precision or recall remains `null` when a split
-has no predicted or labeled examples, so an empty class cannot appear perfect.
+Repository CI requires exact-set parity for all 19 cases, the 18-case regression split,
+and the separately disclosed one-case `legacy_holdout`. It also requires every retained
+payload to match its recorded SHA-256. Minimum split sizes prevent a deleted or renamed
+case from making the gate easier by accident. Undefined precision or recall remains
+`null` when a split has no predicted or labeled examples, so an empty class cannot appear
+perfect.

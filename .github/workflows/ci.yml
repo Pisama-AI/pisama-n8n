@@ -111,7 +111,21 @@ jobs:
       - name: Parity / regression gate (engine vs golden corpus)
         run: python benchmarks/parity_check.py
       - name: Closed-loop multi-label evaluation gate
-        run: python eval/closed_loop_eval.py --require-exact
+        run: |
+          python eval/closed_loop_eval.py \
+            --require-exact \
+            --require-payload-hashes \
+            --require-min-cases 19
+          python eval/closed_loop_eval.py \
+            --split regression \
+            --require-exact \
+            --require-payload-hashes \
+            --require-min-cases 18
+          python eval/closed_loop_eval.py \
+            --split legacy_holdout \
+            --require-exact \
+            --require-payload-hashes \
+            --require-min-cases 1
       - name: Server tests
         working-directory: server
         run: python -m pytest -q --cov=pisama_n8n_server --cov-report=term --cov-fail-under=80

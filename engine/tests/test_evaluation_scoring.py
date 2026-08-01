@@ -1,9 +1,13 @@
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from pisama_n8n_engine import score_labeled_executions
+from eval.closed_loop_eval import load_manifest
 
 ROOT = Path(__file__).parents[2]
 MANIFEST = ROOT / "eval" / "closed_loop_cases.json"
@@ -31,6 +35,32 @@ def test_real_execution_manifest_has_exact_multi_label_parity():
     assert result["per_mode"]["F13"]["tp"] == 4
     assert result["per_mode"]["F6"]["tp"] == 4
     assert any(len(case["expected_modes"]) == 3 for case in result["cases"])
+
+
+def test_manifest_requires_and_verifies_every_payload_hash():
+    result = load_manifest(MANIFEST, require_payload_hash=True)
+    assert result["n"] == 19
+
+
+def test_split_size_gate_rejects_a_shrunken_holdout():
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "engine")}
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "eval" / "closed_loop_eval.py"),
+            "--split",
+            "legacy_holdout",
+            "--require-payload-hashes",
+            "--require-min-cases",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert completed.returncode == 1
+    assert "selected 1 cases, requires at least 2" in completed.stdout
 
 
 def test_scoring_reports_missing_mode_without_fabricating_precision():
