@@ -1,1 +1,1 @@
-Now we have evidence. This execution reached the consumer without body dot required dot value, and n8n recorded the failed expression. Pisama retains the workflow, node, trace, expected label, and detected result in one auditable record.
+Now we have evidence. This execution reached the consumer without body dot required dot value, and n8n recorded the failed expression. Pisama retains the workflow, node, trace, expected label, and detected result in one auditable record. Reviewed evidence can then become an evaluation case.

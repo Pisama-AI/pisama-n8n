@@ -24,7 +24,7 @@ Purpose: establish that scoring starts from labeled, source-backed records.
 
 On screen: the setup and execution cards, then the n8n evaluation workflow at its recorded speed. The browser capture includes the workflow run and its execution notifications. Three side notes identify the recorded source, the operator action, and the retained case identity.
 
-Evidence to call out: 19 reviewed records, 18 regression cases, one separately sealed holdout, and stable case identity.
+Evidence to call out: 19 reviewed records, 18 regression cases, one separately sealed holdout, stable case identity, and a retention branch that prevents repeat runs from creating duplicate PISAMA executions.
 
 ## 01:08.5 to 01:33.0, evidence
 
@@ -32,33 +32,33 @@ Purpose: connect the abstract failure to a specific retained trace.
 
 On screen: PISAMA detection 191. The detector reports `n8n_data_contract`. Sequential notes identify what failed, what is retained, and where human review occurs.
 
-Presenter cue: pause on the failed expression. This is the moment the expert audience should be able to audit the claim directly.
+Presenter cue: pause on the failed expression. This is the moment the expert audience should be able to audit the claim directly. Reviewed evidence can then become an evaluation case.
 
-## 01:33.0 to 01:56.5, detect and heal
+## 01:33.0 to 01:58.3, detect and heal
 
 Purpose: show causal diagnosis and the boundary for human judgment.
 
 On screen: PISAMA detection 360. The execution lasted 64.0 seconds against a 30.0-second limit. Sequential notes explain the second case, the retained measurement, and the human decision boundary.
 
-Presenter cue: say clearly that the diagnosis informs a decision. PISAMA does not silently rewrite the workflow.
+Presenter cue: say clearly that the diagnosis informs a decision. PISAMA does not silently rewrite the workflow. The trace identifies Slow Code as the last executed node.
 
-## 01:56.5 to 02:25.0, verify
+## 01:58.3 to 02:26.8, verify
 
 Purpose: turn the next build into an immutable release decision.
 
 On screen: a fresh evaluation run, its build revision, the reviewed corpus, exact-match outcomes, and the unscored holdout. Four notes separate the regression set, holdout, result, and audit record. A thin gold focus box identifies the supporting field for each note.
 
-Evidence to call out: 18 regression cases, one holdout, 100 percent expected failure-set match, immutable run identity, and append-only label correction history.
+Evidence to call out: 18 regression cases, one holdout, 100 percent expected failure-set match, immutable run identity, and append-only label correction history. Each scored row preserves its revision, expected modes, and exact-match result.
 
-## 02:25.0 to 02:54.5, prevent
+## 02:26.8 to 02:56.3, prevent
 
 Purpose: prove recurrence control with two real requests.
 
 On screen: PISAMA detection 3 and its input-schema guard proposal. Four notes explain authorization, malformed rejection, valid pass-through, and rollback. Each note is timed to the matching scroll position and focus box.
 
-Presenter cue: describe the visible proposal and review step. Do not claim that the film shows guard configuration fields that are outside this capture.
+Presenter cue: describe the visible proposal and review step. Both probe results remain attached to the repair record, and rollback preserves verification history. Do not claim that the film shows guard configuration fields that are outside this capture.
 
-## 02:54.5 to 03:16.5, close
+## 02:56.3 to 03:18.4, close
 
 Purpose: restate the value in buyer language.
 

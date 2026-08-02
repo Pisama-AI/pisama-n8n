@@ -85,7 +85,7 @@ def main() -> int:
     media_duration = float(probe["format"]["duration"])
     size = int(probe["format"]["size"])
 
-    assert 195 <= media_duration <= 198
+    assert 195 <= media_duration <= 200
     assert size < 95_000_000
     assert video["codec_name"] == "h264"
     assert video["profile"] == "High"

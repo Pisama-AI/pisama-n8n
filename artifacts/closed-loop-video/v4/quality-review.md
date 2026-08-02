@@ -19,7 +19,9 @@ This is the highest honest score for the available proof. Pushing the investor s
 - Reframed the opening around recurrence risk.
 - Added a branded introduction before the first dashboard.
 - Re-recorded the opening narration so it covers the full orientation sequence.
-- Re-recorded the prevention narration so every authorization claim matches the visible product state.
+- Re-recorded the five dashboard narrations so the explanation continues through every visible proof point.
+- Reduced the former 4.5 to 11 second narration gaps to a 2.81 second maximum across the complete voice track.
+- Retimed the prevention narration so malformed rejection, valid pass-through, and rollback land with their evidence sequence.
 - Made the supplied Closed Reliability Loop image the navigation system and closing frame.
 - Removed fractional `zoompan` motion and verified near-zero adjacent-frame difference.
 - Increased product footage to full-frame 1920 by 1080 presentation.
@@ -29,23 +31,24 @@ This is the highest honest score for the available proof. Pushing the investor s
 - Replaced generic cursor travel with scene-specific curved movement, deliberate pauses, and click cues synchronized to the visible controls.
 - Added restrained focus boxes that connect every Verify and Prevent note to the exact supporting field.
 - Added the immutable run identity, sealed holdout, append-only correction, operator-review boundary, and rollback proof to the narration.
-- Paced the film to a 3 minute 16.5 second master with dedicated reading holds.
+- Paced the film to a 3 minute 18.4 second master with continuous narration and short settling holds.
 - Corrected the closing CTA so it no longer obscures the reliability-loop stages.
-- Split captions into 47 readable entries with no orphaned fragments.
+- Split captions into 56 readable entries with no orphaned fragments.
 - Added complete Rec.709 bitstream metadata.
 
 ## Verification results
 
 - Full decode: passed
-- Duration: 196.521 seconds
-- File size: 18.89 MB
+- Duration: 198.354 seconds
+- File size: 19.00 MB
 - Video: H.264 High, 1920 by 1080, 30 fps, `yuv420p`
 - Color: Rec.709 primaries, transfer, matrix, and limited range
 - Audio: AAC stereo, 48 kHz
-- Loudness: minus 15.7 LUFS integrated
-- True peak: minus 1.21 dB
-- Captions: 47 entries, two lines maximum, 42 characters per line maximum
-- Caption speed: 18.83 characters per second maximum
+- Loudness: minus 15.62 LUFS integrated
+- True peak: minus 1.19 dB
+- Narration continuity: 2.81 seconds maximum voice gap
+- Captions: 56 entries, two lines maximum, 42 characters per line maximum
+- Caption speed: 19.07 characters per second maximum
 - Caption display: 1.009 seconds minimum
 
 ## Evidence boundaries

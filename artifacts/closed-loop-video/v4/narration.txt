@@ -2,14 +2,14 @@ When an n8n workflow fails, the red node is only the beginning. The real test is
 
 Pisama closes the loop in six stages: design controls, run, retain evidence, diagnose, verify the next build, then prevent recurrence.
 
-The release harness begins with nineteen source-backed n8n executions: healthy runs and known failures labeled from their records. Eighteen form the regression set; one holdout is sealed separately. I run the workflow. Pisama evaluates each trace and retains a stable case identity.
+The release harness begins with nineteen source-backed n8n executions: healthy runs and known failures labeled from their records. Eighteen form the regression set; one holdout is sealed separately. I run the workflow. Pisama evaluates each trace and retains a stable case identity. The retention branch prevents repeat runs from creating duplicate Pisama executions.
 
-Now we have evidence. This execution reached the consumer without body dot required dot value, and n8n recorded the failed expression. Pisama retains the workflow, node, trace, expected label, and detected result in one auditable record.
+Now we have evidence. This execution reached the consumer without body dot required dot value, and n8n recorded the failed expression. Pisama retains the workflow, node, trace, expected label, and detected result in one auditable record. Reviewed evidence can then become an evaluation case.
 
-Pisama identifies a data-contract mismatch and the missing path. A second case shows sixty-four seconds against a thirty-second limit. The operator reviews the evidence before any control changes. Diagnosis informs the decision. It does not silently rewrite the workflow.
+A second case shows sixty-four seconds against a thirty-second limit. Pisama identifies the timeout and Slow Code as the last executed node. The trace retains the measured duration and limit. The operator reviews the evidence before any control changes. Diagnosis informs the decision. It does not silently rewrite the workflow.
 
-The next build runs against the reviewed corpus. Eighteen regression cases execute asynchronously; the holdout remains excluded. Every expected failure set matched, with the build revision and each case result stored. Label corrections append evidence. Earlier scores remain unchanged.
+The next build runs against the reviewed corpus. Eighteen regression cases execute asynchronously; the holdout remains excluded. Every expected failure set matched, with the build revision and each case result stored. Label corrections append evidence. Earlier scores remain unchanged. Each scored row preserves its revision, expected modes, and exact-match result.
 
-For the contract failure, Pisama proposes a deterministic input guard for operator review. Two real requests test the installed guard. Malformed input stops before the consumer. Valid input passes. Pisama retains both results and the rollback record.
+For the contract failure, Pisama proposes a deterministic input guard for operator review. The proposal names the failing consumer and stays under human review. Two real requests test the installed guard. Malformed input stops before the consumer. Valid input passes. Both results remain attached to the repair record. Rollback restores the workflow and preserves verification history.
 
 The chain now connects failure evidence to a reviewed diagnosis, an auditable release, and a preventive control. For teams operating critical n8n workflows, incidents become reusable safeguards. See what failed. Prove the fix. Prevent recurrence. Pisama dot ai.

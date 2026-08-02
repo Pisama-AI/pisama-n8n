@@ -10,7 +10,7 @@ This is the evidence-led hero film for the PISAMA and n8n closed reliability loo
 - [Speaker notes](speaker-notes.md)
 - [Quality review](quality-review.md)
 
-Runtime: 3 minutes 16.5 seconds.
+Runtime: 3 minutes 18.4 seconds.
 
 ## What changed in the calm cut
 
@@ -20,9 +20,10 @@ Runtime: 3 minutes 16.5 seconds.
 - Stage cards now remain for 2.5 seconds, including a 1.4-second full-opacity hold.
 - Dashboard captures play at their recorded speed instead of being accelerated.
 - Sequential side notes explain what to notice in the n8n, evidence, diagnosis, verification, and prevention scenes.
+- Dashboard narration now continues through the final visible evidence in every scene; the longest voice gap in the complete master is 2.81 seconds.
 - Cursor movement follows scene-specific curved, eased paths with deliberate pauses at the relevant controls.
 - Restrained gold focus boxes link the Verify and Prevent notes to the exact supporting fields.
-- Every complex scene receives a quiet reading hold before the next transition.
+- Each complex scene ends with a brief settling beat before the next transition.
 
 ## What the film proves
 
@@ -52,9 +53,9 @@ The committed capture assets make the build reproducible without a running n8n o
 - H.264 High profile, CRF 17
 - Rec.709 primaries, transfer, matrix, and limited range
 - AAC stereo at 48 kHz
-- Measured at minus 15.7 LUFS with a minus 1.21 dB true peak
+- Measured at minus 15.62 LUFS with a minus 1.19 dB true peak
 - Optional English `mov_text` captions
-- 18.89 MB final file
+- 19.00 MB final file
 
 ## Boundaries
 

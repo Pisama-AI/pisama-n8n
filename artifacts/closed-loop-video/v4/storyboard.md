@@ -1,17 +1,17 @@
 # V4 unified hero film
 
-Final runtime: 3 minutes 16.5 seconds.
+Final runtime: 3 minutes 18.4 seconds.
 
 | Time | Picture | Spoken job | Proof layer |
 |---|---|---|---|
 | 00:00-00:27.5 | Branded problem statement, failure evidence, then verified control proof | Orient the viewer before product detail and introduce one failure story | Real data-contract evidence and real probes |
 | 00:27.5-00:39.5 | Supplied reliability-loop image holds completely still | Give every audience one memorable operating model | Source image remains the navigation system |
-| 00:39.5-01:08.5 | Setup and execution cards, then the n8n workflow at recorded speed | Establish designed controls and show the system operating | Source-backed records, execution notifications, stable identity, three context notes |
-| 01:08.5-01:33.0 | Evidence card, then a focused data-contract record | Replace the abstract failure with visible facts | Missing path, failed expression, retained trace, human review notes |
-| 01:33.0-01:56.5 | Diagnose and heal card, then PISAMA evidence and human review | Explain why the failure happened and where judgment enters | Contract mismatch, measured timeout, decision-boundary notes |
-| 01:56.5-02:25.0 | Verify card, then the immutable evaluation dashboard | Turn the next build into an auditable release decision | Regression set, holdout, result, and audit-record notes |
-| 02:25.0-02:54.5 | Prevent card, then the real guardrail lifecycle record | Prove recurrence prevention | Authorization, malformed request, valid request, and rollback notes |
-| 02:54.5-03:16.5 | Full loop closes with buyer, outcome, and PISAMA URL | Make the commercial value explicit | One retained chain from failure to reusable safeguard |
+| 00:39.5-01:08.5 | Setup and execution cards, then the n8n workflow at recorded speed | Establish designed controls and show the system operating | Source-backed records, stable identity, and repeat-run deduplication |
+| 01:08.5-01:33.0 | Evidence card, then a focused data-contract record | Replace the abstract failure with visible facts | Missing path, retained trace, human review, and evaluation-case promotion |
+| 01:33.0-01:58.3 | Diagnose and heal card, then PISAMA evidence and human review | Explain why the failure happened and where judgment enters | Measured timeout, retained limit, and Slow Code as the last executed node |
+| 01:58.3-02:26.8 | Verify card, then the immutable evaluation dashboard | Turn the next build into an auditable release decision | Per-row revision, expected modes, exact match, and holdout separation |
+| 02:26.8-02:56.3 | Prevent card, then the real guardrail lifecycle record | Prove recurrence prevention | Attached probe results, valid pass-through, rollback, and preserved verification history |
+| 02:56.3-03:18.4 | Full loop closes with buyer, outcome, and PISAMA URL | Make the commercial value explicit | One retained chain from failure to reusable safeguard |
 
 ## Visual rules
 
