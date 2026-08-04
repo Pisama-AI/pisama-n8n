@@ -40,7 +40,7 @@ This is the highest honest score for the available proof. Pushing the investor s
 
 - Full decode: passed
 - Duration: 198.354 seconds
-- File size: 19.00 MB
+- File size: 19.74 MB
 - Video: H.264 High, 1920 by 1080, 30 fps, `yuv420p`
 - Color: Rec.709 primaries, transfer, matrix, and limited range
 - Audio: AAC stereo, 48 kHz

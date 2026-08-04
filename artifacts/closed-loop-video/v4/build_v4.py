@@ -153,7 +153,7 @@ SCENES = [
             ("VALID REQUEST", "Passed through to the consumer."),
             (
                 "POST-REPAIR",
-                "One post-repair run so far, against a 30-run baseline. Zero recurrences.",
+                "1 of 30 required successful runs recorded. Zero recurrences so far.",
             ),
             (
                 "ROLLBACK",
@@ -197,8 +197,8 @@ FOCUS_BOXES = {
     "prevent": (
         (16.8, 18.4, 660, 953, 300, 44),
         (18.8, 21.1, 660, 992, 310, 44),
-        (21.5, 24.1, 660, 663, 890, 92),
-        (24.5, 28.0, 878, 545, 108, 42),
+        (21.5, 24.1, 660, 610, 890, 115),
+        (24.5, 28.0, 878, 488, 108, 42),
     ),
 }
 

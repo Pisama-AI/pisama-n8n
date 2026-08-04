@@ -30,7 +30,8 @@ Runtime: 3 minutes 18.4 seconds.
 An independent multi-perspective review of the released master produced a fix pass:
 
 - Focus rings now appear only while their target is scroll-static in the capture. The verify rings frame the regression and holdout stat tiles exactly; the two rings that previously drifted over scrolling corpus rows were removed in favor of side notes.
-- The prevent scene gained a fifth side note that reads the POST-REPAIR EVIDENCE stat correctly: one post-repair run against a 30-run baseline, zero recurrences. Every reviewer had misread "1 / 30 successful" as a 3 percent success rate.
+- The prevent capture was re-recorded from the live dashboard after the panel copy itself was fixed. The stat every reviewer had misread as a 3 percent success rate now reads "1 of 30 required successful runs" on screen, with an explainer line: 30 is the required count of successful post-repair executions, with zero recurrences, before an operator may conclude prevention. The fifth POST-REPAIR side note echoes the corrected stat.
+- The captured guard verification intro is now grammatical: "A guardrail repair can be concluded as prevention only after both checks are observed."
 - The rollback note now says plainly that the demo guard was reverted as cleanup and that the audit record remains, resolving the rolled_back badge against the film's promise.
 - The holdout side note explains in plain language why one case stays unscored.
 - Chapter chips, lower-thirds, and side notes are fully opaque, removing ghosted UI text under the panels.
@@ -66,7 +67,7 @@ The committed capture assets make the build reproducible without a running n8n o
 - AAC stereo at 48 kHz
 - Measured at minus 15.62 LUFS with a minus 1.19 dB true peak
 - Optional English `mov_text` captions
-- 19.00 MB final file
+- 19.74 MB final file
 
 ## Boundaries
 
