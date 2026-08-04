@@ -149,8 +149,8 @@ function GuardVerificationSection({
     <div className="mt-4 border-t border-rule pt-4">
       <span className="text-xs uppercase tracking-wide text-ink-3">Guard verification</span>
       <p className="mt-1 text-xs leading-relaxed text-ink-3">
-        Prove the installed guard works with two real executions. A guardrail can be concluded
-        prevented only once both checks are observed.
+        Prove the installed guard works with two real executions. A guardrail repair can be
+        concluded as prevention only after both checks are observed.
       </p>
       <div className="mt-3 space-y-3">
         {GUARD_PROBES.map((probe) => {
@@ -348,7 +348,7 @@ export function RepairVerificationPanel({
           <div className="flex items-baseline justify-between gap-4">
             <span className="text-xs uppercase tracking-wide text-ink-3">Post-repair evidence</span>
             <span className="font-mono text-xs text-ink-2">
-              {successful} / {required} successful
+              {successful} of {required} required successful runs
             </span>
           </div>
           <div
@@ -371,6 +371,10 @@ export function RepairVerificationPanel({
               {caseRecord.recurrence_count ?? 0} recurrence{(caseRecord.recurrence_count ?? 0) === 1 ? '' : 's'}
             </span>
           </div>
+          <p className="mt-2 text-xs leading-relaxed text-ink-3">
+            Needs {required} successful post-repair executions and zero recurrences before this
+            repair can be concluded as prevention.
+          </p>
         </div>
       )}
 
