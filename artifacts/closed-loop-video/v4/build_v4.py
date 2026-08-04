@@ -128,7 +128,10 @@ SCENES = [
         "18 regression cases  ·  1 sealed holdout  ·  100% match",
         (
             ("REGRESSION SET", "18 reviewed cases are scored."),
-            ("HOLDOUT", "1 separate case remains excluded from the score."),
+            (
+                "HOLDOUT",
+                "One case is kept unscored, to test the detectors on unseen data later.",
+            ),
             ("RESULT", "All expected failure sets matched in this run."),
             (
                 "AUDIT RECORD",
@@ -149,8 +152,12 @@ SCENES = [
             ("MALFORMED REQUEST", "Stopped before the consumer."),
             ("VALID REQUEST", "Passed through to the consumer."),
             (
+                "POST-REPAIR",
+                "One post-repair run so far, against a 30-run baseline. Zero recurrences.",
+            ),
+            (
                 "ROLLBACK",
-                "The workflow was restored and the audit record was retained.",
+                "Demo cleanup: the tested guard was reverted. Its audit record remains.",
             ),
         ),
     ),
@@ -171,24 +178,27 @@ NOTE_WINDOWS = {
     ),
     "prevent": (
         (6.05, 15.5),
-        (15.5, 18.9),
-        (18.9, 24.3),
+        (15.5, 18.6),
+        (18.6, 21.3),
+        (21.3, 24.3),
         (24.3, 28.5),
     ),
 }
 
+# Rings appear only while their target is scroll-static in the capture.
+# verify-capture: stat tiles hold the top position until ~8.5s (scene 11.0);
+# the corpus scroll that follows gets side notes only, no rings.
+# prevent-capture: the repair panel is fully settled from ~14s (scene 16.5).
 FOCUS_BOXES = {
     "verify": (
-        (5.2, 7.4, 790, 305, 315, 150),
-        (7.7, 9.8, 490, 195, 1230, 155),
-        (10.2, 16.8, 1495, 345, 195, 68),
-        (17.2, 24.0, 490, 850, 1230, 145),
+        (5.2, 7.4, 790, 312, 315, 130),
+        (7.7, 10.3, 1418, 312, 308, 130),
     ),
     "prevent": (
-        (14.4, 16.4, 660, 705, 175, 62),
-        (16.2, 18.8, 660, 925, 475, 55),
-        (18.9, 23.6, 660, 978, 500, 55),
-        (24.3, 28.2, 865, 535, 155, 55),
+        (16.8, 18.4, 660, 953, 300, 44),
+        (18.8, 21.1, 660, 992, 310, 44),
+        (21.5, 24.1, 660, 663, 890, 92),
+        (24.5, 28.0, 878, 545, 108, 42),
     ),
 }
 
@@ -391,7 +401,7 @@ def render_label(name: str, eyebrow: str, body: str, width: int = 1320) -> Path:
     return svg_to_png(
         GENERATED / f"label-{name}.svg",
         f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="114">
-<rect width="{width}" height="114" rx="12" fill="#0b0d0b" fill-opacity="0.93"/>
+<rect width="{width}" height="114" rx="12" fill="#0b0d0b"/>
 <rect width="6" height="114" rx="3" fill="#e9ad28"/>
 <text x="34" y="40" fill="#e9ad28" font-family="Arial, sans-serif"
  font-size="19" font-weight="700" letter-spacing="2">{safe_eyebrow}</text>
@@ -406,7 +416,7 @@ def render_chip(scene: Scene) -> Path:
     return svg_to_png(
         GENERATED / f"chip-{scene.key}.svg",
         f"""<svg xmlns="http://www.w3.org/2000/svg" width="530" height="58">
-<rect width="530" height="58" rx="9" fill="#0b0d0b" fill-opacity="0.92"/>
+<rect width="530" height="58" rx="9" fill="#0b0d0b"/>
 <circle cx="28" cy="29" r="7" fill="#e9ad28"/>
 <text x="51" y="36" fill="#f4efe2" font-family="Arial, sans-serif"
  font-size="19" font-weight="700" letter-spacing="1.7">{title}</text>
@@ -431,7 +441,7 @@ def render_side_notes(scene: Scene) -> list[Path]:
             svg_to_png(
                 GENERATED / f"side-note-{scene.key}-{index}.svg",
                 f"""<svg xmlns="http://www.w3.org/2000/svg" width="470" height="154">
-<rect width="470" height="154" rx="14" fill="#0b0d0b" fill-opacity="0.94"/>
+<rect width="470" height="154" rx="14" fill="#0b0d0b"/>
 <rect width="6" height="154" rx="3" fill="#e9ad28"/>
 <text x="30" y="42" fill="#e9ad28" font-family="Arial, sans-serif"
  font-size="17" font-weight="700" letter-spacing="2">{html.escape(eyebrow)}</text>
@@ -793,9 +803,9 @@ def render_hook(scene_duration: float) -> Path:
 def render_close_cta() -> Path:
     return svg_to_png(
         GENERATED / "close-cta.svg",
-        """<svg xmlns="http://www.w3.org/2000/svg" width="360" height="250">
-<rect width="360" height="250" rx="12" fill="#0b0d0b" fill-opacity="0.92"/>
-<rect width="6" height="250" rx="3" fill="#e9ad28"/>
+        """<svg xmlns="http://www.w3.org/2000/svg" width="360" height="286">
+<rect width="360" height="286" rx="12" fill="#0b0d0b"/>
+<rect width="6" height="286" rx="3" fill="#e9ad28"/>
 <text x="32" y="46" fill="#e9ad28" font-family="Arial, sans-serif"
  font-size="18" font-weight="700" letter-spacing="2">PISAMA.AI</text>
 <text x="32" y="102" fill="#f4efe2" font-family="Georgia, serif"
@@ -804,6 +814,11 @@ def render_close_cta() -> Path:
  font-size="29">Prove the fix.</text>
 <text x="32" y="186" fill="#f4efe2" font-family="Georgia, serif"
  font-size="29">Prevent recurrence.</text>
+<line x1="32" y1="212" x2="328" y2="212" stroke="#3d4039" stroke-width="1"/>
+<text x="32" y="240" fill="#aaa79e" font-family="Arial, sans-serif"
+ font-size="15">Self-host on GitHub:</text>
+<text x="32" y="264" fill="#e9ad28" font-family="Arial, sans-serif"
+ font-size="17" font-weight="700">Pisama-AI/pisama-n8n</text>
 </svg>\n""",
     )
 
@@ -833,7 +848,7 @@ def render_loop_scene(key: str, scene_duration: float, closing: bool) -> Path:
             (
                 f"[0:v]{filters}[base];"
                 "[1:v]format=rgba,fade=t=in:st=3.5:d=0.5:alpha=1[cta];"
-                "[base][cta]overlay=36:780[v]"
+                "[base][cta]overlay=36:756[v]"
             ),
             "-map",
             "[v]",

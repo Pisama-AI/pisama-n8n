@@ -25,6 +25,17 @@ Runtime: 3 minutes 18.4 seconds.
 - Restrained gold focus boxes link the Verify and Prevent notes to the exact supporting fields.
 - Each complex scene ends with a brief settling beat before the next transition.
 
+## Fix pass (2026-08-04)
+
+An independent multi-perspective review of the released master produced a fix pass:
+
+- Focus rings now appear only while their target is scroll-static in the capture. The verify rings frame the regression and holdout stat tiles exactly; the two rings that previously drifted over scrolling corpus rows were removed in favor of side notes.
+- The prevent scene gained a fifth side note that reads the POST-REPAIR EVIDENCE stat correctly: one post-repair run against a 30-run baseline, zero recurrences. Every reviewer had misread "1 / 30 successful" as a 3 percent success rate.
+- The rollback note now says plainly that the demo guard was reverted as cleanup and that the audit record remains, resolving the rolled_back badge against the film's promise.
+- The holdout side note explains in plain language why one case stays unscored.
+- Chapter chips, lower-thirds, and side notes are fully opaque, removing ghosted UI text under the panels.
+- The closing card adds a concrete next step: Self-host on GitHub, Pisama-AI/pisama-n8n.
+
 ## What the film proves
 
 1. A real n8n run creates retained execution evidence.
